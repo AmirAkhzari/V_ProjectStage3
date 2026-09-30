@@ -1,0 +1,25 @@
+{
+  "plugins": {
+    "cloudflare": {
+      "enabled": true
+    },
+    "google-drive": {
+      "enabled": true
+    },
+    "crustdata": {
+      "enabled": true
+    },
+    "vercel": {
+      "enabled": true
+    },
+    "figma": {
+      "enabled": true
+    },
+    "apify": {
+      "enabled": true
+    },
+    "mobbin": {
+      "enabled": true
+    }
+  }
+}

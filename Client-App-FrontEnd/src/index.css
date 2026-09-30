@@ -1,0 +1,445 @@
+@import 'tailwindcss';
+@import 'leaflet/dist/leaflet.css';
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Thin.ttf') format('truetype');
+  font-weight: 100;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-UltraLight.ttf') format('truetype');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Light.ttf') format('truetype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-DemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IRANSansXFaNum';
+  src: url('/fonts/IRANSansXFaNum-Black.ttf') format('truetype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --ios-black: #000000;
+  --ios-white: #FFFFFF;
+  --ios-gray: #8E8E93;
+  --ios-gray-2: #AEAEB2;
+  --ios-gray-3: #C7C7CC;
+  --ios-gray-4: #D1D1D6;
+  --ios-gray-5: #E5E5EA;
+  --ios-gray-6: #F2F2F7;
+  --ios-bg-primary: #FFFFFF;
+  --ios-bg-secondary: #F2F2F7;
+  --ios-bg-tertiary: #FFFFFF;
+  --ios-bg-grouped: #F2F2F7;
+  --ios-bg-grouped-secondary: #FFFFFF;
+  --ios-bg-grouped-tertiary: #F2F2F7;
+  --ios-label-primary: #000000;
+  --ios-label-secondary: rgb(60 60 67 / 0.6);
+  --ios-label-tertiary: rgb(60 60 67 / 0.3);
+  --ios-label-quaternary: rgb(60 60 67 / 0.18);
+  --ios-fill-primary: rgb(118 118 128 / 0.12);
+  --ios-fill-secondary: rgb(118 118 128 / 0.16);
+  --ios-fill-tertiary: rgb(118 118 128 / 0.12);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.08);
+  --ios-separator: #C6C6C8;
+  --ios-separator-nonopaque: rgb(0 0 0 / 0.12);
+  --ios-red: #FF3B30;
+
+  --palette-cream: var(--ios-white);
+  --palette-gray: var(--ios-gray);
+  --palette-ink: var(--ios-black);
+  --palette-neutral: var(--ios-bg-grouped);
+  --palette-secondary: var(--ios-label-secondary);
+  --palette-accent: var(--ios-label-primary);
+  --palette-card: var(--ios-bg-grouped-secondary);
+  --palette-success: var(--ios-label-primary);
+  --palette-shadow-elevated: 0 0 0 0 transparent;
+  --palette-shadow-floating: 0 0 0 0 transparent;
+  color-scheme: light;
+  --background: var(--ios-bg-grouped);
+  --foreground: var(--ios-label-primary);
+  --card: var(--ios-bg-grouped-secondary);
+  --card-foreground: var(--ios-label-primary);
+  --popover: var(--ios-bg-grouped-secondary);
+  --popover-foreground: var(--ios-label-primary);
+  --primary: var(--ios-label-primary);
+  --primary-foreground: var(--ios-bg-primary);
+  --muted: var(--ios-fill-primary);
+  --muted-foreground: var(--ios-label-secondary);
+  --destructive: var(--ios-red);
+  --input: var(--ios-fill-tertiary);
+  --ring: var(--ios-label-primary);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: var(--ios-bg-grouped-secondary);
+  --sidebar-foreground: var(--ios-label-primary);
+  --sidebar-primary: var(--ios-label-primary);
+  --sidebar-primary-foreground: var(--ios-bg-primary);
+  --sidebar-accent: var(--ios-fill-primary);
+  --sidebar-accent-foreground: var(--ios-label-primary);
+  --sidebar-border: var(--ios-separator-nonopaque);
+  --sidebar-ring: var(--ios-label-primary);
+}
+
+html[data-theme="dark"] {
+  --ios-gray-2: #636366;
+  --ios-gray-3: #48484A;
+  --ios-gray-4: #3A3A3C;
+  --ios-gray-5: #2C2C2E;
+  --ios-gray-6: #1C1C1E;
+  --ios-bg-primary: #000000;
+  --ios-bg-secondary: #1C1C1E;
+  --ios-bg-tertiary: #2C2C2E;
+  --ios-bg-grouped: #000000;
+  --ios-bg-grouped-secondary: #1C1C1E;
+  --ios-bg-grouped-tertiary: #2C2C2E;
+  --ios-label-primary: #FFFFFF;
+  --ios-label-secondary: rgb(235 235 245 / 0.6);
+  --ios-label-tertiary: rgb(235 235 245 / 0.3);
+  --ios-label-quaternary: rgb(235 235 245 / 0.18);
+  --ios-fill-primary: rgb(118 118 128 / 0.36);
+  --ios-fill-secondary: rgb(118 118 128 / 0.32);
+  --ios-fill-tertiary: rgb(118 118 128 / 0.24);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.18);
+  --ios-separator: #38383A;
+  --ios-separator-nonopaque: rgb(255 255 255 / 0.16);
+  --ios-red: #FF453A;
+
+  --palette-cream: var(--ios-white);
+  --palette-ink: var(--ios-white);
+  --palette-neutral: var(--ios-bg-grouped);
+  --palette-secondary: var(--ios-label-secondary);
+  --palette-accent: var(--ios-label-primary);
+  --palette-card: var(--ios-bg-grouped-secondary);
+  --palette-success: var(--ios-label-primary);
+  color-scheme: dark;
+  --background: var(--ios-bg-grouped);
+  --foreground: var(--ios-label-primary);
+  --card: var(--ios-bg-grouped-secondary);
+  --card-foreground: var(--ios-label-primary);
+  --popover: var(--ios-bg-grouped-secondary);
+  --popover-foreground: var(--ios-label-primary);
+  --primary: var(--ios-label-primary);
+  --primary-foreground: var(--ios-bg-primary);
+  --muted: var(--ios-fill-primary);
+  --muted-foreground: var(--ios-label-secondary);
+  --destructive: var(--ios-red);
+  --input: var(--ios-fill-tertiary);
+  --ring: var(--ios-label-primary);
+  --sidebar: var(--ios-bg-grouped-secondary);
+  --sidebar-foreground: var(--ios-label-primary);
+  --sidebar-primary: var(--ios-label-primary);
+  --sidebar-primary-foreground: var(--ios-bg-primary);
+  --sidebar-accent: var(--ios-fill-primary);
+  --sidebar-accent-foreground: var(--ios-label-primary);
+  --sidebar-border: var(--ios-separator-nonopaque);
+  --sidebar-ring: var(--ios-label-primary);
+}
+
+@theme inline {
+  --font-persian: 'IRANSansXFaNum', 'Vazirmatn', Tahoma, system-ui, sans-serif;
+
+  --color-neutral: var(--palette-neutral);
+  --color-secondary: var(--palette-secondary);
+  --color-accent: var(--palette-accent);
+  --color-ink: var(--palette-ink);
+  --color-cream: var(--ios-white);
+  --color-page: var(--ios-bg-grouped);
+  --color-card: var(--palette-card);
+  --color-success: var(--palette-success);
+  --color-inverse: var(--ios-bg-primary);
+  --color-fill: var(--ios-fill-primary);
+  --color-fill-secondary: var(--ios-fill-secondary);
+  --color-label-tertiary: var(--ios-label-tertiary);
+  --color-separator: var(--ios-separator-nonopaque);
+  --color-gray-5: var(--ios-gray-5);
+
+  --color-brand: var(--palette-accent);
+  --color-brand-tint: var(--ios-fill-primary);
+  --color-brand-badge: var(--palette-accent);
+  --color-deal-red: var(--ios-red);
+  --color-text-primary: var(--ios-label-primary);
+  --color-text-secondary: var(--ios-label-secondary);
+  --color-text-link: var(--ios-label-primary);
+  --color-error: var(--ios-red);
+  --color-surface: var(--palette-card);
+  --color-surface-gray: var(--ios-fill-tertiary);
+  --color-border: var(--ios-separator-nonopaque);
+  --color-border-focus: var(--ios-label-primary);
+
+  --shadow-elevated: var(--palette-shadow-elevated);
+  --shadow-floating: var(--palette-shadow-floating);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+html {
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+html, body, #root {
+  width: 100%;
+  font-family: var(--font-persian);
+  font-synthesis: none;
+  background: var(--ios-bg-grouped);
+  color: var(--ios-label-primary);
+  direction: rtl;
+  text-align: right;
+  -webkit-font-smoothing: antialiased;
+}
+
+body, #root {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app-frame {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.app-frame .flex-1 {
+  min-height: 0;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input, textarea, button {
+  font-family: inherit;
+}
+
+button, a {
+  cursor: pointer;
+}
+
+button:enabled:active {
+  opacity: 0.64;
+}
+
+img {
+  max-width: 100%;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.card {
+  background: var(--ios-bg-grouped-secondary);
+  border: 0;
+  border-radius: 10px;
+}
+
+.sheet-up {
+  animation: sheet-up 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: var(--palette-shadow-floating);
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0.7; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes toast-in {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.toast-in {
+  animation: toast-in 220ms ease-out;
+}
+
+.leaflet-container {
+  font-family: inherit;
+  background: #e8eaed;
+  z-index: 0;
+}
+
+.leaflet-uber-tiles .leaflet-tile-pane {
+  filter: saturate(0.42) brightness(1.08) contrast(0.9) grayscale(0.12);
+}
+
+.leaflet-dark-tiles .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.88) saturate(0.28) contrast(0.95);
+}
+
+.leaflet-control-attribution {
+  background: color-mix(in srgb, var(--ios-bg-secondary) 80%, transparent) !important;
+  color: var(--ios-label-tertiary);
+  font-size: 10px;
+  margin: 0 0 8px 8px !important;
+  border-radius: 8px;
+}
+
+@keyframes uber-pin-drop {
+  0% { transform: translateY(-14px); }
+  55% { transform: translateY(3px); }
+  100% { transform: translateY(0); }
+}
+
+.uber-pin-drop {
+  animation: uber-pin-drop 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes otp-skel-wave {
+  0%, 100% { opacity: 0.42; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes otp-digit-in {
+  from { opacity: 0; transform: scale(0.92); filter: blur(3px); }
+  to { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+
+@keyframes otp-slots-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.otp-skel {
+  animation: otp-skel-wave 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.otp-skel[data-active="true"] {
+  animation: none;
+  opacity: 0.78;
+}
+
+.otp-digit {
+  animation: otp-digit-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.otp-slots-error {
+  animation: otp-slots-shake 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes ios-activity-rotate {
+  to { transform: rotate(1turn); }
+}
+
+.ios-activity {
+  animation: ios-activity-rotate 1s linear infinite;
+}
+
+@keyframes branded-wait-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.branded-wait-in {
+  animation: branded-wait-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otp-skel,
+  .otp-digit,
+  .otp-slots-error,
+  .ios-activity,
+  .branded-wait-in {
+    animation: none !important;
+  }
+
+  .otp-skel {
+    opacity: 0.62;
+    transform: none;
+  }
+}

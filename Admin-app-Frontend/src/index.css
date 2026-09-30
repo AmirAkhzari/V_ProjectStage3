@@ -1,0 +1,331 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "leaflet/dist/leaflet.css";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Light.ttf") format("truetype");
+  font-weight: 300;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-DemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Black.ttf") format("truetype");
+  font-weight: 900;
+  font-display: swap;
+}
+
+/* Apple HIG semantic tokens — kept in sync with ../FrontEnd/src/index.css */
+:root {
+  --ios-gray: #8e8e93;
+  --ios-gray-2: #aeaeb2;
+  --ios-gray-3: #c7c7cc;
+  --ios-gray-4: #d1d1d6;
+  --ios-gray-5: #e5e5ea;
+  --ios-gray-6: #f2f2f7;
+  --ios-bg-primary: #ffffff;
+  --ios-bg-secondary: #f2f2f7;
+  --ios-bg-grouped: #f2f2f7;
+  --ios-bg-grouped-secondary: #ffffff;
+  --ios-bg-grouped-tertiary: #f2f2f7;
+  --ios-label-primary: #000000;
+  --ios-label-secondary: rgb(60 60 67 / 0.6);
+  --ios-label-tertiary: rgb(60 60 67 / 0.3);
+  --ios-label-quaternary: rgb(60 60 67 / 0.18);
+  --ios-fill-primary: rgb(118 118 128 / 0.12);
+  --ios-fill-secondary: rgb(118 118 128 / 0.16);
+  --ios-fill-tertiary: rgb(118 118 128 / 0.12);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.08);
+  --ios-separator: #c6c6c8;
+  --ios-separator-nonopaque: rgb(0 0 0 / 0.12);
+  --ios-red: #ff3b30;
+  color-scheme: light;
+
+  --background: var(--ios-bg-grouped);
+  --foreground: var(--ios-label-primary);
+  --card: var(--ios-bg-grouped-secondary);
+  --card-foreground: var(--ios-label-primary);
+  --popover: var(--ios-bg-grouped-secondary);
+  --popover-foreground: var(--ios-label-primary);
+  --primary: var(--ios-label-primary);
+  --primary-foreground: var(--ios-bg-primary);
+  --muted: var(--ios-fill-primary);
+  --muted-foreground: var(--ios-label-secondary);
+  --accent: var(--ios-fill-primary);
+  --accent-foreground: var(--ios-label-primary);
+  --destructive: var(--ios-red);
+  --border: var(--ios-separator-nonopaque);
+  --input: var(--ios-fill-tertiary);
+  --ring: var(--ios-label-primary);
+  --chart-1: #dedede;
+  --chart-2: #8e8e93;
+  --chart-3: #6e6e73;
+  --chart-4: #5a5a5e;
+  --chart-5: #3a3a3c;
+  --radius: 0.625rem;
+  --sidebar: var(--ios-bg-grouped-secondary);
+  --sidebar-foreground: var(--ios-label-primary);
+  --sidebar-primary: var(--ios-label-primary);
+  --sidebar-primary-foreground: var(--ios-bg-primary);
+  --sidebar-accent: var(--ios-fill-primary);
+  --sidebar-accent-foreground: var(--ios-label-primary);
+  --sidebar-border: var(--ios-separator-nonopaque);
+  --sidebar-ring: var(--ios-label-primary);
+}
+
+html[data-theme="dark"] {
+  --ios-gray-2: #636366;
+  --ios-gray-3: #48484a;
+  --ios-gray-4: #3a3a3c;
+  --ios-gray-5: #2c2c2e;
+  --ios-gray-6: #1c1c1e;
+  --ios-bg-primary: #000000;
+  --ios-bg-secondary: #1c1c1e;
+  --ios-bg-grouped: #000000;
+  --ios-bg-grouped-secondary: #1c1c1e;
+  --ios-bg-grouped-tertiary: #2c2c2e;
+  --ios-label-primary: #ffffff;
+  --ios-label-secondary: rgb(235 235 245 / 0.6);
+  --ios-label-tertiary: rgb(235 235 245 / 0.3);
+  --ios-label-quaternary: rgb(235 235 245 / 0.18);
+  --ios-fill-primary: rgb(118 118 128 / 0.36);
+  --ios-fill-secondary: rgb(118 118 128 / 0.32);
+  --ios-fill-tertiary: rgb(118 118 128 / 0.24);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.18);
+  --ios-separator: #38383a;
+  --ios-separator-nonopaque: rgb(255 255 255 / 0.16);
+  --ios-red: #ff453a;
+  color-scheme: dark;
+  --chart-1: #3a3a3c;
+  --chart-2: #6e6e73;
+  --chart-3: #8e8e93;
+  --chart-4: #aeaeb2;
+  --chart-5: #dedede;
+}
+
+@theme inline {
+  --font-persian: "IRANSansXFaNum", "Vazirmatn", Tahoma, system-ui, sans-serif;
+  --font-sans: var(--font-persian);
+
+  --color-page: var(--ios-bg-grouped);
+  --color-surface: var(--ios-bg-grouped-secondary);
+  --color-surface-2: var(--ios-bg-grouped-tertiary);
+  --color-inverse: var(--ios-bg-primary);
+  --color-fill: var(--ios-fill-primary);
+  --color-fill-secondary: var(--ios-fill-secondary);
+  --color-fill-quaternary: var(--ios-fill-quaternary);
+  --color-label-secondary: var(--ios-label-secondary);
+  --color-label-tertiary: var(--ios-label-tertiary);
+  --color-label-quaternary: var(--ios-label-quaternary);
+  --color-separator: var(--ios-separator-nonopaque);
+  --color-error: var(--ios-red);
+  --color-gray-5: var(--ios-gray-5);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    font-family: var(--font-persian);
+    font-synthesis: none;
+    background: var(--ios-bg-grouped);
+    color: var(--ios-label-primary);
+    direction: rtl;
+    text-align: right;
+    -webkit-font-smoothing: antialiased;
+    font-size: 14px;
+  }
+  input,
+  textarea,
+  button,
+  select {
+    font-family: inherit;
+  }
+  button,
+  a {
+    cursor: pointer;
+  }
+  button:enabled:active {
+    opacity: 0.64;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  ::selection {
+    background: var(--ios-fill-secondary);
+  }
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.leaflet-container {
+  font-family: inherit;
+  background: var(--ios-gray-5);
+  z-index: 0;
+}
+html[data-theme="dark"] .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.88) saturate(0.28) contrast(0.95);
+}
+.leaflet-control-attribution {
+  background: color-mix(in srgb, var(--ios-bg-secondary) 80%, transparent) !important;
+  color: var(--ios-label-tertiary);
+  font-size: 10px;
+  border-radius: 8px;
+}
+
+/* Recharts: keep tooltips on-theme */
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+
+@keyframes otp-skel-wave {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes otp-digit-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes otp-slots-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+.otp-skel {
+  animation: otp-skel-wave 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.otp-skel[data-active="true"] {
+  animation: none;
+  opacity: 0.78;
+}
+
+.otp-digit {
+  animation: otp-digit-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.otp-slots-error {
+  animation: otp-slots-shake 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otp-skel,
+  .otp-digit,
+  .otp-slots-error {
+    animation: none !important;
+  }
+
+  .otp-skel {
+    opacity: 0.62;
+    transform: none;
+  }
+}

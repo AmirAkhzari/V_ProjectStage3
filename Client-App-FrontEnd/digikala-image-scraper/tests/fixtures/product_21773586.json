@@ -1,0 +1,70 @@
+{
+  "status": 200,
+  "data": {
+    "product": {
+      "id": 21773586,
+      "title_fa": "کشک پذیرایی سرمد - 500 گرم",
+      "title_en": "",
+      "category": {
+        "id": 10342,
+        "title_fa": "کشک خشک محلی",
+        "title_en": "Rural Dried Whey",
+        "code": "rural-dried-whey"
+      },
+      "breadcrumb": [
+        {
+          "category_id": null,
+          "title": "دیجی‌کالا",
+          "url": {
+            "base": null,
+            "uri": "/"
+          }
+        },
+        {
+          "category_id": 10170,
+          "title": "محصولات بومی و محلی",
+          "url": {
+            "base": null,
+            "uri": "/main/rural-products/"
+          }
+        },
+        {
+          "category_id": 10318,
+          "title": "مواد غذایی ارگانیک",
+          "url": {
+            "base": null,
+            "uri": "/search/category-rural-food-and-beverage/"
+          }
+        },
+        {
+          "category_id": 10320,
+          "title": "لبنیات سنتی",
+          "url": {
+            "base": null,
+            "uri": "/search/category-rural-dairy/"
+          }
+        },
+        {
+          "category_id": 10342,
+          "title": "کشک خشک محلی",
+          "url": {
+            "base": null,
+            "uri": "/search/category-rural-dried-whey/"
+          }
+        },
+        {
+          "category_id": null,
+          "title": "کشک پذیرایی سرمد - 500 گرم",
+          "url": {
+            "base": null,
+            "uri": "/product/dkp-21773586/%DA%A9%D8%B4%DA%A9-%D9%BE%D8%B0%DB%8C%D8%B1%D8%A7%DB%8C%DB%8C-%D8%B3%D8%B1%D9%85%D8%AF-500-%DA%AF%D8%B1%D9%85"
+          }
+        }
+      ],
+      "url": {
+        "base": null,
+        "uri": "/product/dkp-21773586/کشک-پذیرایی-سرمد-500-گرم"
+      }
+    }
+  }
+}

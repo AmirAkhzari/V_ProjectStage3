@@ -1,0 +1,12 @@
+output_dir: ./output
+concurrency: 4
+requests_per_second: 2
+max_image_side: 1200
+webp_quality: 85
+min_image_bytes: 2048
+timeouts:
+  connect: 10
+  read: 30
+retries: 5
+user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+storage: local        # local | s3 (future)

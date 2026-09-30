@@ -1,0 +1,294 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-DemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IRANSansXFaNum";
+  src: url("/fonts/IRANSansXFaNum-Black.ttf") format("truetype");
+  font-weight: 900;
+  font-display: swap;
+}
+
+/* Apple HIG semantic tokens — kept in sync with ../FrontEnd/src/index.css and ../admin-FrontEnd/src/index.css */
+:root {
+  --ios-gray: #8e8e93;
+  --ios-gray-2: #aeaeb2;
+  --ios-gray-3: #c7c7cc;
+  --ios-gray-4: #d1d1d6;
+  --ios-gray-5: #e5e5ea;
+  --ios-gray-6: #f2f2f7;
+  --ios-bg-primary: #ffffff;
+  --ios-bg-grouped: #f2f2f7;
+  --ios-bg-grouped-secondary: #ffffff;
+  --ios-bg-grouped-tertiary: #f2f2f7;
+  --ios-label-primary: #000000;
+  --ios-label-secondary: rgb(60 60 67 / 0.6);
+  --ios-label-tertiary: rgb(60 60 67 / 0.3);
+  --ios-fill-primary: rgb(118 118 128 / 0.12);
+  --ios-fill-secondary: rgb(118 118 128 / 0.16);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.08);
+  --ios-separator-nonopaque: rgb(0 0 0 / 0.12);
+  --ios-red: #ff3b30;
+  --radius: 0.625rem;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --ios-gray-2: #636366;
+  --ios-gray-3: #48484a;
+  --ios-gray-4: #3a3a3c;
+  --ios-gray-5: #2c2c2e;
+  --ios-gray-6: #1c1c1e;
+  --ios-bg-primary: #000000;
+  --ios-bg-grouped: #000000;
+  --ios-bg-grouped-secondary: #1c1c1e;
+  --ios-bg-grouped-tertiary: #2c2c2e;
+  --ios-label-primary: #ffffff;
+  --ios-label-secondary: rgb(235 235 245 / 0.6);
+  --ios-label-tertiary: rgb(235 235 245 / 0.3);
+  --ios-fill-primary: rgb(118 118 128 / 0.36);
+  --ios-fill-secondary: rgb(118 118 128 / 0.32);
+  --ios-fill-quaternary: rgb(118 118 128 / 0.18);
+  --ios-separator-nonopaque: rgb(255 255 255 / 0.16);
+  --ios-red: #ff453a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-persian: "IRANSansXFaNum", "Vazirmatn", Tahoma, system-ui, sans-serif;
+  --font-sans: var(--font-persian);
+
+  --color-page: var(--ios-bg-grouped);
+  --color-card: var(--ios-bg-grouped-secondary);
+  --color-surface-2: var(--ios-bg-grouped-tertiary);
+  --color-inverse: var(--ios-bg-primary);
+  --color-accent: var(--ios-label-primary);
+  --color-foreground: var(--ios-label-primary);
+  --color-fill: var(--ios-fill-primary);
+  --color-fill-secondary: var(--ios-fill-secondary);
+  --color-fill-quaternary: var(--ios-fill-quaternary);
+  --color-label-secondary: var(--ios-label-secondary);
+  --color-label-tertiary: var(--ios-label-tertiary);
+  --color-separator: var(--ios-separator-nonopaque);
+  --color-border: var(--ios-separator-nonopaque);
+  --color-error: var(--ios-red);
+  --color-gray-5: var(--ios-gray-5);
+
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+html {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  font-family: var(--font-persian);
+  font-synthesis: none;
+  background: var(--ios-bg-grouped);
+  color: var(--ios-label-primary);
+  direction: rtl;
+  text-align: right;
+  -webkit-font-smoothing: antialiased;
+}
+
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app-frame {
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-frame .flex-1 {
+  min-height: 0;
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--ios-separator-nonopaque);
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+}
+
+button,
+a {
+  cursor: pointer;
+}
+
+button:enabled:active,
+a:active {
+  opacity: 0.64;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.sheet-up {
+  animation: sheet-up 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.7;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fade-in 220ms ease-out both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes otp-skel-wave {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes otp-digit-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes otp-slots-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+.otp-skel {
+  animation: otp-skel-wave 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.otp-skel[data-active="true"] {
+  animation: none;
+  opacity: 0.78;
+}
+
+.otp-digit {
+  animation: otp-digit-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.otp-slots-error {
+  animation: otp-slots-shake 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes result-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.result-pop {
+  animation: result-pop 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .otp-skel,
+  .otp-digit,
+  .otp-slots-error,
+  .sheet-up,
+  .fade-in,
+  .result-pop {
+    animation: none !important;
+  }
+  .otp-skel {
+    opacity: 0.62;
+    transform: none;
+  }
+}

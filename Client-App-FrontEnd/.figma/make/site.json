@@ -1,0 +1,11 @@
+{
+  "title": "ویزیتور",
+  "description": "سفارش عمده فروشگاهی از شرکت‌های پخش",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

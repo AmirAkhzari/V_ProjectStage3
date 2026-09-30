@@ -1,0 +1,97 @@
+{
+  "status": 200,
+  "data": {
+    "products": [
+      {
+        "id": 21773586,
+        "title_fa": "کشک پذیرایی سرمد - 500 گرم",
+        "title_en": "",
+        "images": {
+          "main": {
+            "storage_ids": [],
+            "url": [
+              "https://dkstatics-public.digikala.com/digikala-products/73ce73fbb15e5e792f52dce7f5c6ac54be60301d_1778195724.jpg?x-oss-process=image/resize,m_lfit,h_300,w_300/quality,q_80"
+            ],
+            "thumbnail_url": null,
+            "temporary_id": null,
+            "webp_url": [
+              "https://dkstatics-public.digikala.com/digikala-products/73ce73fbb15e5e792f52dce7f5c6ac54be60301d_1778195724.jpg?x-oss-process=image/resize,m_lfit,h_300,w_300/format,webp/quality,q_80"
+            ]
+          },
+          "list": []
+        },
+        "url": {
+          "base": null,
+          "uri": "/product/dkp-21773586/کشک-پذیرایی-سرمد-500-گرم",
+          "params": [
+            {
+              "variant_id": 79056749
+            }
+          ]
+        }
+      },
+      {
+        "id": 20428381,
+        "title_fa": "پودر شیر خشک بزرگسال کایلا -  900 گرم ",
+        "title_en": "",
+        "images": {
+          "main": {
+            "storage_ids": [],
+            "url": [
+              "https://dkstatics-public.digikala.com/digikala-products/5570e85de949315289f7a1bb85bbc20924aafa9d_1761324444.jpg?x-oss-process=image/resize,m_lfit,h_300,w_300/quality,q_80"
+            ],
+            "thumbnail_url": null,
+            "temporary_id": null,
+            "webp_url": [
+              "https://dkstatics-public.digikala.com/digikala-products/5570e85de949315289f7a1bb85bbc20924aafa9d_1761324444.jpg?x-oss-process=image/resize,m_lfit,h_300,w_300/format,webp/quality,q_80"
+            ]
+          },
+          "list": []
+        },
+        "url": {
+          "base": null,
+          "uri": "/product/dkp-20428381/پودر-شیر-خشک-بزرگسال-کایلا-900-گرم",
+          "params": [
+            {
+              "variant_id": 72316925
+            }
+          ]
+        }
+      }
+    ],
+    "pager": {
+      "current_page": 1,
+      "total_pages": 177,
+      "total_items": 3539
+    },
+    "category": {
+      "id": 9208,
+      "title_fa": "لبنیات",
+      "title_en": "Diary",
+      "code": "dairy"
+    },
+    "breadcrumb": [
+      {
+        "title": "فروشگاه اینترنتی دیجی‌کالا",
+        "url": {
+          "base": null,
+          "uri": "/"
+        }
+      },
+      {
+        "title": "کالاهای سوپرمارکتی",
+        "url": {
+          "base": null,
+          "uri": "/main/food-beverage/"
+        }
+      },
+      {
+        "title": "لبنیات",
+        "url": {
+          "base": null,
+          "uri": "/search/category-dairy/"
+        }
+      }
+    ]
+  }
+}
