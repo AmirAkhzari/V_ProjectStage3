@@ -62,3 +62,48 @@ describe('0001_platform_infra.sql', () => {
     );
   });
 });
+
+describe('0002_s11b_identity_tables.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0002_s11b_identity_tables.sql'), 'utf8');
+
+  it('FORCE RLS on S-11b tables and grants identity-only on identity', () => {
+    expect(sql).toMatch(/ALTER TABLE identity\.accounts FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE identity\.driver_credentials FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE identity\.staff_memberships FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE tenancy\.distributors FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE customers\.shopkeepers FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/WITH CHECK/);
+    expect(sql).toMatch(/GRANT SELECT, INSERT, UPDATE ON TABLE[\s\S]*identity\.accounts/);
+    expect(sql).toMatch(/TO vproject_identity/);
+    expect(sql).toMatch(/GRANT SELECT ON TABLE tenancy\.distributors TO vproject_app/);
+    expect(sql).toMatch(
+      /GRANT SELECT, INSERT, UPDATE ON TABLE customers\.shopkeepers TO vproject_app/,
+    );
+    expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
+    expect(sql).not.toMatch(/GRANT .* ON TABLE identity\.\w+ TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT USAGE ON SCHEMA identity TO vproject_app/);
+  });
+
+  it('gives identity INSERT-only on audit_log and outbox_events', () => {
+    expect(sql).toMatch(/GRANT USAGE ON SCHEMA platform TO vproject_identity/);
+    expect(sql).toMatch(
+      /GRANT INSERT ON TABLE platform\.audit_log, platform\.outbox_events TO vproject_identity/,
+    );
+    expect(sql).not.toMatch(/GRANT SELECT.*platform\.audit_log TO vproject_identity/);
+    expect(sql).not.toMatch(/GRANT UPDATE.*platform\.audit_log TO vproject_identity/);
+  });
+
+  it('exposes lookup_driver_login instead of relying on is_platform for C1', () => {
+    expect(sql).toMatch(/CREATE OR REPLACE FUNCTION identity\.lookup_driver_login/);
+    expect(sql).toMatch(/SECURITY DEFINER/);
+    expect(sql).toMatch(
+      /GRANT EXECUTE ON FUNCTION identity\.lookup_driver_login\(text\) TO vproject_identity/,
+    );
+    expect(sql).toMatch(/accounts_username_norm_check/);
+    expect(sql).toMatch(/Hash of the successor refresh token/);
+    expect(sql).not.toMatch(
+      /primary_distributor_id = NULLIF\(current_setting\('app\.distributor_id'/,
+    );
+    expect(sql).toMatch(/shopkeepers_account_id_unique/);
+  });
+});

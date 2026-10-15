@@ -25,5 +25,5 @@ if (errors.length > 0) {
 }
 
 process.stdout.write(
-  `migration check ok (${files.length} sql file(s), ${SCHEMAS.length} schemas, ${ALLOWED_TABLES.size} platform infra tables)\n`,
+  `migration check ok (${files.length} sql file(s), ${SCHEMAS.length} schemas, ${ALLOWED_TABLES.size} allowed tables)\n`,
 );

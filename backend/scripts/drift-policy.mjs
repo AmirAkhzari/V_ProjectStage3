@@ -1,4 +1,4 @@
-/** Architect B-1 / R2-5: platform infrastructure only. No domain tables. */
+/** Architect B-1 / R2-5 + S11b-1: platform infra and named S-11b tables only. */
 export const SCHEMAS = [
   'identity',
   'tenancy',
@@ -19,6 +19,13 @@ export const ALLOWED_TABLES = new Set([
   'platform.inbox_processed',
   'platform.audit_log',
   'platform.idempotency_keys',
+  'identity.accounts',
+  'identity.driver_credentials',
+  'identity.staff_memberships',
+  'identity.sessions',
+  'identity.refresh_tokens',
+  'tenancy.distributors',
+  'customers.shopkeepers',
 ]);
 
 const TABLE_KIND = '(?:(?:GLOBAL|LOCAL)\\s+)?(?:TEMP(?:ORARY)?\\s+|UNLOGGED\\s+)?';

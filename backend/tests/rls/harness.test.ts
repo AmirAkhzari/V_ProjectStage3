@@ -6,6 +6,7 @@ import { withTenant } from '../../src/platform/db/tenant.js';
 import { parseScopeDistributorHeader } from '../../src/platform/http/scope.js';
 import { assertRuntimeDbRole } from '../../src/platform/db/runtimeRole.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
+import { SEED, seedDemoTenants } from '../../scripts/seed.js';
 import {
   startPostgresWithRoles,
   TEST_ROLE_PASSWORD,
@@ -13,25 +14,53 @@ import {
 } from '../helpers/containers.js';
 
 const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
-/** Schemas whose business tables must ENABLE+FORCE RLS (identity is not tenant-scoped). */
-const TENANT_SCHEMAS = DB_SCHEMAS.filter((schema) => schema !== 'identity');
+const GATE_SCHEMAS = DB_SCHEMAS;
 const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}`));
-/** Fail-closed: every non-exempt tenant-schema table must appear here. */
-const HARNESS_TENANT_TABLES = ['platform.rls_probe'] as const;
+/** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
+const IDENTITY_UNSCOPED = [
+  'identity.accounts',
+  'identity.refresh_tokens',
+  'identity.sessions',
+] as const;
+/** Fail-closed: every non-exempt, non-unscoped table in GATE_SCHEMAS must appear here. */
+const HARNESS_TENANT_TABLES = [
+  'customers.shopkeepers',
+  'identity.driver_credentials',
+  'identity.staff_memberships',
+  'platform.rls_probe',
+  'tenancy.distributors',
+] as const;
+const S11B_TABLES = [
+  'customers.shopkeepers',
+  'identity.accounts',
+  'identity.driver_credentials',
+  'identity.refresh_tokens',
+  'identity.sessions',
+  'identity.staff_memberships',
+  'tenancy.distributors',
+] as const;
 const DIST_A = '11111111-1111-1111-1111-111111111111';
 const DIST_B = '22222222-2222-2222-2222-222222222222';
 const ROW_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const ROW_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+const SK_A = 'aa111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const SK_B = 'bb222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const ACC_DA_A = 'aa333333-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ACC_DA_B = 'bb333333-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const ACC_DR_A = 'aa444444-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ACC_DR_B = 'bb444444-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 describe('RLS harness skeleton', () => {
   let deps: StartedPostgresRoles;
   let ownerPool: pg.Pool;
   let appPool: pg.Pool;
+  let identityPool: pg.Pool;
 
   beforeAll(async () => {
     deps = await startPostgresWithRoles();
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
     appPool = new pg.Pool({ connectionString: deps.appUrl });
+    identityPool = new pg.Pool({ connectionString: deps.identityUrl });
     await ownerPool.query(`
       CREATE TABLE platform.rls_probe (
         id uuid PRIMARY KEY,
@@ -47,9 +76,53 @@ describe('RLS harness skeleton', () => {
         ('${ROW_A}', '${DIST_A}'),
         ('${ROW_B}', '${DIST_B}');
     `);
+    await seedDemoTenants({
+      ownerUrl: deps.ownerUrl,
+      appUrl: deps.appUrl,
+      identityUrl: deps.identityUrl,
+    });
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at) VALUES
+         ($1, 'Harness D1', 'active', now()),
+         ($2, 'Harness D2', 'active', now())`,
+      [DIST_A, DIST_B],
+    );
+    await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      await tx.client.query(
+        `INSERT INTO customers.shopkeepers
+           (id, account_id, phone, primary_distributor_id, status, created_at) VALUES
+           ($1, $2, '+989111111111', $3, 'active', now()),
+           ($4, $5, '+989222222222', $6, 'active', now())`,
+        [SK_A, ACC_DA_A, DIST_A, SK_B, ACC_DA_B, DIST_B],
+      );
+    });
+    await withTenant(identityPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      await tx.client.query(
+        `INSERT INTO identity.accounts
+           (id, typ, username_norm, status, session_version, must_change_password, created_at) VALUES
+           ($1, 'staff', 'harness-da-a', 'active', 0, false, now()),
+           ($2, 'staff', 'harness-da-b', 'active', 0, false, now()),
+           ($3, 'driver', 'harness-dr-a', 'active', 0, false, now()),
+           ($4, 'driver', 'harness-dr-b', 'active', 0, false, now())`,
+        [ACC_DA_A, ACC_DA_B, ACC_DR_A, ACC_DR_B],
+      );
+      await tx.client.query(
+        `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions) VALUES
+           ($1, 'distributor_admin', $2, ARRAY['drivers.manage']::text[]),
+           ($3, 'distributor_admin', $4, ARRAY['drivers.manage']::text[])`,
+        [ACC_DA_A, DIST_A, ACC_DA_B, DIST_B],
+      );
+      await tx.client.query(
+        `INSERT INTO identity.driver_credentials (account_id, distributor_id, password_hash) VALUES
+           ($1, $2, 'harness-hash'),
+           ($3, $4, 'harness-hash')`,
+        [ACC_DR_A, DIST_A, ACC_DR_B, DIST_B],
+      );
+    });
   }, 120_000);
 
   afterAll(async () => {
+    await identityPool?.end();
     await appPool?.end();
     await ownerPool?.end();
     await deps?.postgres.stop();
@@ -97,19 +170,34 @@ describe('RLS harness skeleton', () => {
       `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`,
     );
     expect(flag.rows[0]?.rolbypassrls).toBe(false);
-    await expect(assertRuntimeDbRole(appPool)).resolves.toBeUndefined();
+    await expect(assertRuntimeDbRole(appPool, 'vproject_app')).resolves.toBeUndefined();
   });
 
   it('ROLE-GUARD-01: refuses to start as a superuser or the migrator', async () => {
-    await expect(assertRuntimeDbRole(ownerPool)).rejects.toThrow(/superuser/);
+    await expect(assertRuntimeDbRole(ownerPool, 'vproject_app')).rejects.toThrow(/superuser/);
     const migratorPool = new pg.Pool({
       connectionString: databaseUrlAs(deps.ownerUrl, 'vproject_migrator', TEST_ROLE_PASSWORD),
     });
     try {
-      await expect(assertRuntimeDbRole(migratorPool)).rejects.toThrow(/migrator/);
+      await expect(assertRuntimeDbRole(migratorPool, 'vproject_app')).rejects.toThrow(/migrator/);
     } finally {
       await migratorPool.end();
     }
+  });
+
+  it('ROLE-GUARD-01: identity pool is vproject_identity with NOBYPASSRLS', async () => {
+    const who = await identityPool.query<{ current_user: string }>(`SELECT current_user`);
+    expect(who.rows[0]?.current_user).toBe('vproject_identity');
+    await expect(assertRuntimeDbRole(identityPool, 'vproject_identity')).resolves.toBeUndefined();
+  });
+
+  it('ROLE-GUARD-01: refuses swapped app and identity pools', async () => {
+    await expect(assertRuntimeDbRole(appPool, 'vproject_identity')).rejects.toThrow(
+      /must connect as vproject_identity, got vproject_app/,
+    );
+    await expect(assertRuntimeDbRole(identityPool, 'vproject_app')).rejects.toThrow(
+      /must connect as vproject_app, got vproject_identity/,
+    );
   });
 
   it('TEN-01: grants vproject_app nothing on identity and leaves schemas owned by the migrator', async () => {
@@ -167,11 +255,16 @@ describe('RLS harness skeleton', () => {
        WHERE n.nspname = ANY($1::text[])
          AND c.relkind IN ('r', 'p')
        ORDER BY 1`,
-      [TENANT_SCHEMAS],
+      [GATE_SCHEMAS],
     );
-    const tenantTables = found.rows.filter((row) => !RLS_EXEMPT_TABLES.has(row.qualified));
+    const unscoped = new Set<string>(IDENTITY_UNSCOPED);
+    const tenantTables = found.rows.filter(
+      (row) => !RLS_EXEMPT_TABLES.has(row.qualified) && !unscoped.has(row.qualified),
+    );
     expect(tenantTables.map((row) => row.qualified)).toEqual([...HARNESS_TENANT_TABLES].sort());
-    for (const row of tenantTables) {
+    const identityUnscoped = found.rows.filter((row) => unscoped.has(row.qualified));
+    expect(identityUnscoped.map((row) => row.qualified)).toEqual([...IDENTITY_UNSCOPED].sort());
+    for (const row of [...tenantTables, ...identityUnscoped]) {
       expect(row.relrowsecurity, `${row.qualified} must ENABLE RLS`).toBe(true);
       expect(row.relforcerowsecurity, `${row.qualified} must FORCE RLS`).toBe(true);
       expect(Number(row.policies), `${row.qualified} must have ≥1 policy`).toBeGreaterThan(0);
@@ -191,15 +284,29 @@ describe('RLS harness skeleton', () => {
     expect(outside.rows[0]?.current_setting ?? '').toBe('');
   });
 
-  it('keeps domain schemas free of tenant tables (platform infra only)', async () => {
-    const result = await ownerPool.query<{ c: string }>(
-      `SELECT count(*)::text AS c FROM information_schema.tables
-       WHERE table_schema = ANY($1::text[]) AND table_type = 'BASE TABLE'
-         AND NOT (table_schema = 'platform' AND table_name = ANY($2::text[]))
-         AND table_name <> 'rls_probe'`,
-      [DB_SCHEMAS, INFRA_TABLES],
+  it('TEN-02-S11B: S-11b tables have ENABLE+FORCE RLS and a policy', async () => {
+    const found = await ownerPool.query<{
+      qualified: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+      policies: string;
+    }>(
+      `SELECT n.nspname || '.' || c.relname AS qualified,
+              c.relrowsecurity,
+              c.relforcerowsecurity,
+              (SELECT count(*)::text FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname || '.' || c.relname = ANY($1::text[])
+       ORDER BY 1`,
+      [S11B_TABLES],
     );
-    expect(result.rows[0]?.c).toBe('0');
+    expect(found.rows.map((row) => row.qualified)).toEqual([...S11B_TABLES].sort());
+    for (const row of found.rows) {
+      expect(row.relrowsecurity, `${row.qualified} must ENABLE RLS`).toBe(true);
+      expect(row.relforcerowsecurity, `${row.qualified} must FORCE RLS`).toBe(true);
+      expect(Number(row.policies), `${row.qualified} must have ≥1 policy`).toBeGreaterThan(0);
+    }
   });
 
   it('TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS', async () => {
@@ -272,5 +379,316 @@ describe('RLS harness skeleton', () => {
       [DIST_B],
     );
     expect(extras.rows[0]?.c).toBe('1');
+  });
+
+  it('seeds 2 distributors, 1 SA, 1 DA per distributor with drivers.manage, 2 drivers each', async () => {
+    const distributors = await ownerPool.query<{ id: string }>(
+      `SELECT id::text FROM tenancy.distributors WHERE id = ANY($1::uuid[]) ORDER BY id`,
+      [SEED.distributors.map((d) => d.id)],
+    );
+    expect(distributors.rows.map((r) => r.id)).toEqual(SEED.distributors.map((d) => d.id).sort());
+
+    const sa = await ownerPool.query<{ username_norm: string; role: string }>(
+      `SELECT a.username_norm, m.role
+       FROM identity.accounts a
+       JOIN identity.staff_memberships m ON m.account_id = a.id
+       WHERE a.id = $1`,
+      [SEED.sa.id],
+    );
+    expect(sa.rows[0]).toEqual({ username_norm: 'sa', role: 'super_admin' });
+
+    const das = await ownerPool.query<{ username_norm: string; permissions: string[] }>(
+      `SELECT a.username_norm, m.permissions
+       FROM identity.accounts a
+       JOIN identity.staff_memberships m ON m.account_id = a.id
+       WHERE a.id = ANY($1::uuid[])
+       ORDER BY a.username_norm`,
+      [SEED.das.map((d) => d.id)],
+    );
+    expect(das.rows).toHaveLength(2);
+    for (const row of das.rows) {
+      expect(row.permissions).toEqual(['drivers.manage']);
+    }
+
+    const drivers = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM identity.driver_credentials
+       WHERE account_id = ANY($1::uuid[])`,
+      [SEED.drivers.map((d) => d.id)],
+    );
+    expect(drivers.rows[0]?.c).toBe('4');
+  });
+
+  it('TENANT-01-S11B: tenancy.distributors is SELECT-only for the app; DA cannot write own row', async () => {
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const rows = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM tenancy.distributors WHERE id IN ($1, $2) ORDER BY id`,
+        [DIST_A, DIST_B],
+      );
+      expect(rows.rows.map((r) => r.id)).toEqual([DIST_A]);
+    });
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`UPDATE tenancy.distributors SET name = 'hacked' WHERE id = $1`, [
+          DIST_A,
+        ]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    const unchanged = await ownerPool.query<{ name: string }>(
+      `SELECT name FROM tenancy.distributors WHERE id = $1`,
+      [DIST_A],
+    );
+    expect(unchanged.rows[0]?.name).toBe('Harness D1');
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO tenancy.distributors (id, name, status, created_at)
+           VALUES ($1, 'other', 'active', now())`,
+          [randomUUID()],
+        );
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`DELETE FROM tenancy.distributors WHERE id = $1`, [DIST_A]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('TENANT-01-S11B: customers.shopkeepers is owner-shopkeeper + platform only (DL-18 deferred)', async () => {
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const visible = await tx.client.query<{ c: string }>(
+        `SELECT count(*)::text AS c FROM customers.shopkeepers`,
+      );
+      expect(visible.rows[0]?.c).toBe('0');
+      const rows = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
+        [SK_A, SK_B],
+      );
+      expect(rows.rows.map((r) => r.id)).toEqual([]);
+      const updated = await tx.client.query(
+        `UPDATE customers.shopkeepers SET status = status WHERE id = $1`,
+        [SK_A],
+      );
+      expect(updated.rowCount).toBe(0);
+    });
+    await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+      const self = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2)`,
+        [SK_A, SK_B],
+      );
+      expect(self.rows.map((r) => r.id)).toEqual([SK_A]);
+    });
+    await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      const all = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
+        [SK_A, SK_B],
+      );
+      expect(all.rows.map((r) => r.id)).toEqual([SK_A, SK_B].sort());
+    });
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO customers.shopkeepers
+             (id, account_id, phone, primary_distributor_id, status, created_at)
+           VALUES ($1, $2, '+989000000000', $3, 'active', now())`,
+          [randomUUID(), randomUUID(), DIST_A],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`DELETE FROM customers.shopkeepers WHERE id = $1`, [SK_A]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('customers.shopkeepers.account_id is UNIQUE', async () => {
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO customers.shopkeepers
+             (id, account_id, phone, primary_distributor_id, status, created_at)
+           VALUES ($1, $2, '+989000000001', $3, 'active', now())`,
+          [randomUUID(), ACC_DA_A, DIST_A],
+        );
+      }),
+    ).rejects.toThrow(/unique|duplicate/i);
+  });
+
+  it('TENANT-01-S11B: identity.driver_credentials is tenant-scoped for read and write', async () => {
+    await withTenant(identityPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const rows = await tx.client.query<{ account_id: string }>(
+        `SELECT account_id::text FROM identity.driver_credentials
+         WHERE account_id IN ($1, $2) ORDER BY account_id`,
+        [ACC_DR_A, ACC_DR_B],
+      );
+      expect(rows.rows.map((r) => r.account_id)).toEqual([ACC_DR_A]);
+      const updated = await tx.client.query(
+        `UPDATE identity.driver_credentials SET password_hash = password_hash WHERE account_id = $1`,
+        [ACC_DR_B],
+      );
+      expect(updated.rowCount).toBe(0);
+    });
+    const extraAccount = randomUUID();
+    await withTenant(identityPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      await tx.client.query(
+        `INSERT INTO identity.accounts
+           (id, typ, username_norm, status, session_version, must_change_password, created_at)
+         VALUES ($1, 'driver', $2, 'active', 0, false, now())`,
+        [extraAccount, `x-${extraAccount.slice(0, 8)}`],
+      );
+    });
+    await expect(
+      withTenant(identityPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO identity.driver_credentials (account_id, distributor_id, password_hash)
+           VALUES ($1, $2, 'x')`,
+          [extraAccount, DIST_B],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+  });
+
+  it('TENANT-01-S11B: identity.staff_memberships is tenant-scoped for read and write', async () => {
+    await withTenant(identityPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const rows = await tx.client.query<{ account_id: string }>(
+        `SELECT account_id::text FROM identity.staff_memberships
+         WHERE account_id IN ($1, $2) ORDER BY account_id`,
+        [ACC_DA_A, ACC_DA_B],
+      );
+      expect(rows.rows.map((r) => r.account_id)).toEqual([ACC_DA_A]);
+      const updated = await tx.client.query(
+        `UPDATE identity.staff_memberships SET role = role WHERE account_id = $1`,
+        [ACC_DA_B],
+      );
+      expect(updated.rowCount).toBe(0);
+    });
+    const extraStaff = randomUUID();
+    await withTenant(identityPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      await tx.client.query(
+        `INSERT INTO identity.accounts
+           (id, typ, username_norm, status, session_version, must_change_password, created_at)
+         VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+        [extraStaff, `s-${extraStaff.slice(0, 8)}`],
+      );
+    });
+    await expect(
+      withTenant(identityPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+           VALUES ($1, 'distributor_admin', $2, ARRAY['drivers.manage']::text[])`,
+          [extraStaff, DIST_B],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+  });
+
+  it('identity can INSERT platform.audit_log but cannot UPDATE or DELETE it', async () => {
+    const auditId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO platform.audit_log (
+         id, at, actor_type, actor_id, actor_name, distributor_id,
+         action, entity, entity_id, data, ip
+       ) VALUES ($1, now(), 'system', 'identity', 'identity', NULL,
+         'login', 'account', $2, '{}'::jsonb, NULL)`,
+      [auditId, ACC_DR_A],
+    );
+    const inserted = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.audit_log WHERE id = $1`,
+      [auditId],
+    );
+    expect(inserted.rows[0]?.c).toBe('1');
+    await expect(
+      identityPool.query(`UPDATE platform.audit_log SET action = 'tamper' WHERE id = $1`, [
+        auditId,
+      ]),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      identityPool.query(`DELETE FROM platform.audit_log WHERE id = $1`, [auditId]),
+    ).rejects.toThrow(/permission denied/i);
+    const still = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE id = $1`,
+      [auditId],
+    );
+    expect(still.rows[0]?.action).toBe('login');
+  });
+
+  it('identity can INSERT platform.outbox_events but cannot UPDATE or DELETE it', async () => {
+    const eventId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO platform.outbox_events (
+         id, event_type, event_version, aggregate_type, aggregate_id, payload, occurred_at
+       ) VALUES ($1, 'identity.sessions_revoked', 1, 'session', $2, '{}'::jsonb, now())`,
+      [eventId, ACC_DR_A],
+    );
+    await expect(
+      identityPool.query(`UPDATE platform.outbox_events SET attempts = 1 WHERE id = $1`, [eventId]),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      identityPool.query(`DELETE FROM platform.outbox_events WHERE id = $1`, [eventId]),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('lookup_driver_login returns credentials without is_platform', async () => {
+    const none = await identityPool.query(
+      `SELECT count(*)::text AS c FROM identity.driver_credentials`,
+    );
+    expect(none.rows[0]?.c).toBe('0');
+    const found = await identityPool.query<{
+      account_id: string;
+      distributor_id: string;
+      password_hash: string;
+      status: string;
+    }>(`SELECT * FROM identity.lookup_driver_login($1)`, ['harness-dr-a']);
+    expect(found.rows).toEqual([
+      {
+        account_id: ACC_DR_A,
+        distributor_id: DIST_A,
+        password_hash: 'harness-hash',
+        status: 'active',
+      },
+    ]);
+  });
+
+  it('accounts.username_norm CHECK rejects mixed case', async () => {
+    await expect(
+      withTenant(identityPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO identity.accounts
+             (id, typ, username_norm, status, session_version, must_change_password, created_at)
+           VALUES ($1, 'driver', 'NotLower', 'active', 0, false, now())`,
+          [randomUUID()],
+        );
+      }),
+    ).rejects.toThrow(/username_norm|check constraint/i);
+  });
+
+  it('identity cannot DELETE sessions or refresh_tokens', async () => {
+    await expect(identityPool.query(`DELETE FROM identity.sessions`)).rejects.toThrow(
+      /permission denied/i,
+    );
+    await expect(identityPool.query(`DELETE FROM identity.refresh_tokens`)).rejects.toThrow(
+      /permission denied/i,
+    );
+  });
+
+  it('indexes family_id, account_id and sid for session revocation', async () => {
+    const idx = await ownerPool.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'identity'
+         AND indexname IN (
+           'refresh_tokens_family_id_idx',
+           'refresh_tokens_sid_idx',
+           'sessions_account_id_idx',
+           'sessions_family_id_idx'
+         )
+       ORDER BY 1`,
+    );
+    expect(idx.rows.map((r) => r.indexname)).toEqual([
+      'refresh_tokens_family_id_idx',
+      'refresh_tokens_sid_idx',
+      'sessions_account_id_idx',
+      'sessions_family_id_idx',
+    ]);
   });
 });
