@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { subjectGuard } from '../platform/auth/guards.js';
 import type { AccessTokenVerifier, SubjectType } from '../platform/auth/jwt.js';
 import { AppError } from '../platform/http/errors.js';
+import { isListedPublicRoute } from '../platform/http/publicRoutes.js';
 import { rejectClientIdentity } from '../platform/http/rejectClientIdentity.js';
 import { rejectClientPrice } from '../platform/http/rejectClientPrice.js';
 import type { ModuleDefinition, RouteGroup } from '../platform/modules.js';
@@ -23,7 +24,15 @@ export interface RouteGroupSpec {
  */
 export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<RouteGroupOptions> {
   return async (group, { modules, verifier }) => {
-    group.addHook('onRequest', subjectGuard(spec.subject, verifier));
+    const guard = subjectGuard(spec.subject, verifier);
+    group.addHook('onRequest', async function skipPublicThenGuard(request, reply) {
+      const registered = request.routeOptions.url ?? '';
+      const routePath = registered.startsWith(spec.prefix)
+        ? registered
+        : `${spec.prefix}${registered}`;
+      if (isListedPublicRoute(request.method, routePath)) return;
+      await guard.call(this, request, reply);
+    });
     group.addHook('preValidation', rejectClientIdentity);
     group.addHook('preValidation', rejectClientPrice);
 

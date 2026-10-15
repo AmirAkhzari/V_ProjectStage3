@@ -9,7 +9,7 @@ const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/op
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
 describe('PUBLIC_ROUTES vs frozen x-permission: public', () => {
-  it('matches the contract public operations exactly', () => {
+  it('PUB-ROUTES-01: matches the contract public operations exactly', () => {
     const doc = parse(readFileSync(yamlPath, 'utf8'), { maxAliasCount: -1 }) as {
       paths: Record<string, Record<string, { operationId?: string; 'x-permission'?: string }>>;
     };

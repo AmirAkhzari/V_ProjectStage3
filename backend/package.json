@@ -28,6 +28,7 @@
     "db:migrate": "tsx src/platform/db/migrate.ts",
     "db:drift": "node scripts/check-drift.mjs",
     "db:check": "drizzle-kit check",
+    "audit:prod": "pnpm audit --prod --audit-level=high",
     "contract:verify": "node scripts/verify-contract.mjs",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/generate-openapi.ts --check"

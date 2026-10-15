@@ -10,6 +10,7 @@ import { PgIdempotencyStore } from '../../src/platform/http/idempotencyPg.js';
 import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
 
 const DIST = '11111111-1111-1111-1111-111111111111';
+const DIST_B = '22222222-2222-2222-2222-222222222222';
 
 function event(id = randomUUID()): EventEnvelope {
   return {
@@ -117,6 +118,30 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     expect(outbox.rows[0]?.c).toBe('0');
     expect(auditRows.rows[0]?.c).toBe('0');
     expect(state.rows[0]?.c).toBe('0');
+
+    const retryId = randomUUID();
+    const retryEvent = event();
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST }, async (tx) => {
+      await tx.client.query(
+        `INSERT INTO platform.outbox_fault_probe (id, distributor_id) VALUES ($1, $2)`,
+        [retryId, DIST],
+      );
+      await audit.append(tx, {
+        actorType: 'staff',
+        actorId: 'staff-1',
+        actorName: 'Staff',
+        distributorId: DIST,
+        action: 'probe',
+        entity: 'probe',
+        entityId: retryEvent.id,
+        data: { retry: true },
+        ip: null,
+      });
+      await writer.publish(tx, retryEvent);
+    });
+    const store = new PgOutboxStore(workerPool);
+    const batch = await store.claimBatch(10, new Date());
+    expect(batch.filter((r) => r.event.id === retryEvent.id)).toHaveLength(1);
   });
 
   it('claims unpublished rows with SKIP LOCKED and marks them published', async () => {
@@ -162,7 +187,35 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     );
   });
 
-  it('does not let vproject_app SELECT outbox payloads', async () => {
+  it('worker role / outbox claim (infra): claims both tenants without an HTTP scope header', async () => {
+    const who = await workerPool.query<{ current_user: string }>(`SELECT current_user`);
+    expect(who.rows[0]?.current_user).toBe('vproject_worker');
+    const flag = await workerPool.query<{ rolbypassrls: boolean }>(
+      `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`,
+    );
+    expect(flag.rows[0]?.rolbypassrls).toBe(false);
+
+    const writer = new PgOutboxWriter();
+    const evA = event();
+    const evB = event();
+    evB.distributorId = DIST_B;
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST }, async (tx) => {
+      await writer.publish(tx, evA);
+    });
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_B }, async (tx) => {
+      await writer.publish(tx, evB);
+    });
+    const store = new PgOutboxStore(workerPool);
+    const batch = await store.claimBatch(20, new Date());
+    const ids = batch.map((r) => r.event.id);
+    expect(ids).toEqual(expect.arrayContaining([evA.id, evB.id]));
+    const guc = await workerPool.query<{ current_setting: string | null }>(
+      `SELECT current_setting('app.distributor_id', true) AS current_setting`,
+    );
+    expect(guc.rows[0]?.current_setting ?? '').toBe('');
+  });
+
+  it('N-2: does not let vproject_app SELECT outbox payloads', async () => {
     await expect(appPool.query(`SELECT payload FROM platform.outbox_events`)).rejects.toThrow(
       /permission denied/i,
     );
@@ -182,5 +235,8 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     const hit = await store.get('checkout', 'sub-1', 'key-1');
     expect(hit?.statusCode).toBe(200);
     expect(hit?.requestHash).toBe('abc');
+    const replay = await store.get('checkout', 'sub-1', 'key-1');
+    expect(replay).toEqual(hit);
+    expect(await store.get('checkout', 'sub-1', 'other-key')).toBeUndefined();
   });
 });
