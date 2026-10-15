@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const localPassword = process.env.LOCAL_ROLE_PASSWORD ?? 'vproject';
+const env = {
+  ...process.env,
+  NODE_ENV: process.env.NODE_ENV ?? 'development',
+  MIGRATION_DATABASE_URL:
+    process.env.MIGRATION_DATABASE_URL ?? 'postgres://vproject:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://vproject:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_APP:
+    process.env.DATABASE_URL_APP ??
+    `postgres://vproject_app:${localPassword}@127.0.0.1:5432/vproject`,
+  DATABASE_URL_WORKER:
+    process.env.DATABASE_URL_WORKER ??
+    `postgres://vproject_worker:${localPassword}@127.0.0.1:5432/vproject`,
+  DATABASE_URL_IDENTITY:
+    process.env.DATABASE_URL_IDENTITY ??
+    `postgres://vproject_identity:${localPassword}@127.0.0.1:5432/vproject`,
+  LOCAL_ROLE_PASSWORD: localPassword,
+  REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
+};
+
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: backendRoot, env, stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${command} ${args.join(' ')} exited ${code}`));
+    });
+  });
+}
+
+await run('docker', ['compose', 'up', '-d', '--wait']);
+await run('pnpm', ['exec', 'tsx', 'src/platform/db/migrate.ts', '--apply-roles']);
+
+const {
+  MIGRATION_DATABASE_URL: _migrateUrl,
+  DATABASE_URL: _ownerUrl,
+  DATABASE_URL_WORKER: _workerUrl,
+  DATABASE_URL_IDENTITY: _identityUrl,
+  ...apiEnv
+} = env;
+const api = spawn('pnpm', ['exec', 'tsx', 'watch', 'src/main.ts'], {
+  cwd: backendRoot,
+  env: apiEnv,
+  stdio: 'inherit',
+});
+
+const shutdown = (signal) => {
+  api.kill(signal);
+};
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+api.on('exit', (code) => {
+  process.exit(code ?? 1);
+});

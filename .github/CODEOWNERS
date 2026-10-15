@@ -1,0 +1,5 @@
+# Folder ownership only (DECISION_LOG §G F-3). Does not change frontend contents.
+/backend/ @AmirAkhzari
+/Admin-app-Frontend/ @AmirAkhzari
+/Client-App-FrontEnd/ @AmirAkhzari
+/Driver-app-Frontend/ @AmirAkhzari

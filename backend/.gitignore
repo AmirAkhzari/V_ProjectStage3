@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+src/modules/**/__boundary_violation__.ts

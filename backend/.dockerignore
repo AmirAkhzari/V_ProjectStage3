@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.git
+**/*.test.ts
+tests
+.env
+.env.*
+db/roles.sql
+db/local-grants.sql

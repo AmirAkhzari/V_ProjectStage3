@@ -1,0 +1,55 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-*.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-*.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: typecheck-lint-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10.33.4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: backend/.nvmrc
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint (eslint, prettier, boundaries, structure)
+        run: pnpm lint
+      - name: Frozen OpenAPI checksum
+        run: pnpm contract:verify
+      - name: Migration policy / empty-schema check
+        run: pnpm db:drift
+      - name: Drizzle kit check
+        run: pnpm db:check
+      - name: Test (unit + Testcontainers)
+        run: pnpm test
+      - name: Build
+        run: pnpm build
