@@ -51,7 +51,7 @@ This slice: **green 8** / **partial 7** / **pending 76**. No endpoints in S11b-2
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
-AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3 byte cap, 9-5, 9-10, 9-16 (cross-group replay must not revoke, AUTH-RT-04). **RC-3** before S11b-3 — 9-7, 9-8, 9-17 empty `distributor_id` on audit/outbox, 9-18 revoke grace ATs by `sid`. **RC-4** before S-14 — 9-6.
+AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10, 9-16, and N9-4 (40P01 to retryable or a fixed lock order), plus Low N3-1, N3-2 (SQLSTATE 55P03 only) and the JWK kty/crv/use checks with fail-at-boot when the active key has no private part. **RC-3** before S11b-3 — 9-8, 9-17, 9-18, and G3. **RC-4** before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** are closed.
 
 | Slice     | Owner    | Status  | IDs (count)                                                                                                                                                                        |
 | --------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
