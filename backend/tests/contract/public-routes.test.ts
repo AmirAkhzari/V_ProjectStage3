@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { PUBLIC_OPERATION_IDS, PUBLIC_ROUTES } from '../../src/platform/http/publicRoutes.js';
 
-const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/openapi-v1.1.0.yaml');
+const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/openapi-v1.2.0.yaml');
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
 describe('PUBLIC_ROUTES vs frozen x-permission: public', () => {
