@@ -62,3 +62,24 @@ describe('0001_platform_infra.sql', () => {
     );
   });
 });
+
+describe('0002_s11b_identity_tables.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0002_s11b_identity_tables.sql'), 'utf8');
+
+  it('FORCE RLS on S-11b tables and grants identity-only on identity', () => {
+    expect(sql).toMatch(/ALTER TABLE identity\.accounts FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE identity\.driver_credentials FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE identity\.staff_memberships FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE tenancy\.distributors FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/ALTER TABLE customers\.shopkeepers FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/WITH CHECK/);
+    expect(sql).toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE[\s\S]*identity\.accounts/);
+    expect(sql).toMatch(/TO vproject_identity/);
+    expect(sql).toMatch(
+      /GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE[\s\S]*tenancy\.distributors/,
+    );
+    expect(sql).toMatch(/TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT .* ON TABLE identity\.\w+ TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT USAGE ON SCHEMA identity TO vproject_app/);
+  });
+});

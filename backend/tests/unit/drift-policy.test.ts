@@ -28,8 +28,12 @@ const ALLOWED_SQL = [...ALLOWED_TABLES]
 const BASE = `${SCHEMAS_SQL}\n${ALLOWED_SQL}`;
 
 describe('checkMigrationSql', () => {
-  it('accepts the four platform infra tables', () => {
+  it('accepts the allow-listed platform and S-11b tables', () => {
     expect(checkMigrationSql(BASE)).toEqual([]);
+    expect(ALLOWED_TABLES.has('identity.accounts')).toBe(true);
+    expect(ALLOWED_TABLES.has('tenancy.distributors')).toBe(true);
+    expect(ALLOWED_TABLES.has('customers.shopkeepers')).toBe(true);
+    expect(ALLOWED_TABLES.size).toBe(11);
   });
 
   it('rejects a domain CREATE TABLE', () => {

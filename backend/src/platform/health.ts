@@ -84,9 +84,9 @@ export class HealthMonitor {
   }
 }
 
-export function postgresHealthCheck(pool: pg.Pool): HealthCheck {
+export function postgresHealthCheck(pool: pg.Pool, name = 'postgres'): HealthCheck {
   return {
-    name: 'postgres',
+    name,
     async check() {
       await pool.query('SELECT 1');
     },

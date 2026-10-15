@@ -43,7 +43,6 @@ const {
   MIGRATION_DATABASE_URL: _migrateUrl,
   DATABASE_URL: _ownerUrl,
   DATABASE_URL_WORKER: _workerUrl,
-  DATABASE_URL_IDENTITY: _identityUrl,
   ...apiEnv
 } = env;
 const api = spawn('pnpm', ['exec', 'tsx', 'watch', 'src/main.ts'], {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { inspectRuntimeDbRole, UnsafeDbRoleError } from './runtimeRole.js';
 
 describe('ROLE-GUARD-01 inspectRuntimeDbRole', () => {
-  it('allows vproject_app and vproject_worker', () => {
+  it('allows vproject_app, vproject_worker, and vproject_identity', () => {
     expect(() =>
       inspectRuntimeDbRole({
         current_user: 'vproject_app',
@@ -13,6 +13,13 @@ describe('ROLE-GUARD-01 inspectRuntimeDbRole', () => {
     expect(() =>
       inspectRuntimeDbRole({
         current_user: 'vproject_worker',
+        rolsuper: false,
+        rolbypassrls: false,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      inspectRuntimeDbRole({
+        current_user: 'vproject_identity',
         rolsuper: false,
         rolbypassrls: false,
       }),
