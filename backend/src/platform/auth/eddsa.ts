@@ -24,6 +24,11 @@ import {
 export interface Ed25519KeyPair {
   kid: string;
   publicKey: CryptoKey;
+  /** Present only on signing keys. Public JWKS imports omit this. */
+  privateKey?: CryptoKey;
+}
+
+export interface Ed25519SigningKey extends Ed25519KeyPair {
   privateKey: CryptoKey;
 }
 
@@ -40,14 +45,28 @@ export interface AccessTokenSigner {
 
 const SUBJECT_TYPES = new Set<SubjectType>(['shopkeeper', 'staff', 'driver']);
 
-export async function generateEd25519Key(kid: string): Promise<Ed25519KeyPair> {
+function asCryptoKey(value: unknown, message: string): CryptoKey {
+  if (typeof globalThis.CryptoKey === 'function' && value instanceof globalThis.CryptoKey) {
+    return value;
+  }
+  throw new TokenVerificationError(message);
+}
+
+export async function generateEd25519Key(kid: string): Promise<Ed25519SigningKey> {
   const pair = await generateKeyPair(JWT_ALG, { extractable: true });
   return { kid, publicKey: pair.publicKey, privateKey: pair.privateKey };
 }
 
 export async function exportPrivateJwk(key: Ed25519KeyPair): Promise<Record<string, unknown>> {
+  if (!key.privateKey) throw new TokenVerificationError('cannot export a public-only key');
   const jwk = await exportJWK(key.privateKey);
   return { ...jwk, kid: key.kid, alg: JWT_ALG, crv: 'Ed25519', use: 'sig' };
+}
+
+export async function exportPublicJwk(key: Ed25519KeyPair): Promise<Record<string, unknown>> {
+  const jwk = await exportJWK(key.publicKey);
+  const { d: _private, ...pub } = jwk as Record<string, unknown>;
+  return { ...pub, kid: key.kid, alg: JWT_ALG, crv: 'Ed25519', use: 'sig' };
 }
 
 export async function importKeysetFromJwks(jwksJson: string): Promise<Ed25519KeyPair[]> {
@@ -60,16 +79,28 @@ export async function importKeysetFromJwks(jwksJson: string): Promise<Ed25519Key
     if (typeof entry !== 'object' || entry === null || !('kid' in entry)) {
       throw new TokenVerificationError('JWKS key missing kid');
     }
-    const kid = (entry as { kid: unknown }).kid;
+    const raw = entry as Record<string, unknown>;
+    const kid = raw['kid'];
     if (typeof kid !== 'string' || kid.length === 0) {
       throw new TokenVerificationError('JWKS kid must be a non-empty string');
     }
-    const key = await importJWK(entry as never, JWT_ALG);
-    keys.push({
-      kid,
-      publicKey: key,
-      privateKey: key,
-    });
+    const { d, ...publicFields } = raw;
+    const publicKey = asCryptoKey(
+      await importJWK(publicFields as never, JWT_ALG),
+      'JWKS public key import failed',
+    );
+    if (typeof d === 'string' && d.length > 0) {
+      keys.push({
+        kid,
+        publicKey,
+        privateKey: asCryptoKey(
+          await importJWK(raw as never, JWT_ALG),
+          'JWKS private key import failed',
+        ),
+      });
+    } else {
+      keys.push({ kid, publicKey });
+    }
   }
   return keys;
 }
@@ -105,7 +136,7 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
 
   async sign(subject: AccessClaims): Promise<string> {
     const key = this.keys.get(this.options.activeKid);
-    if (!key) throw new TokenVerificationError('active signing key missing');
+    if (!key?.privateKey) throw new TokenVerificationError('active signing key missing');
     if (subject.typ === 'driver' && (subject.did === undefined || subject.did.length === 0)) {
       throw new TokenVerificationError('driver tokens require did');
     }

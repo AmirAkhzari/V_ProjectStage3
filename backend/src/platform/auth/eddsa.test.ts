@@ -1,7 +1,13 @@
 import { SignJWT, decodeJwt, importJWK } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { ACCESS_TOKEN_TTL_SECONDS, JWT_AUDIENCE, TokenVerificationError } from './jwt.js';
-import { EddsaAccessTokenService, exportPrivateJwk, generateEd25519Key } from './eddsa.js';
+import {
+  EddsaAccessTokenService,
+  exportPrivateJwk,
+  exportPublicJwk,
+  generateEd25519Key,
+  importKeysetFromJwks,
+} from './eddsa.js';
 
 describe('EddsaAccessTokenService', () => {
   it('AUTH-JW-01: signs EdDSA with kid and a 15 minute exp', async () => {
@@ -144,5 +150,47 @@ describe('EddsaAccessTokenService', () => {
     expect(jwk['kid']).toBe('k2');
     expect(jwk['alg']).toBe('EdDSA');
     await importJWK(jwk, 'EdDSA');
+  });
+
+  it('AUTH-JW-03: JWKS import separates the private sign key from public verify keys', async () => {
+    const k1 = await generateEd25519Key('k1');
+    const k2 = await generateEd25519Key('k2');
+    const now = new Date('2026-10-15T12:00:00.000Z');
+    const privateJwks = JSON.stringify({
+      keys: [await exportPrivateJwk(k1), await exportPrivateJwk(k2)],
+    });
+    const imported = await importKeysetFromJwks(privateJwks);
+    expect(imported).toHaveLength(2);
+    for (const key of imported) {
+      expect(key.privateKey).toBeInstanceOf(CryptoKey);
+      expect(key.publicKey).toBeInstanceOf(CryptoKey);
+      expect(key.privateKey).not.toBe(key.publicKey);
+    }
+
+    const publicJwksKeys = await Promise.all(imported.map(exportPublicJwk));
+    for (const pub of publicJwksKeys) {
+      expect(pub['d']).toBeUndefined();
+      expect(pub['kid']).toMatch(/^k[12]$/);
+    }
+    const verifyOnly = await importKeysetFromJwks(JSON.stringify({ keys: publicJwksKeys }));
+    expect(verifyOnly.every((key) => key.privateKey === undefined)).toBe(true);
+
+    const signer = new EddsaAccessTokenService({
+      iss: 'vproject',
+      activeKid: 'k2',
+      keys: imported,
+      now: () => now,
+    });
+    const token = await signer.sign({ sub: 'a', typ: 'staff', sid: 's1' });
+    const verifier = new EddsaAccessTokenService({
+      iss: 'vproject',
+      activeKid: 'k2',
+      keys: verifyOnly,
+      now: () => now,
+    });
+    await expect(verifier.verify(token)).resolves.toMatchObject({ sid: 's1' });
+    await expect(verifier.sign({ sub: 'a', typ: 'staff', sid: 's1' })).rejects.toMatchObject({
+      message: 'active signing key missing',
+    });
   });
 });

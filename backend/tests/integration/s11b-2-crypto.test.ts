@@ -6,6 +6,7 @@ import {
   loadBreachedPasswordList,
   logBreachedListBoot,
 } from '../../src/modules/identity/infra/crypto/breachedPasswords.js';
+import { REFRESH_GRACE_MS } from '../../src/modules/identity/domain/sessionTtl.js';
 import { hashRefreshToken } from '../../src/modules/identity/infra/crypto/refreshHash.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
 import {
@@ -14,6 +15,17 @@ import {
   SESSIONS_REVOKED_EVENT,
 } from '../../src/modules/identity/events.js';
 import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+
+async function seedShopkeeper(pool: pg.Pool): Promise<string> {
+  const accountId = randomUUID();
+  await pool.query(
+    `INSERT INTO identity.accounts
+       (id, typ, phone, username_norm, status, session_version, must_change_password, created_at)
+     VALUES ($1, 'shopkeeper', $2, NULL, 'active', 0, false, now())`,
+    [accountId, `+9891${accountId.replace(/-/g, '').slice(0, 8)}`],
+  );
+  return accountId;
+}
 
 describe('S11b-2 crypto integration', () => {
   let deps: StartedPostgresRoles;
@@ -198,5 +210,124 @@ describe('S11b-2 crypto integration', () => {
         payload: expect.objectContaining({ familyId: issued.familyId, reason: 'refresh_reuse' }),
       }),
     ]);
+  });
+
+  it('AUTH-RT-02-G1: ten parallel grace replays yield ≤1 grace AT, 0 new RT, 1 grace audit', async () => {
+    const accountId = await seedShopkeeper(identityPool);
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    const first = await store.rotate(issued.refreshToken, 'shopkeeper');
+    expect(first.status).toBe('rotated');
+    const before = await identityPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE sid = $1`,
+      [issued.sid],
+    );
+    expect(before.rows[0]?.c).toBe('2');
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => store.rotate(issued.refreshToken, 'shopkeeper')),
+    );
+    const graces = results.filter((row) => row.status === 'grace');
+    const minted = results.filter((row) => row.status === 'rotated');
+    expect(graces.length).toBeLessThanOrEqual(1);
+    expect(minted).toHaveLength(0);
+    for (const grace of graces) {
+      expect(grace).not.toHaveProperty('refreshToken');
+    }
+
+    const after = await identityPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE sid = $1`,
+      [issued.sid],
+    );
+    expect(after.rows[0]?.c).toBe('2');
+    const audits = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE entity_id = $1 AND action = $2`,
+      [issued.familyId, REFRESH_GRACE_AUDIT_ACTION],
+    );
+    expect(audits.rows).toHaveLength(1);
+    expect(REFRESH_GRACE_AUDIT_ACTION).toBe('refresh_grace_replay');
+  });
+
+  it('AUTH-RT-02-G1: PG negatives — after 20s, second grace, or used successor revoke', async () => {
+    const store = new PgRefreshTokenStore(identityPool);
+
+    let now = new Date('2026-10-15T00:00:00.000Z');
+    const afterWindow = await store.issue(
+      {
+        accountId: await seedShopkeeper(identityPool),
+        sid: randomUUID(),
+        familyId: randomUUID(),
+        typ: 'shopkeeper',
+      },
+      () => now,
+    );
+    await store.rotate(afterWindow.refreshToken, 'shopkeeper', () => now);
+    now = new Date(now.getTime() + REFRESH_GRACE_MS + 1);
+    expect(await store.rotate(afterWindow.refreshToken, 'shopkeeper', () => now)).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+
+    const secondGrace = await store.issue({
+      accountId: await seedShopkeeper(identityPool),
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    await store.rotate(secondGrace.refreshToken, 'shopkeeper');
+    const grace = await store.rotate(secondGrace.refreshToken, 'shopkeeper');
+    expect(grace.status).toBe('grace');
+    expect(await store.rotate(secondGrace.refreshToken, 'shopkeeper')).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+
+    const used = await store.issue({
+      accountId: await seedShopkeeper(identityPool),
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    const first = await store.rotate(used.refreshToken, 'shopkeeper');
+    expect(first.status).toBe('rotated');
+    if (first.status !== 'rotated') throw new Error('expected rotate');
+    await store.rotate(first.refreshToken, 'shopkeeper');
+    expect(await store.rotate(used.refreshToken, 'shopkeeper')).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+  });
+
+  it('N9-3: used_at / grace_used_at / successor require rotated_at', async () => {
+    const accountId = await seedShopkeeper(identityPool);
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    await expect(
+      identityPool.query(`UPDATE identity.refresh_tokens SET used_at = now() WHERE hash = $1`, [
+        issued.hash,
+      ]),
+    ).rejects.toThrow(/check constraint|refresh_tokens_used_at_rotated/i);
+    await expect(
+      identityPool.query(
+        `UPDATE identity.refresh_tokens SET grace_used_at = now() WHERE hash = $1`,
+        [issued.hash],
+      ),
+    ).rejects.toThrow(/check constraint|refresh_tokens_grace_used_at_rotated/i);
+    await expect(
+      identityPool.query(`UPDATE identity.refresh_tokens SET successor = $2 WHERE hash = $1`, [
+        issued.hash,
+        'a'.repeat(64),
+      ]),
+    ).rejects.toThrow(/check constraint|refresh_tokens_successor_rotated/i);
   });
 });

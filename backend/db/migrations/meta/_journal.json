@@ -29,6 +29,13 @@
       "when": 1792104632885,
       "tag": "0003_s11b2_refresh_grace",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792105070829,
+      "tag": "0004_s11b2_refresh_checks",
+      "breakpoints": true
     }
   ]
 }

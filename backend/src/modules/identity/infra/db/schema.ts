@@ -88,5 +88,17 @@ export const refreshTokens = identitySchema.table(
   (table) => [
     index('refresh_tokens_family_id_idx').on(table.familyId),
     index('refresh_tokens_sid_idx').on(table.sid),
+    check(
+      'refresh_tokens_used_at_rotated_chk',
+      sql`${table.usedAt} IS NULL OR ${table.rotatedAt} IS NOT NULL`,
+    ),
+    check(
+      'refresh_tokens_grace_used_at_rotated_chk',
+      sql`${table.graceUsedAt} IS NULL OR ${table.rotatedAt} IS NOT NULL`,
+    ),
+    check(
+      'refresh_tokens_successor_rotated_chk',
+      sql`${table.successor} IS NULL OR ${table.rotatedAt} IS NOT NULL`,
+    ),
   ],
 );
