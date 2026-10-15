@@ -15,6 +15,12 @@ describe('Argon2idPasswordHasher', () => {
     expect(await hasher.verify(hash, 'wrong-password')).toBe(false);
   });
 
+  it('AUTH-PW-01: NFKC-normalises before hash and verify', async () => {
+    const hash = await hasher.hash('ﬁleword12');
+    expect(await hasher.verify(hash, 'fileword12')).toBe(true);
+    expect(await hasher.verify(hash, 'ﬁleword12')).toBe(true);
+  });
+
   it('AUTH-PW-01: rejects the seed placeholder hash and any non-$argon2id$ string', async () => {
     expect(PLACEHOLDER_PASSWORD_HASH.startsWith('$argon2id$')).toBe(false);
     expect(await hasher.verify(PLACEHOLDER_PASSWORD_HASH, 'anything')).toBe(false);

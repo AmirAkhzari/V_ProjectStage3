@@ -171,8 +171,14 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
     ) {
       throw new TokenVerificationError('sub/sid required');
     }
+    if (payload.iat === undefined) {
+      throw new TokenVerificationError('iat required');
+    }
     if (payload.exp === undefined || payload.nbf === undefined) {
       throw new TokenVerificationError('exp/nbf required');
+    }
+    if (payload.exp - payload.iat > ACCESS_TOKEN_TTL_SECONDS) {
+      throw new TokenVerificationError('lifetime exceeded');
     }
 
     if (subjectTyp === 'driver') {

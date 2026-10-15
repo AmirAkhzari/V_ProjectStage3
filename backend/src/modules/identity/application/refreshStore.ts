@@ -4,7 +4,13 @@ import type { SubjectType } from '../../../platform/auth/jwt.js';
 export type RefreshRotateStatus = 'rotated' | 'grace' | 'rejected';
 
 export type RefreshRejectReason =
-  'unknown' | 'family_revoked' | 'typ_mismatch' | 'absolute_expired' | 'idle_expired' | 'reuse';
+  | 'unknown'
+  | 'family_revoked'
+  | 'typ_mismatch'
+  | 'absolute_expired'
+  | 'idle_expired'
+  | 'reuse'
+  | 'conflict';
 
 export interface RefreshIssueInput {
   accountId: string;
@@ -24,14 +30,24 @@ export interface RefreshIssueResult {
 }
 
 export interface RefreshRotateOk {
-  status: 'rotated' | 'grace';
+  status: 'rotated';
   refreshToken: string;
   hash: string;
   sid: string;
   familyId: string;
   typ: SubjectType;
+  accountId: string;
   refreshExpiresAt: Date;
   absoluteExpiresAt: Date;
+}
+
+/** Amir 9-2: replay inside 20s returns access-only (same sid/family); no new refresh token. */
+export interface RefreshRotateGrace {
+  status: 'grace';
+  sid: string;
+  familyId: string;
+  typ: SubjectType;
+  accountId: string;
 }
 
 export interface RefreshRotateFail {
@@ -39,7 +55,7 @@ export interface RefreshRotateFail {
   reason: RefreshRejectReason;
 }
 
-export type RefreshRotateResult = RefreshRotateOk | RefreshRotateFail;
+export type RefreshRotateResult = RefreshRotateOk | RefreshRotateGrace | RefreshRotateFail;
 
 export interface RefreshTokenRow {
   hash: string;

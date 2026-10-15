@@ -1,6 +1,6 @@
 import type { SubjectType } from '../../../platform/auth/jwt.js';
 
-/** AUTH-RT-02 / brief: reuse after grace revokes the family. */
+/** AUTH-RT-02 / Amir 9-2: one access-only replay within 20s; reuse after that revokes the family. */
 export const REFRESH_GRACE_MS = 20_000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;

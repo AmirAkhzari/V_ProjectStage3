@@ -83,6 +83,28 @@ describe('EddsaAccessTokenService', () => {
     await expect(
       expiredJwt.verify(await jwt.sign({ sub: 'a', typ: 'staff', sid: 's' })),
     ).rejects.toBeInstanceOf(TokenVerificationError);
+
+    const issuedAt = Math.floor(now.getTime() / 1000);
+    const noIat = await new SignJWT({ typ: 'staff', sid: 's' })
+      .setProtectedHeader({ alg: 'EdDSA', kid: 'k1' })
+      .setSubject('acc')
+      .setIssuer('vproject')
+      .setAudience(JWT_AUDIENCE.staff)
+      .setNotBefore(issuedAt)
+      .setExpirationTime(issuedAt + ACCESS_TOKEN_TTL_SECONDS)
+      .sign(key.privateKey);
+    await expect(jwt.verify(noIat)).rejects.toMatchObject({ message: 'iat required' });
+
+    const longLived = await new SignJWT({ typ: 'staff', sid: 's' })
+      .setProtectedHeader({ alg: 'EdDSA', kid: 'k1' })
+      .setSubject('acc')
+      .setIssuer('vproject')
+      .setAudience(JWT_AUDIENCE.staff)
+      .setIssuedAt(issuedAt - 3600)
+      .setNotBefore(issuedAt - 3600)
+      .setExpirationTime(issuedAt + ACCESS_TOKEN_TTL_SECONDS)
+      .sign(key.privateKey);
+    await expect(jwt.verify(longLived)).rejects.toMatchObject({ message: 'lifetime exceeded' });
   });
 
   it('AUTH-JW-03: rotates the signing kid; previous kid still verifies until retired', async () => {

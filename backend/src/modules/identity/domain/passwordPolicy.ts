@@ -102,15 +102,18 @@ export function generateTempCredential(
 }
 
 function randomChars(length: number): string {
-  const bytes = randomBytes(length);
+  const alphabetLen = TEMP_ALPHABET.length;
+  const rejectAt = 256 - (256 % alphabetLen);
   let out = '';
-  for (let i = 0; i < length; i += 1) {
-    const byte = bytes[i];
-    if (byte === undefined) throw new Error('CSPRNG underflow');
-    const idx = byte % TEMP_ALPHABET.length;
-    const ch = TEMP_ALPHABET[idx];
-    if (ch === undefined) throw new Error('alphabet underflow');
-    out += ch;
+  while (out.length < length) {
+    const bytes = randomBytes(length);
+    for (const byte of bytes) {
+      if (byte >= rejectAt) continue;
+      const ch = TEMP_ALPHABET[byte % alphabetLen];
+      if (ch === undefined) throw new Error('alphabet underflow');
+      out += ch;
+      if (out.length === length) break;
+    }
   }
   return out;
 }

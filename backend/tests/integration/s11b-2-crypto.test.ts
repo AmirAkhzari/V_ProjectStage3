@@ -8,19 +8,27 @@ import {
 } from '../../src/modules/identity/infra/crypto/breachedPasswords.js';
 import { hashRefreshToken } from '../../src/modules/identity/infra/crypto/refreshHash.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
+import {
+  REFRESH_GRACE_AUDIT_ACTION,
+  REFRESH_REUSE_AUDIT_ACTION,
+  SESSIONS_REVOKED_EVENT,
+} from '../../src/modules/identity/events.js';
 import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
 
 describe('S11b-2 crypto integration', () => {
   let deps: StartedPostgresRoles;
   let identityPool: pg.Pool;
+  let ownerPool: pg.Pool;
 
   beforeAll(async () => {
     deps = await startPostgresWithRoles();
     identityPool = new pg.Pool({ connectionString: deps.identityUrl });
+    ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
   });
 
   afterAll(async () => {
     await identityPool.end();
+    await ownerPool.end();
     await deps.postgres.stop();
   });
 
@@ -69,7 +77,7 @@ describe('S11b-2 crypto integration', () => {
 
     const rotated = await store.rotate(issued.refreshToken, 'shopkeeper');
     expect(rotated.status).toBe('rotated');
-    if (rotated.status === 'rejected') throw new Error('expected rotate');
+    if (rotated.status !== 'rotated') throw new Error('expected rotate');
     const after = await identityPool.query<{
       hash: string;
       successor: string | null;
@@ -84,5 +92,111 @@ describe('S11b-2 crypto integration', () => {
     expect(previous?.rotated_at).not.toBeNull();
     expect(JSON.stringify(after.rows)).not.toContain(issued.refreshToken);
     expect(JSON.stringify(after.rows)).not.toContain(rotated.refreshToken);
+  });
+
+  it('AUTH-RT-05 / AppSec 9-1: ten parallel refreshes mint exactly one successor', async () => {
+    const accountId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, username_norm, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'shopkeeper', $2, NULL, 'active', 0, false, now())`,
+      [accountId, `+98913${accountId.replace(/-/g, '').slice(0, 7)}`],
+    );
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => store.rotate(issued.refreshToken, 'shopkeeper')),
+    );
+    expect(results.filter((row) => row.status === 'rotated')).toHaveLength(1);
+
+    const tokens = await identityPool.query<{
+      hash: string;
+      successor: string | null;
+      rotated_at: Date | null;
+    }>(`SELECT hash, successor, rotated_at FROM identity.refresh_tokens WHERE sid = $1`, [
+      issued.sid,
+    ]);
+    expect(tokens.rows).toHaveLength(2);
+    const parent = tokens.rows.find((row) => row.hash === issued.hash);
+    const successor = tokens.rows.find((row) => row.hash !== issued.hash);
+    expect(parent?.successor).toBe(successor?.hash);
+    expect(JSON.stringify(tokens.rows)).not.toContain(issued.refreshToken);
+  });
+
+  it('AUTH-RT-02-G3/G4: grace is audited under the rotate row lock; reuse writes audit+outbox', async () => {
+    const accountId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, username_norm, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'shopkeeper', $2, NULL, 'active', 0, false, now())`,
+      [accountId, `+98914${accountId.replace(/-/g, '').slice(0, 7)}`],
+    );
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    const first = await store.rotate(issued.refreshToken, 'shopkeeper');
+    expect(first.status).toBe('rotated');
+
+    const locker = await identityPool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query(`SELECT hash FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`, [
+        issued.hash,
+      ]);
+      const pending = store.rotate(issued.refreshToken, 'shopkeeper');
+      const raced = await Promise.race([
+        pending.then(() => 'done' as const),
+        new Promise<'waiting'>((resolve) => {
+          setTimeout(() => resolve('waiting'), 250);
+        }),
+      ]);
+      expect(raced).toBe('waiting');
+      await locker.query('COMMIT');
+      const grace = await pending;
+      expect(grace.status).toBe('grace');
+      if (grace.status !== 'grace') throw new Error('expected grace');
+      expect(grace.sid).toBe(issued.sid);
+      expect(grace.familyId).toBe(issued.familyId);
+      expect(grace).not.toHaveProperty('refreshToken');
+    } finally {
+      locker.release();
+    }
+
+    const audits = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE entity_id = $1 ORDER BY at`,
+      [issued.familyId],
+    );
+    expect(audits.rows.map((row) => row.action)).toEqual([REFRESH_GRACE_AUDIT_ACTION]);
+
+    const reuse = await store.rotate(issued.refreshToken, 'shopkeeper');
+    expect(reuse).toEqual({ status: 'rejected', reason: 'reuse' });
+    const after = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE entity_id = $1 ORDER BY at`,
+      [issued.familyId],
+    );
+    expect(after.rows.map((row) => row.action)).toEqual([
+      REFRESH_GRACE_AUDIT_ACTION,
+      REFRESH_REUSE_AUDIT_ACTION,
+    ]);
+    const outbox = await ownerPool.query<{ event_type: string; payload: { familyId?: string } }>(
+      `SELECT event_type, payload FROM platform.outbox_events WHERE aggregate_id = $1`,
+      [issued.familyId],
+    );
+    expect(outbox.rows).toEqual([
+      expect.objectContaining({
+        event_type: SESSIONS_REVOKED_EVENT,
+        payload: expect.objectContaining({ familyId: issued.familyId, reason: 'refresh_reuse' }),
+      }),
+    ]);
   });
 });

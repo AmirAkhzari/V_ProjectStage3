@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { ACCESS_TOKEN_TTL_SECONDS } from '../../../../platform/auth/jwt.js';
 import { REFRESH_GRACE_MS, SESSION_TTL } from '../../domain/sessionTtl.js';
+import {
+  REFRESH_GRACE_AUDIT_ACTION,
+  REFRESH_REUSE_AUDIT_ACTION,
+  SESSIONS_REVOKED_EVENT,
+} from '../../events.js';
 import { hashRefreshToken } from './refreshHash.js';
 import { MemoryRefreshTokenStore } from './memoryRefreshStore.js';
 
@@ -20,34 +26,122 @@ describe('MemoryRefreshTokenStore', () => {
 
     const rotated = await store.rotate(issued.refreshToken, 'shopkeeper', () => now);
     expect(rotated.status).toBe('rotated');
-    if (rotated.status === 'rejected') throw new Error('expected rotate');
+    if (rotated.status !== 'rotated') throw new Error('expected rotate');
     expect(rotated.refreshToken).not.toBe(issued.refreshToken);
     expect(store.peek(issued.hash)?.rotatedAt).toEqual(now);
     expect(store.peek(issued.hash)?.successor).toBe(rotated.hash);
     expect(store.peek(issued.hash)?.successor).not.toBe(rotated.refreshToken);
   });
 
-  it('AUTH-RT-02: grace ≤20s returns a fresh rotation; reuse after grace revokes the family', async () => {
+  it('AUTH-RT-02-G1: grace is honoured once within 20s while the successor is unused', async () => {
     const store = new MemoryRefreshTokenStore();
     let now = new Date('2026-10-15T00:00:00.000Z');
     const clock = () => now;
     const issued = await store.issue({ ...ids(), typ: 'staff' }, clock);
     const first = await store.rotate(issued.refreshToken, 'staff', clock);
     expect(first.status).toBe('rotated');
+    if (first.status !== 'rotated') throw new Error('expected rotate');
+    const tokensBeforeGrace = store.tokens.size;
 
     now = new Date(now.getTime() + REFRESH_GRACE_MS - 1);
     const grace = await store.rotate(issued.refreshToken, 'staff', clock);
     expect(grace.status).toBe('grace');
-    if (grace.status === 'rejected') throw new Error('expected grace');
+    if (grace.status !== 'grace') throw new Error('expected grace');
+    expect(grace).not.toHaveProperty('refreshToken');
+    expect(store.tokens.size).toBe(tokensBeforeGrace);
+    expect(store.peek(issued.hash)?.graceUsedAt).toEqual(now);
     expect(store.sessions.get(issued.sid)?.revokedAt).toBeNull();
 
-    now = new Date(now.getTime() + 2);
-    const reuse = await store.rotate(issued.refreshToken, 'staff', clock);
-    expect(reuse).toEqual({ status: 'rejected', reason: 'reuse' });
+    const second = await store.rotate(issued.refreshToken, 'staff', clock);
+    expect(second).toEqual({ status: 'rejected', reason: 'reuse' });
     expect(store.sessions.get(issued.sid)?.revokedAt).toEqual(now);
-    if (first.status === 'rejected') throw new Error('expected first');
     const afterRevoke = await store.rotate(first.refreshToken, 'staff', clock);
     expect(afterRevoke).toEqual({ status: 'rejected', reason: 'family_revoked' });
+  });
+
+  it('AUTH-RT-02-G2: grace access keeps the same sid/family and the normal access TTL', async () => {
+    const store = new MemoryRefreshTokenStore();
+    const now = new Date('2026-10-15T00:00:00.000Z');
+    const input = { ...ids(), typ: 'shopkeeper' as const };
+    const issued = await store.issue(input, () => now);
+    await store.rotate(issued.refreshToken, 'shopkeeper', () => now);
+    const grace = await store.rotate(issued.refreshToken, 'shopkeeper', () => now);
+    expect(grace).toMatchObject({
+      status: 'grace',
+      sid: issued.sid,
+      familyId: issued.familyId,
+      typ: 'shopkeeper',
+      accountId: input.accountId,
+    });
+    expect(ACCESS_TOKEN_TTL_SECONDS).toBe(15 * 60);
+  });
+
+  it('AUTH-RT-02-G3: grace replay and reuse revocation are audited; reuse emits sessions_revoked', async () => {
+    const store = new MemoryRefreshTokenStore();
+    let now = new Date('2026-10-15T00:00:00.000Z');
+    const issued = await store.issue({ ...ids(), typ: 'staff' }, () => now);
+    await store.rotate(issued.refreshToken, 'staff', () => now);
+    const grace = await store.rotate(issued.refreshToken, 'staff', () => now);
+    expect(grace.status).toBe('grace');
+    expect(store.audits.map((row) => row.action)).toEqual([REFRESH_GRACE_AUDIT_ACTION]);
+    expect(store.events).toEqual([]);
+
+    now = new Date(now.getTime() + REFRESH_GRACE_MS + 1);
+    const reuse = await store.rotate(issued.refreshToken, 'staff', () => now);
+    expect(reuse).toEqual({ status: 'rejected', reason: 'reuse' });
+    expect(store.audits.map((row) => row.action)).toEqual([
+      REFRESH_GRACE_AUDIT_ACTION,
+      REFRESH_REUSE_AUDIT_ACTION,
+    ]);
+    expect(store.events).toEqual([
+      expect.objectContaining({
+        type: SESSIONS_REVOKED_EVENT,
+        aggregateType: 'session',
+        aggregateId: issued.familyId,
+        payload: expect.objectContaining({
+          familyId: issued.familyId,
+          sid: issued.sid,
+          reason: 'refresh_reuse',
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(store.audits)).not.toContain(issued.refreshToken);
+  });
+
+  it('AUTH-RT-02-G5: reuse after 20s, a second grace, or a used successor revokes the family', async () => {
+    const afterWindow = new MemoryRefreshTokenStore();
+    let now = new Date('2026-10-15T00:00:00.000Z');
+    const issued = await afterWindow.issue({ ...ids(), typ: 'staff' }, () => now);
+    await afterWindow.rotate(issued.refreshToken, 'staff', () => now);
+    now = new Date(now.getTime() + REFRESH_GRACE_MS + 1);
+    expect(await afterWindow.rotate(issued.refreshToken, 'staff', () => now)).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+
+    const usedSuccessor = new MemoryRefreshTokenStore();
+    now = new Date('2026-10-15T00:00:00.000Z');
+    const second = await usedSuccessor.issue({ ...ids(), typ: 'staff' }, () => now);
+    const first = await usedSuccessor.rotate(second.refreshToken, 'staff', () => now);
+    expect(first.status).toBe('rotated');
+    if (first.status !== 'rotated') throw new Error('expected rotate');
+    await usedSuccessor.rotate(first.refreshToken, 'staff', () => now);
+    expect(await usedSuccessor.rotate(second.refreshToken, 'staff', () => now)).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+  });
+
+  it('AUTH-RT-02: reuse is detected before the typ check', async () => {
+    const store = new MemoryRefreshTokenStore();
+    const now = new Date('2026-10-15T00:00:00.000Z');
+    const issued = await store.issue({ ...ids(), typ: 'driver' }, () => now);
+    await store.rotate(issued.refreshToken, 'driver', () => now);
+    expect(await store.rotate(issued.refreshToken, 'staff', () => now)).toEqual({
+      status: 'rejected',
+      reason: 'reuse',
+    });
+    expect(store.sessions.get(issued.sid)?.revokedAt).toEqual(now);
   });
 
   it('AUTH-RT-03: applies shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute', async () => {
@@ -102,7 +196,7 @@ describe('MemoryRefreshTokenStore', () => {
     const store = new MemoryRefreshTokenStore();
     const issued = await store.issue({ ...ids(), typ: 'shopkeeper' }, () => new Date());
     const rotated = await store.rotate(issued.refreshToken, 'shopkeeper');
-    if (rotated.status === 'rejected') throw new Error('expected rotate');
+    if (rotated.status !== 'rotated') throw new Error('expected rotate');
     const row = store.peek(issued.hash);
     expect(row?.successor).toBe(hashRefreshToken(rotated.refreshToken));
     expect(row?.successor).not.toContain(rotated.refreshToken);

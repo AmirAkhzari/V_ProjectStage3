@@ -80,6 +80,10 @@ export const refreshTokens = identitySchema.table(
     rotatedAt: timestamp('rotated_at', { withTimezone: true, mode: 'date' }),
     /** Hash of the next refresh token in the family; never plaintext. */
     successor: text('successor'),
+    /** When this token was consumed by a successful rotation. */
+    usedAt: timestamp('used_at', { withTimezone: true, mode: 'date' }),
+    /** When a 20s grace replay of this token was honoured (once). */
+    graceUsedAt: timestamp('grace_used_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     index('refresh_tokens_family_id_idx').on(table.familyId),
