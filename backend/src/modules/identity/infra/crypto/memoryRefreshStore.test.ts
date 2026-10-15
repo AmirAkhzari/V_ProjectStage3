@@ -83,6 +83,7 @@ describe('MemoryRefreshTokenStore', () => {
     await store.rotate(issued.refreshToken, 'staff', () => now);
     const grace = await store.rotate(issued.refreshToken, 'staff', () => now);
     expect(grace.status).toBe('grace');
+    expect(REFRESH_GRACE_AUDIT_ACTION).toBe('refresh_grace_replay');
     expect(store.audits.map((row) => row.action)).toEqual([REFRESH_GRACE_AUDIT_ACTION]);
     expect(store.events).toEqual([]);
 

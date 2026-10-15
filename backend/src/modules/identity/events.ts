@@ -9,6 +9,7 @@ export type IdentityEventType = (typeof IDENTITY_EVENT_TYPES)[number];
 export const SESSIONS_REVOKED_EVENT = 'identity.sessions_revoked' as const;
 export const SESSIONS_REVOKED_EVENT_VERSION = 1;
 export const REFRESH_REUSE_AUDIT_ACTION = 'refresh_reuse';
+/** AppSec RC-1 / N9-2: not `refresh_grace`. */
 export const REFRESH_GRACE_AUDIT_ACTION = 'refresh_grace_replay';
 
 export interface SessionsRevokedPayload {
