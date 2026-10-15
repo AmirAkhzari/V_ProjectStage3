@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { DB_SCHEMAS } from '../../src/platform/modules.js';
@@ -12,8 +13,15 @@ import {
 } from '../helpers/containers.js';
 
 const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
+/** Schemas whose business tables must ENABLE+FORCE RLS (identity is not tenant-scoped). */
+const TENANT_SCHEMAS = DB_SCHEMAS.filter((schema) => schema !== 'identity');
+const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}`));
+/** Fail-closed: every non-exempt tenant-schema table must appear here. */
+const HARNESS_TENANT_TABLES = ['platform.rls_probe'] as const;
 const DIST_A = '11111111-1111-1111-1111-111111111111';
 const DIST_B = '22222222-2222-2222-2222-222222222222';
+const ROW_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+const ROW_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
 describe('RLS harness skeleton', () => {
   let deps: StartedPostgresRoles;
@@ -32,11 +40,12 @@ describe('RLS harness skeleton', () => {
       ALTER TABLE platform.rls_probe ENABLE ROW LEVEL SECURITY;
       ALTER TABLE platform.rls_probe FORCE ROW LEVEL SECURITY;
       CREATE POLICY rls_probe_tenant ON platform.rls_probe
-        USING (distributor_id = NULLIF(current_setting('app.distributor_id', true), '')::uuid);
-      GRANT SELECT, INSERT ON platform.rls_probe TO vproject_app;
+        USING (distributor_id = NULLIF(current_setting('app.distributor_id', true), '')::uuid)
+        WITH CHECK (distributor_id = NULLIF(current_setting('app.distributor_id', true), '')::uuid);
+      GRANT SELECT, INSERT, UPDATE, DELETE ON platform.rls_probe TO vproject_app;
       INSERT INTO platform.rls_probe (id, distributor_id) VALUES
-        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '${DIST_A}'),
-        ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '${DIST_B}');
+        ('${ROW_A}', '${DIST_A}'),
+        ('${ROW_B}', '${DIST_B}');
     `);
   }, 120_000);
 
@@ -81,7 +90,7 @@ describe('RLS harness skeleton', () => {
     expect(byName['vproject_identity']).toBe(false);
   });
 
-  it('opens the request pool as vproject_app with NOBYPASSRLS', async () => {
+  it('TEN-01: opens the request pool as vproject_app with NOBYPASSRLS', async () => {
     const who = await appPool.query<{ current_user: string }>(`SELECT current_user`);
     expect(who.rows[0]?.current_user).toBe('vproject_app');
     const flag = await appPool.query<{ rolbypassrls: boolean }>(
@@ -103,7 +112,7 @@ describe('RLS harness skeleton', () => {
     }
   });
 
-  it('grants vproject_app nothing on identity and leaves schemas owned by the migrator', async () => {
+  it('TEN-01: grants vproject_app nothing on identity and leaves schemas owned by the migrator', async () => {
     const usage = await ownerPool.query<{ allowed: boolean }>(
       `SELECT has_schema_privilege('vproject_app', 'identity', 'USAGE') AS allowed`,
     );
@@ -129,7 +138,38 @@ describe('RLS harness skeleton', () => {
     }
   });
 
-  it('does not leak tenant GUCs after commit on a pooled connection', async () => {
+  it('TEN-01: vproject_app owns no tables', async () => {
+    const owned = await ownerPool.query<{ schemaname: string; tablename: string }>(
+      `SELECT schemaname, tablename FROM pg_tables WHERE tableowner = 'vproject_app' ORDER BY 1, 2`,
+    );
+    expect(owned.rows).toEqual([]);
+  });
+
+  it('TEN-02: tenant-schema tables have FORCE RLS and are listed in the harness', async () => {
+    const found = await ownerPool.query<{
+      qualified: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT n.nspname || '.' || c.relname AS qualified,
+              c.relrowsecurity,
+              c.relforcerowsecurity
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = ANY($1::text[])
+         AND c.relkind IN ('r', 'p')
+       ORDER BY 1`,
+      [TENANT_SCHEMAS],
+    );
+    const tenantTables = found.rows.filter((row) => !RLS_EXEMPT_TABLES.has(row.qualified));
+    expect(tenantTables.map((row) => row.qualified)).toEqual([...HARNESS_TENANT_TABLES].sort());
+    for (const row of tenantTables) {
+      expect(row.relrowsecurity, `${row.qualified} must ENABLE RLS`).toBe(true);
+      expect(row.relforcerowsecurity, `${row.qualified} must FORCE RLS`).toBe(true);
+    }
+  });
+
+  it('TEN-03: does not leak tenant GUCs after commit on a pooled connection', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const inside = await tx.client.query<{ current_setting: string }>(
         `SELECT current_setting('app.distributor_id', true) AS current_setting`,
@@ -153,9 +193,13 @@ describe('RLS harness skeleton', () => {
     expect(result.rows[0]?.c).toBe('0');
   });
 
-  it('returns 0 rows without tenant context and cannot disable RLS', async () => {
+  it('TEN-03/TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS', async () => {
     const client = await appPool.connect();
     try {
+      const unset = await client.query<{ current_setting: string | null }>(
+        `SELECT current_setting('app.distributor_id', true) AS current_setting`,
+      );
+      expect(unset.rows[0]?.current_setting ?? '').toBe('');
       const none = await client.query<{ c: string }>(
         `SELECT count(*)::text AS c FROM platform.rls_probe`,
       );
@@ -170,7 +214,7 @@ describe('RLS harness skeleton', () => {
     }
   });
 
-  it('scopes rows with X-Scope-Distributor and hides the other tenant', async () => {
+  it('TENANT-01: scopes rows to the tenant and hides the other tenant', async () => {
     const scoped = parseScopeDistributorHeader(DIST_A);
     expect(scoped).toBe(DIST_A);
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
@@ -185,5 +229,39 @@ describe('RLS harness skeleton', () => {
       );
       expect(rows.rows[0]?.c).toBe('1');
     });
+  });
+
+  it('TENANT-01: cross-tenant UPDATE and DELETE affect 0 rows', async () => {
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const updated = await tx.client.query(`UPDATE platform.rls_probe SET id = id WHERE id = $1`, [
+        ROW_B,
+      ]);
+      expect(updated.rowCount).toBe(0);
+      const deleted = await tx.client.query(`DELETE FROM platform.rls_probe WHERE id = $1`, [
+        ROW_B,
+      ]);
+      expect(deleted.rowCount).toBe(0);
+    });
+    const stillThere = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.rls_probe WHERE id = $1 AND distributor_id = $2`,
+      [ROW_B, DIST_B],
+    );
+    expect(stillThere.rows[0]?.c).toBe('1');
+  });
+
+  it('TENANT-01: INSERT for another tenant fails WITH CHECK', async () => {
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO platform.rls_probe (id, distributor_id) VALUES ($1, $2)`,
+          [randomUUID(), DIST_B],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+    const extras = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.rls_probe WHERE distributor_id = $1`,
+      [DIST_B],
+    );
+    expect(extras.rows[0]?.c).toBe('1');
   });
 });

@@ -187,7 +187,7 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     );
   });
 
-  it('TEN-05: worker claims both tenants without an HTTP scope header', async () => {
+  it('worker role / outbox claim (infra): claims both tenants without an HTTP scope header', async () => {
     const who = await workerPool.query<{ current_user: string }>(`SELECT current_user`);
     expect(who.rows[0]?.current_user).toBe('vproject_worker');
     const flag = await workerPool.query<{ rolbypassrls: boolean }>(
@@ -215,7 +215,7 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     expect(guc.rows[0]?.current_setting ?? '').toBe('');
   });
 
-  it('does not let vproject_app SELECT outbox payloads', async () => {
+  it('N-2: does not let vproject_app SELECT outbox payloads', async () => {
     await expect(appPool.query(`SELECT payload FROM platform.outbox_events`)).rejects.toThrow(
       /permission denied/i,
     );

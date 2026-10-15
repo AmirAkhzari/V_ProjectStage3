@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp, type App } from '../../src/app.js';
 import { testConfig } from '../helpers/config.js';
 
-describe('TEN-404-01 cross-tenant / missing resource bodies', () => {
+describe('error-envelope uniformity (not TEN-404-01)', () => {
   let app: App | undefined;
 
   afterEach(async () => {
