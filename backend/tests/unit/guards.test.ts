@@ -21,6 +21,17 @@ describe('route group guards', () => {
     app = undefined;
   });
 
+  it('AUTH-JW-04: deny-all verifier rejects a presented bearer token', async () => {
+    app = await buildApp({ config: testConfig(), healthChecks: [] });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/anything',
+      headers: { authorization: 'Bearer eyJhbGciOiJub25lIn0.e30.' },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+  });
+
   it('rejects unauthenticated calls to empty /v1/admin namespace', async () => {
     app = await buildApp({ config: testConfig(), healthChecks: [] });
     const response = await app.inject({ method: 'GET', url: '/v1/admin/anything' });
