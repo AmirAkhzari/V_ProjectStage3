@@ -1,8 +1,9 @@
 -- Local-only roles for the P0 Foundation skeleton (P0-E4-T1 / AppSec H-1, M-6).
 -- Applied only when runMigrations({ applyRoles: true }) is used (tests, scripts/dev.mjs).
--- Hard-fail in production and against non-local hosts. No passwords: login is unused in
--- Foundation tests (the harness connects as the container superuser). Set passwords via
--- the secret manager when these roles are provisioned for real environments.
+-- Hard-fail in production and against non-local hosts. Passwords are not stored in SQL;
+-- tests inject LOCAL_ROLE_PASSWORD at runtime. The RLS and outbox harnesses connect as
+-- vproject_app (NOBYPASSRLS), not as the container superuser. Set passwords via the
+-- secret manager when these roles are provisioned for real environments.
 --
 -- vproject_migrator  owns schemas and runs drizzle migrations
 -- vproject_app       request path; NOBYPASSRLS; owns no tables; no USAGE on identity

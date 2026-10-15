@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { assertStartupAdapters } from './platform/adapters.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
+import { assertRuntimeDbRole } from './platform/db/runtimeRole.js';
 import { outboxLagHealthCheck, postgresHealthCheck, redisHealthCheck } from './platform/health.js';
 import { pinoOptions } from './platform/logger.js';
 import { createRedis } from './platform/redis.js';
@@ -12,6 +13,15 @@ assertStartupAdapters(config.NODE_ENV);
 const log = pino(pinoOptions(config));
 const db = createDb(config.DATABASE_URL_APP, { log });
 const redis = createRedis(config.REDIS_URL, log);
+
+try {
+  await assertRuntimeDbRole(db.pool);
+} catch (error) {
+  log.error({ err: error }, 'api refused unsafe database role');
+  await redis.quit().catch(() => redis.disconnect());
+  await db.close();
+  process.exit(1);
+}
 
 const app = await buildApp({
   config,

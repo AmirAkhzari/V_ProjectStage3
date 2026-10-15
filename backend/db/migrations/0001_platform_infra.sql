@@ -122,9 +122,8 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_worker') THEN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO vproject_worker', current_database());
     GRANT USAGE ON SCHEMA platform TO vproject_worker;
-    GRANT SELECT, UPDATE ON TABLE platform.outbox_events, platform.inbox_processed TO vproject_worker;
-    GRANT INSERT ON TABLE platform.inbox_processed TO vproject_worker;
-    GRANT SELECT, INSERT, UPDATE ON TABLE platform.idempotency_keys TO vproject_worker;
+    GRANT SELECT, UPDATE ON TABLE platform.outbox_events TO vproject_worker;
+    GRANT SELECT, INSERT ON TABLE platform.inbox_processed TO vproject_worker;
     GRANT SELECT ON TABLE platform.audit_log TO vproject_worker;
   END IF;
 

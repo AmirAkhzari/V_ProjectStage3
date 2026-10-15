@@ -20,7 +20,13 @@ describe('error envelope', () => {
     expect(PLATFORM_ERROR_CODES).toContain('SERVICE_UNAVAILABLE');
   });
 
-  it('maps 413 to VALIDATION_FAILED and other 4xx to a generic envelope', () => {
+  it('maps 404/405 to NOT_FOUND and other 4xx to VALIDATION_FAILED, never INTERNAL', () => {
+    expect(clientErrorEnvelope(404, 'missing')).toEqual({
+      error: { code: 'NOT_FOUND', message: 'Resource not found' },
+    });
+    expect(clientErrorEnvelope(405, 'Method Not Allowed')).toEqual({
+      error: { code: 'NOT_FOUND', message: 'Resource not found' },
+    });
     expect(clientErrorEnvelope(413, 'too big')).toEqual({
       error: {
         code: 'VALIDATION_FAILED',
@@ -28,11 +34,11 @@ describe('error envelope', () => {
         details: { statusCode: 413 },
       },
     });
-    expect(clientErrorEnvelope(405, 'Method Not Allowed')).toEqual({
-      error: { code: 'INTERNAL', message: 'Request could not be processed' },
+    expect(clientErrorEnvelope(415, 'Unsupported Media Type')).toEqual({
+      error: { code: 'VALIDATION_FAILED', message: 'Request could not be processed' },
     });
-    expect(clientErrorEnvelope(415, 'Unsupported Media Type').error.code).not.toBe(
-      'VALIDATION_FAILED',
-    );
+    for (let status = 400; status < 500; status += 1) {
+      expect(clientErrorEnvelope(status, 'x').error.code).not.toBe('INTERNAL');
+    }
   });
 });

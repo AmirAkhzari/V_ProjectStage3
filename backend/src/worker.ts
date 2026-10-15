@@ -1,6 +1,7 @@
 import { assertStartupAdapters } from './platform/adapters.js';
 import { loadWorkerConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
+import { assertRuntimeDbRole } from './platform/db/runtimeRole.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { PgInboxStore } from './platform/events/inboxPg.js';
 import { PgOutboxStore } from './platform/events/outboxPg.js';
@@ -22,6 +23,15 @@ const log = pino(pinoOptions(config));
 
 const db = createDb(config.DATABASE_URL_WORKER, { log });
 const redis = createRedis(config.REDIS_URL, log);
+
+try {
+  await assertRuntimeDbRole(db.pool);
+} catch (error) {
+  log.error({ err: error }, 'worker refused unsafe database role');
+  await redis.quit().catch(() => redis.disconnect());
+  await db.close();
+  process.exit(1);
+}
 
 const inbox = new PgInboxStore(db.pool);
 const bus = new InProcessEventBus(inbox);

@@ -3,7 +3,13 @@ import pg from 'pg';
 import { DB_SCHEMAS } from '../../src/platform/modules.js';
 import { withTenant } from '../../src/platform/db/tenant.js';
 import { parseScopeDistributorHeader } from '../../src/platform/http/scope.js';
-import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+import { assertRuntimeDbRole } from '../../src/platform/db/runtimeRole.js';
+import { databaseUrlAs } from '../../src/platform/db/roles.js';
+import {
+  startPostgresWithRoles,
+  TEST_ROLE_PASSWORD,
+  type StartedPostgresRoles,
+} from '../helpers/containers.js';
 
 const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
 const DIST_A = '11111111-1111-1111-1111-111111111111';
@@ -82,6 +88,19 @@ describe('RLS harness skeleton', () => {
       `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`,
     );
     expect(flag.rows[0]?.rolbypassrls).toBe(false);
+    await expect(assertRuntimeDbRole(appPool)).resolves.toBeUndefined();
+  });
+
+  it('refuses to start as a superuser or the migrator', async () => {
+    await expect(assertRuntimeDbRole(ownerPool)).rejects.toThrow(/superuser/);
+    const migratorPool = new pg.Pool({
+      connectionString: databaseUrlAs(deps.ownerUrl, 'vproject_migrator', TEST_ROLE_PASSWORD),
+    });
+    try {
+      await expect(assertRuntimeDbRole(migratorPool)).rejects.toThrow(/migrator/);
+    } finally {
+      await migratorPool.end();
+    }
   });
 
   it('grants vproject_app nothing on identity and leaves schemas owned by the migrator', async () => {

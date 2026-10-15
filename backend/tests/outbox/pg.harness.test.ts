@@ -35,6 +35,13 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     appPool = new pg.Pool({ connectionString: deps.appUrl });
     workerPool = new pg.Pool({ connectionString: deps.workerUrl });
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
+    await ownerPool.query(`
+      CREATE TABLE platform.outbox_fault_probe (
+        id uuid PRIMARY KEY,
+        distributor_id uuid NOT NULL
+      );
+      GRANT INSERT, SELECT ON platform.outbox_fault_probe TO vproject_app;
+    `);
   }, 120_000);
 
   afterAll(async () => {
@@ -73,8 +80,13 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     const writer = new PgOutboxWriter();
     const audit = new PgAuditWriter();
     const ev = event();
+    const stateId = randomUUID();
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO platform.outbox_fault_probe (id, distributor_id) VALUES ($1, $2)`,
+          [stateId, DIST],
+        );
         await audit.append(tx, {
           actorType: 'staff',
           actorId: 'staff-1',
@@ -98,8 +110,13 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
       `SELECT count(*)::text AS c FROM platform.audit_log WHERE entity_id = $1`,
       [ev.id],
     );
+    const state = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.outbox_fault_probe WHERE id = $1`,
+      [stateId],
+    );
     expect(outbox.rows[0]?.c).toBe('0');
     expect(auditRows.rows[0]?.c).toBe('0');
+    expect(state.rows[0]?.c).toBe('0');
   });
 
   it('claims unpublished rows with SKIP LOCKED and marks them published', async () => {
@@ -134,6 +151,15 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
       }),
     ).toBe(false);
     expect(count).toBe(1);
+  });
+
+  it('does not grant the worker UPDATE on inbox or any idempotency access', async () => {
+    await expect(
+      workerPool.query(`UPDATE platform.inbox_processed SET processed_at = now()`),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(workerPool.query(`SELECT 1 FROM platform.idempotency_keys`)).rejects.toThrow(
+      /permission denied/i,
+    );
   });
 
   it('does not let vproject_app SELECT outbox payloads', async () => {

@@ -9,6 +9,8 @@ describe('local roles.sql', () => {
   it('contains no PASSWORD clauses and revokes PUBLIC defaults', () => {
     const sql = readFileSync(join(dbDir, 'roles.sql'), 'utf8');
     expect(sql).not.toMatch(/\bPASSWORD\b/i);
+    expect(sql).not.toMatch(/harness connects as the container superuser/);
+    expect(sql).toMatch(/vproject_app \(NOBYPASSRLS\)/);
     expect(sql).toMatch(/NOSUPERUSER/);
     expect(sql).toMatch(/NOCREATEDB/);
     expect(sql).toMatch(/NOCREATEROLE/);
@@ -37,7 +39,12 @@ describe('0001_platform_infra.sql', () => {
     expect(sql).toMatch(
       /GRANT INSERT ON TABLE platform\.outbox_events, platform\.inbox_processed, platform\.audit_log TO vproject_app/,
     );
+    expect(sql).toMatch(/GRANT SELECT, UPDATE ON TABLE platform\.outbox_events TO vproject_worker/);
     expect(sql).toMatch(
+      /GRANT SELECT, INSERT ON TABLE platform\.inbox_processed TO vproject_worker/,
+    );
+    expect(sql).not.toMatch(/idempotency_keys TO vproject_worker/);
+    expect(sql).not.toMatch(
       /GRANT SELECT, UPDATE ON TABLE platform\.outbox_events, platform\.inbox_processed TO vproject_worker/,
     );
   });

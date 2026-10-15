@@ -42,12 +42,15 @@ export class AppError extends Error {
   }
 }
 
-/** 413 stays VALIDATION_FAILED; other unhandled 4xx are generic (Architect N-8). */
+/** Unhandled 404/405 stay NOT_FOUND; other 4xx are VALIDATION_FAILED. Never INTERNAL (R2-3). */
 export function clientErrorEnvelope(statusCode: number, _message: string): ErrorEnvelope {
+  if (statusCode === 404 || statusCode === 405) {
+    return errorEnvelope('NOT_FOUND', 'Resource not found');
+  }
   if (statusCode === 413) {
     return errorEnvelope('VALIDATION_FAILED', 'Payload too large', { statusCode });
   }
-  return errorEnvelope('INTERNAL', 'Request could not be processed');
+  return errorEnvelope('VALIDATION_FAILED', 'Request could not be processed');
 }
 
 export function errorEnvelope(
