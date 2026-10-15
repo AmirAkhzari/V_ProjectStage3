@@ -1,6 +1,6 @@
 /**
- * Append-only audit log helper (P0-E7-T2). Actor types follow the architecture document; the
- * `platform.audit_log` table is not created in Foundation (empty schemas, F-6).
+ * Append-only audit log helper (P0-E7-T2). Actor types follow the architecture document.
+ * Postgres: `PgAuditWriter` against `platform.audit_log`.
  */
 export interface AuditEntry {
   actorType: 'shopkeeper' | 'staff' | 'driver' | 'system';

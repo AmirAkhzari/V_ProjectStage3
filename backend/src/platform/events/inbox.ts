@@ -1,7 +1,6 @@
 /**
  * Consumer-side idempotency (`platform.inbox_processed`, PK `(consumer, event_id)`).
- * `runOnce` must record the event and apply `effect` atomically; the Postgres implementation does
- * both in one transaction. Only the in-memory implementation exists until the table is authorized.
+ * `runOnce` records the event and applies `effect` atomically (`PgInboxStore`).
  */
 export interface InboxStore {
   /** Returns `true` when `effect` ran, `false` when the event was already processed. */

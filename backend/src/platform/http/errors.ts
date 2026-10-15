@@ -12,6 +12,7 @@ export const PLATFORM_ERROR_CODES = [
   'TOKEN_TYPE_MISMATCH',
   'NOT_FOUND',
   'INTERNAL',
+  'SERVICE_UNAVAILABLE',
   'DEPENDENCY_UNAVAILABLE',
 ] as const;
 
@@ -41,6 +42,14 @@ export class AppError extends Error {
   }
 }
 
+/** 413 stays VALIDATION_FAILED; other unhandled 4xx are generic (Architect N-8). */
+export function clientErrorEnvelope(statusCode: number, _message: string): ErrorEnvelope {
+  if (statusCode === 413) {
+    return errorEnvelope('VALIDATION_FAILED', 'Payload too large', { statusCode });
+  }
+  return errorEnvelope('INTERNAL', 'Request could not be processed');
+}
+
 export function errorEnvelope(
   code: PlatformErrorCode,
   message: string,
@@ -68,7 +77,9 @@ export function registerErrorHandling(app: FastifyInstance): void {
         .send(errorEnvelope('VALIDATION_FAILED', 'Request validation failed', error.validation));
     }
     if (error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500) {
-      return reply.code(error.statusCode).send(errorEnvelope('VALIDATION_FAILED', error.message));
+      return reply
+        .code(error.statusCode)
+        .send(clientErrorEnvelope(error.statusCode, error.message));
     }
     request.log.error({ err: error }, 'unhandled error');
     return reply.code(500).send(errorEnvelope('INTERNAL', 'Internal server error'));

@@ -18,6 +18,14 @@ const SCHEMAS = [
   'platform',
 ];
 
+/** Architect B-1: platform infrastructure only. No domain tables. */
+const ALLOWED_TABLES = new Set([
+  'platform.outbox_events',
+  'platform.inbox_processed',
+  'platform.audit_log',
+  'platform.idempotency_keys',
+]);
+
 const FORBIDDEN_SQL = [
   { re: /\b(?:numeric|decimal|money)\b/i, msg: 'non-BIGINT money type' },
   { re: /\btimestamp\s+without\s+time\s+zone\b/i, msg: 'timestamp without time zone' },
@@ -37,16 +45,21 @@ const combined = (
 const errors = [];
 
 for (const schema of SCHEMAS) {
-  const pattern = new RegExp(`CREATE SCHEMA IF NOT EXISTS ${schema}\\b`, 'i');
+  const pattern = new RegExp(`CREATE SCHEMA IF NOT EXISTS ["']?${schema}["']?\\b`, 'i');
   if (!pattern.test(combined)) {
     errors.push(`missing CREATE SCHEMA for ${schema}`);
   }
 }
 
-if (/\bCREATE TABLE\b/i.test(combined)) {
-  errors.push(
-    'domain/infrastructure CREATE TABLE found; Foundation migrations must keep schemas empty',
-  );
+const tableRe = /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:"?([a-zA-Z_]+)"?\.)?"?([a-zA-Z_]+)"?/gi;
+for (const match of combined.matchAll(tableRe)) {
+  const schema = match[1] ?? 'public';
+  const qualified = `${schema}.${match[2]}`;
+  if (!ALLOWED_TABLES.has(qualified)) {
+    errors.push(
+      `forbidden CREATE TABLE ${qualified}; only ${[...ALLOWED_TABLES].join(', ')} allowed`,
+    );
+  }
 }
 
 for (const rule of FORBIDDEN_SQL) {
@@ -61,5 +74,5 @@ if (errors.length > 0) {
 }
 
 process.stdout.write(
-  `migration check ok (${files.length} sql file(s), ${SCHEMAS.length} empty schemas)\n`,
+  `migration check ok (${files.length} sql file(s), ${SCHEMAS.length} schemas, ${ALLOWED_TABLES.size} platform infra tables)\n`,
 );

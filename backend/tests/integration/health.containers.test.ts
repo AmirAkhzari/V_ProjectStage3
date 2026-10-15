@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
 import { createDb } from '../../src/platform/db/pool.js';
-import { postgresHealthCheck, redisHealthCheck } from '../../src/platform/health.js';
+import {
+  outboxLagHealthCheck,
+  postgresHealthCheck,
+  redisHealthCheck,
+} from '../../src/platform/health.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
 import { startDeps, stopDeps, type StartedDeps } from '../helpers/containers.js';
@@ -30,7 +34,11 @@ describe('health against real Postgres 16 and Redis 7', () => {
         DATABASE_URL: deps.databaseUrl,
         REDIS_URL: deps.redisUrl,
       }),
-      healthChecks: [postgresHealthCheck(db.pool), redisHealthCheck(redis)],
+      healthChecks: [
+        postgresHealthCheck(db.pool),
+        redisHealthCheck(redis),
+        outboxLagHealthCheck(db.pool, 30_000),
+      ],
     });
   }, 120_000);
 

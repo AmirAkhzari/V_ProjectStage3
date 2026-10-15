@@ -5,6 +5,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import { z } from 'zod';
 import { assertLocalRolesTarget } from './localRoles.js';
+import { provisionLocalRolePasswords } from './roles.js';
 
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL('../../../db/migrations', import.meta.url));
 export const ROLES_SQL_PATH = fileURLToPath(new URL('../../../db/roles.sql', import.meta.url));
@@ -26,7 +27,7 @@ export async function applyRoles(
 
 export async function runMigrations(
   databaseUrl: string,
-  options?: { applyRoles?: boolean; nodeEnv?: string },
+  options?: { applyRoles?: boolean; nodeEnv?: string; rolePassword?: string },
 ): Promise<void> {
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
@@ -34,6 +35,9 @@ export async function runMigrations(
     if (options?.applyRoles === true) {
       assertLocalRolesTarget(databaseUrl, options.nodeEnv ?? process.env['NODE_ENV']);
       await applyRoles(client);
+      if (options.rolePassword) {
+        await provisionLocalRolePasswords(client, options.rolePassword);
+      }
     }
     await migrate(drizzle({ client }), { migrationsFolder: MIGRATIONS_FOLDER });
     if (options?.applyRoles === true) {
@@ -58,8 +62,10 @@ if (isEntrypoint) {
     process.stderr.write(`Invalid migration environment: ${z.prettifyError(env.error)}\n`);
     process.exit(1);
   }
+  const rolePassword = applyRolesFlag ? process.env['LOCAL_ROLE_PASSWORD'] : undefined;
   await runMigrations(env.data.MIGRATION_DATABASE_URL ?? env.data.DATABASE_URL, {
     applyRoles: applyRolesFlag,
+    ...(rolePassword ? { rolePassword } : {}),
   });
   process.stdout.write(
     applyRolesFlag ? 'migrations + local roles applied\n' : 'migrations applied\n',

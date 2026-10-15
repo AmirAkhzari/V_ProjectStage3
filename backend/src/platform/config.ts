@@ -42,6 +42,13 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): { field: string; messa
   return issues;
 }
 
+const postgresUrlKeys = [
+  'DATABASE_URL_APP',
+  'DATABASE_URL_WORKER',
+  'DATABASE_URL_IDENTITY',
+  'MIGRATION_DATABASE_URL',
+] as const;
+
 export const configSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']),
@@ -50,10 +57,15 @@ export const configSchema = z
       .default('info'),
     HOST: z.string().min(1).default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-    DATABASE_URL: postgresUrl,
+    DATABASE_URL_APP: postgresUrl,
+    DATABASE_URL_WORKER: postgresUrl,
+    DATABASE_URL_IDENTITY: postgresUrl,
+    MIGRATION_DATABASE_URL: postgresUrl.optional(),
     REDIS_URL: redisUrl,
     HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(1000),
     WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
+    OUTBOX_LAG_THRESHOLD_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
+    READY_RETRY_AFTER_SECONDS: z.coerce.number().int().min(1).max(60).default(5),
     OPENAPI_DOCS_ENABLED: booleanString,
   })
   .superRefine((value, ctx) => {
@@ -72,12 +84,25 @@ export const configSchema = z
         message: 'debug/trace log levels are forbidden in production',
       });
     }
-    if (!postgresRequiresTls(value.DATABASE_URL)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['DATABASE_URL'],
-        message: 'production DATABASE_URL must require TLS (sslmode=require|verify-ca|verify-full)',
-      });
+    for (const key of postgresUrlKeys) {
+      const url = value[key];
+      if (!url) {
+        if (key === 'MIGRATION_DATABASE_URL') {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: 'production MIGRATION_DATABASE_URL is required',
+          });
+        }
+        continue;
+      }
+      if (!postgresRequiresTls(url)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `production ${key} must require TLS (sslmode=require|verify-ca|verify-full)`,
+        });
+      }
     }
     if (!redisRequiresTls(value.REDIS_URL)) {
       ctx.addIssue({

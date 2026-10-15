@@ -56,10 +56,11 @@ describe('system probes', () => {
     });
     const response = await app.inject({ method: 'GET', url: '/ready' });
     expect(response.statusCode).toBe(503);
+    expect(response.headers['retry-after']).toBe('5');
     expect(response.json()).toEqual({
       error: {
-        code: 'DEPENDENCY_UNAVAILABLE',
-        message: 'One or more dependencies are unavailable',
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Service temporarily unavailable',
       },
     });
     expect(response.body).not.toContain('10.1.2.3');

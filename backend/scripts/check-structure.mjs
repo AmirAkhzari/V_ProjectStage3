@@ -64,6 +64,10 @@ for (const name of extra) {
   if (!MODULES.includes(name)) errors.push(`unexpected module directory: src/modules/${name}`);
 }
 
+if (!(await exists(join(ROOT, 'src/platform'), 'dir'))) {
+  errors.push('src/platform/ is missing (shared kernel; 11 modules + platform = 12)');
+}
+
 if (errors.length > 0) {
   process.stderr.write(
     `module structure check failed:\n${errors.map((e) => `  - ${e}`).join('\n')}\n`,
@@ -71,4 +75,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-process.stdout.write(`module structure ok (${MODULES.length} modules)\n`);
+process.stdout.write(`module structure ok (11 modules + platform = 12)\n`);

@@ -1,7 +1,6 @@
 /**
- * Idempotency-Key middleware skeleton (P0-E7-T1). The store is in-memory; it is not attached to
- * domain endpoints (none are implemented). Replay vs body-mismatch semantics follow the frozen
- * contract (`IDEMPOTENCY_KEY_REUSE`) and will be wired when those endpoints are authorized.
+ * Idempotency-Key store (P0-E7-T1 / Architect N-9). `PgIdempotencyStore` persists
+ * `platform.idempotency_keys`. Not attached to domain endpoints yet.
  */
 export interface IdempotencyRecord {
   requestHash: string;

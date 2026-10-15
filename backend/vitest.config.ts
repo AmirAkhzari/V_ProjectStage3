@@ -12,7 +12,7 @@ export default defineConfig({
             'tests/unit/**/*.test.ts',
             'tests/boundaries/**/*.test.ts',
             'tests/contract/**/*.test.ts',
-            'tests/outbox/**/*.test.ts',
+            'tests/outbox/harness.test.ts',
           ],
         },
       },
@@ -20,7 +20,11 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
-          include: ['tests/integration/**/*.test.ts', 'tests/rls/**/*.test.ts'],
+          include: [
+            'tests/integration/**/*.test.ts',
+            'tests/rls/**/*.test.ts',
+            'tests/outbox/pg.harness.test.ts',
+          ],
           testTimeout: 120_000,
           hookTimeout: 120_000,
         },

@@ -1,4 +1,13 @@
 -- Applied after CREATE SCHEMA, only with local roles (AppSec H-1). Not a drizzle migration.
+DO $$
+BEGIN
+  EXECUTE format(
+    'GRANT CONNECT ON DATABASE %I TO vproject_app, vproject_worker, vproject_identity, vproject_migrator',
+    current_database()
+  );
+END
+$$;
+
 GRANT USAGE ON SCHEMA identity TO vproject_identity;
 GRANT USAGE ON SCHEMA tenancy, customers, catalog, ordering, delivery, payment, membership, marketing, notification, reporting, platform TO vproject_app;
 GRANT USAGE ON SCHEMA tenancy, customers, catalog, ordering, delivery, payment, membership, marketing, notification, reporting, platform TO vproject_worker;

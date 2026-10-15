@@ -5,10 +5,23 @@ import { fileURLToPath } from 'node:url';
 
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+const localPassword = process.env.LOCAL_ROLE_PASSWORD ?? 'vproject';
 const env = {
   ...process.env,
   NODE_ENV: process.env.NODE_ENV ?? 'development',
+  MIGRATION_DATABASE_URL:
+    process.env.MIGRATION_DATABASE_URL ?? 'postgres://vproject:vproject@127.0.0.1:5432/vproject',
   DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://vproject:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_APP:
+    process.env.DATABASE_URL_APP ??
+    `postgres://vproject_app:${localPassword}@127.0.0.1:5432/vproject`,
+  DATABASE_URL_WORKER:
+    process.env.DATABASE_URL_WORKER ??
+    `postgres://vproject_worker:${localPassword}@127.0.0.1:5432/vproject`,
+  DATABASE_URL_IDENTITY:
+    process.env.DATABASE_URL_IDENTITY ??
+    `postgres://vproject_identity:${localPassword}@127.0.0.1:5432/vproject`,
+  LOCAL_ROLE_PASSWORD: localPassword,
   REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
 };
 

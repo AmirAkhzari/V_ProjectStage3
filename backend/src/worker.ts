@@ -1,10 +1,15 @@
 import { loadConfigOrExit } from './platform/config.js';
-import { createDb } from './platform/db/pool.js';
+import { createRoleDb } from './platform/db/pool.js';
 import { InProcessEventBus } from './platform/events/bus.js';
-import { InMemoryInboxStore } from './platform/events/inbox.js';
-import { InMemoryOutboxStore } from './platform/events/outbox.js';
+import { PgInboxStore } from './platform/events/inboxPg.js';
+import { PgOutboxStore } from './platform/events/outboxPg.js';
 import { OutboxRelay } from './platform/events/relay.js';
-import { postgresHealthCheck, redisHealthCheck, runHealthChecks } from './platform/health.js';
+import {
+  outboxLagHealthCheck,
+  postgresHealthCheck,
+  redisHealthCheck,
+  runHealthChecks,
+} from './platform/health.js';
 import { InMemoryJobQueue } from './platform/jobs/boss.js';
 import { pinoOptions } from './platform/logger.js';
 import { createRedis } from './platform/redis.js';
@@ -13,12 +18,12 @@ import { pino } from 'pino';
 const config = loadConfigOrExit();
 const log = pino(pinoOptions(config));
 
-const db = createDb(config.DATABASE_URL);
+const db = createRoleDb(config, 'worker');
 const redis = createRedis(config.REDIS_URL);
 
-const inbox = new InMemoryInboxStore();
+const inbox = new PgInboxStore(db.pool);
 const bus = new InProcessEventBus(inbox);
-const outbox = new InMemoryOutboxStore();
+const outbox = new PgOutboxStore(db.pool);
 const relay = new OutboxRelay({
   store: outbox,
   bus,
@@ -42,9 +47,13 @@ process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
 const report = await runHealthChecks(
-  [postgresHealthCheck(db.pool), redisHealthCheck(redis)],
+  [
+    postgresHealthCheck(db.pool),
+    redisHealthCheck(redis),
+    outboxLagHealthCheck(db.pool, config.OUTBOX_LAG_THRESHOLD_MS),
+  ],
   config.HEALTH_CHECK_TIMEOUT_MS,
 );
 log.info({ checks: report.checks }, 'worker dependencies');
 relay.start(config.WORKER_POLL_INTERVAL_MS);
-log.info('worker relay started (in-memory store until platform.outbox_events is authorized)');
+log.info('worker relay started');

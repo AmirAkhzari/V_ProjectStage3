@@ -6,9 +6,7 @@ import { InMemoryOutboxStore } from '../../src/platform/events/outbox.js';
 import { OutboxRelay } from '../../src/platform/events/relay.js';
 
 /**
- * Outbox harness skeleton (P0-E5 / F-7). Domain policies are not encoded here; the harness only
- * proves commit/rollback and idempotent consumers against the in-memory store. Postgres-backed
- * publish(tx, event) waits on platform.outbox_events (empty schemas in Foundation).
+ * In-memory outbox harness (P0-E5 / F-7). Postgres commit/rollback is in `pg.harness.test.ts`.
  */
 describe('outbox harness skeleton', () => {
   it('rollback path: no outbox row means no dispatch', async () => {

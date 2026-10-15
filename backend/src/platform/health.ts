@@ -105,3 +105,24 @@ export function redisHealthCheck(redis: Redis): HealthCheck {
     },
   };
 }
+
+/** Readiness: unpublished outbox rows older than `maxLagMs` fail the probe (arch §11 / N-2). */
+export function outboxLagHealthCheck(pool: pg.Pool, maxLagMs: number): HealthCheck {
+  return {
+    name: 'outbox_lag',
+    async check() {
+      const result = await pool.query<{ lagged: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM platform.outbox_events
+           WHERE published_at IS NULL
+             AND dead_lettered_at IS NULL
+             AND occurred_at < now() - ($1::int * interval '1 millisecond')
+         ) AS lagged`,
+        [maxLagMs],
+      );
+      if (result.rows[0]?.lagged) {
+        throw new Error('outbox lag exceeded threshold');
+      }
+    },
+  };
+}

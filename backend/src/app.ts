@@ -57,6 +57,7 @@ export async function buildApp(options: BuildAppOptions) {
   await app.register(systemRoutes, {
     healthChecks: options.healthChecks,
     healthCheckTimeoutMs: options.config.HEALTH_CHECK_TIMEOUT_MS,
+    readyRetryAfterSeconds: options.config.READY_RETRY_AFTER_SECONDS,
   });
 
   const groupOpts = {

@@ -2,10 +2,9 @@ import type { EventEnvelope } from './envelope.js';
 
 /**
  * Write side: `publish(tx, event)` inserts into `platform.outbox_events` inside the caller's
- * transaction (P0-E5-T1). The table is not created in Foundation (12 empty schemas, DECISION_LOG
- * §G F-6), so only the contract is defined here.
+ * transaction (P0-E5-T1 / Architect B-1). Postgres: `PgOutboxWriter` / `PgOutboxStore`.
  */
-export interface OutboxWriter<TTx> {
+export interface OutboxWriter<TTx = unknown> {
   publish(tx: TTx, event: EventEnvelope): Promise<void>;
 }
 

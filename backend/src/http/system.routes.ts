@@ -7,6 +7,7 @@ import { errorEnvelope, errorEnvelopeSchema } from '../platform/http/errors.js';
 export interface SystemRoutesOptions {
   healthChecks: readonly HealthCheck[];
   healthCheckTimeoutMs: number;
+  readyRetryAfterSeconds?: number;
 }
 
 export const healthResponseSchema = z.object({
@@ -52,7 +53,7 @@ export const systemRoutes: FastifyPluginAsync<SystemRoutesOptions> = async (app,
       schema: {
         operationId: 'S2',
         tags: ['platform'],
-        summary: 'Readiness (Postgres + Redis)',
+        summary: 'Readiness (Postgres + Redis + outbox lag)',
         response: { 200: readyResponseSchema, 503: errorEnvelopeSchema },
       },
     },
@@ -61,9 +62,11 @@ export const systemRoutes: FastifyPluginAsync<SystemRoutesOptions> = async (app,
       if (report.status === 'ok') {
         return reply.code(200).send({ status: 'ok' as const });
       }
+      const retryAfter = opts.readyRetryAfterSeconds ?? 5;
       return reply
+        .header('retry-after', String(retryAfter))
         .code(503)
-        .send(errorEnvelope('DEPENDENCY_UNAVAILABLE', 'One or more dependencies are unavailable'));
+        .send(errorEnvelope('SERVICE_UNAVAILABLE', 'Service temporarily unavailable'));
     },
   );
 };

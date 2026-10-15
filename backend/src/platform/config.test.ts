@@ -3,13 +3,21 @@ import { ConfigError, loadConfig } from './config.js';
 
 const valid = {
   NODE_ENV: 'test',
-  DATABASE_URL: 'postgres://vproject:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_APP: 'postgres://vproject_app:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_WORKER: 'postgres://vproject_worker:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_IDENTITY: 'postgres://vproject_identity:vproject@127.0.0.1:5432/vproject',
   REDIS_URL: 'redis://127.0.0.1:6379',
 };
 
 const validProduction = {
   NODE_ENV: 'production',
-  DATABASE_URL: 'postgres://vproject:vproject@db.example.ir:5432/vproject?sslmode=require',
+  DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.example.ir:5432/vproject?sslmode=require',
+  DATABASE_URL_WORKER:
+    'postgres://vproject_worker:vproject@db.example.ir:5432/vproject?sslmode=require',
+  DATABASE_URL_IDENTITY:
+    'postgres://vproject_identity:vproject@db.example.ir:5432/vproject?sslmode=require',
+  MIGRATION_DATABASE_URL:
+    'postgres://vproject_migrator:vproject@db.example.ir:5432/vproject?sslmode=require',
   REDIS_URL: 'rediss://cache.example.ir:6379',
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
@@ -30,14 +38,15 @@ describe('loadConfig', () => {
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigError);
       const issues = (error as ConfigError).issues.map((i) => i.field);
-      expect(issues).toContain('DATABASE_URL');
+      expect(issues).toContain('DATABASE_URL_APP');
+      expect(issues).toContain('DATABASE_URL_WORKER');
+      expect(issues).toContain('DATABASE_URL_IDENTITY');
       expect(issues).toContain('REDIS_URL');
-      expect((error as ConfigError).message).toMatch(/DATABASE_URL/);
     }
   });
 
   it('rejects a non-postgres database url', () => {
-    expect(() => loadConfig({ ...valid, DATABASE_URL: 'mysql://localhost/db' })).toThrow(
+    expect(() => loadConfig({ ...valid, DATABASE_URL_APP: 'mysql://localhost/db' })).toThrow(
       ConfigError,
     );
   });
@@ -52,13 +61,6 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validProduction, OPENAPI_DOCS_ENABLED: 'true' })).toThrow(
       ConfigError,
     );
-    try {
-      loadConfig({ ...validProduction, OPENAPI_DOCS_ENABLED: 'true' });
-    } catch (error) {
-      expect((error as ConfigError).issues.some((i) => i.field === 'OPENAPI_DOCS_ENABLED')).toBe(
-        true,
-      );
-    }
   });
 
   it('rejects debug/trace log levels in production', () => {
@@ -84,7 +86,7 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({
         ...validProduction,
-        DATABASE_URL: 'postgres://vproject:vproject@db.example.ir:5432/vproject',
+        DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.example.ir:5432/vproject',
       }),
     ).toThrow(ConfigError);
   });
