@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +7,7 @@ const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflowPath = join(backendRoot, '../.github/workflows/backend-ci.yml');
 
 describe('AUTH-XSS-02 SCA production dependency audit', () => {
-  it('is wired as a CI step and finds no high/critical runtime vulns', () => {
+  it('is wired as a CI step (offline; the audit itself runs in CI)', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
     expect(workflow).toMatch(/AUTH-XSS-02/);
     expect(workflow).toMatch(/pnpm audit --prod --audit-level=high/);
@@ -16,11 +15,5 @@ describe('AUTH-XSS-02 SCA production dependency audit', () => {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts['audit:prod']).toMatch(/pnpm audit --prod --audit-level=high/);
-    expect(() =>
-      execFileSync('pnpm', ['audit', '--prod', '--audit-level=high'], {
-        cwd: backendRoot,
-        stdio: 'pipe',
-      }),
-    ).not.toThrow();
   });
 });

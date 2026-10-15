@@ -45,11 +45,23 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | Idempotency / inbox | green  | `tests/outbox/pg.harness.test.ts`                                                           |
 | N-2 outbox SELECT   | green  | `tests/outbox/pg.harness.test.ts` — `N-2: does not let vproject_app SELECT outbox payloads` |
 
-## exec-auth (91) — pending later S-11b slices
+## exec-auth (91) — owner and slice (R-5)
 
-AUTH-PW-01..04, AUTH-PW-02-OFF, AUTH-LG-01..05, AUTH-RT-01..05, AUTH-RV-01, AUTH-LO-01, AUTH-JW-01..03, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, SESS-01..07, AUTH-AV-01..05, AUTH-DI-01, TEN-404-01, plus §M TEN-05-PLAT, SCOPE-SA-01, AUTH-DM-01-RA, AUTH-PW-05-RA, AUTH-JW-04-RA, TENANT-01-S11B, TEN-02-S11B, AUTH-LG-02-PR, LIM-OTP-T-01..08, plus §N V11-* (need v1.1.0 freeze; S11b-4..6 forbidden until then).
+Every pending exec-auth row has an owner and an S-11b slice. S11b-1 turns **TENANT-01-S11B** and **TEN-02-S11B** green (tables + harness). No endpoints in S11b-0/1.
 
-S11b-1 will turn **TENANT-01-S11B** and **TEN-02-S11B** green (tables + harness). No endpoints in S11b-0/1.
+Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
+
+| Slice  | Owner    | Status  | IDs (count)                                                                                                                                                                         |
+| ------ | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S11b-1 | platform | pending | TENANT-01-S11B, TEN-02-S11B (2)                                                                                                                                                     |
+| S11b-2 | identity | pending | AUTH-PW-01, AUTH-PW-02, AUTH-PW-03, AUTH-PW-04, AUTH-PW-02-OFF, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-02, AUTH-RT-03, AUTH-RT-04, AUTH-RT-05 (13)                    |
+| S11b-3 | identity | pending | SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                                                     |
+| S11b-4 | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                                                 |
+| S11b-5 | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                                    |
+| S11b-6 | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                                       |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.11 (13; need v1.1.0 freeze)                                                                                                                          |
+
+**91** = 2+13+17+36+8+2+13.
 
 ## deferred:P2\|P3 (DL-48 approved) — not this slice
 
@@ -65,7 +77,7 @@ ORD-SM-01/02, PAY-ORD-01/02, ADM-ORD-01, PAY-VER/REF/NC/CB, PAY-NTF-01, DEL-MAN-
 | TEN-03                  | green    | no GUC leak                                           |
 | TEN-04                  | green    | unset ⇒ 0 rows                                        |
 | TEN-05                  | green    | worker role part; is_platform = TEN-05-PLAT exec-auth |
-| AUTH-LG/RV/AV, C11/B83  | pending  | exec-auth, S11b-3..4                                  |
+| AUTH-LG/RV/AV, C11/B83  | pending  | exec-auth; owner identity; slices S11b-3..4           |
 | PAY-SEC-* / DEL-SEC-*   | deferred | P2/P3                                                 |
 
 **C-1 overall: pending** until exec-auth is green. Gate stays closed. S11b-0 finishes the Foundation exec set.
