@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { runHealthChecks, type HealthCheck } from '../platform/health.js';
+import { HealthMonitor, type HealthCheck } from '../platform/health.js';
 import { errorEnvelope, errorEnvelopeSchema } from '../platform/http/errors.js';
 
 export interface SystemRoutesOptions {
@@ -9,29 +9,25 @@ export interface SystemRoutesOptions {
   healthCheckTimeoutMs: number;
 }
 
-const dependencySchema = z.object({
-  status: z.enum(['up', 'down']),
-  latencyMs: z.number(),
-  error: z.string().optional(),
-});
-
 export const healthResponseSchema = z.object({
   status: z.enum(['ok', 'degraded']),
-  checks: z.record(z.string(), dependencySchema),
 });
 
 export const readyResponseSchema = z.object({
   status: z.literal('ok'),
-  checks: z.record(z.string(), dependencySchema),
 });
 
 /**
- * System routes outside the three API groups (DL-11). S1 `/health` includes Postgres and Redis
- * checks (launch brief 2026-10-15) and stays a liveness probe (HTTP 200 while the process is up).
- * S2 `/ready` fails closed with 503 when a dependency is down. S3 payment callback is not
- * registered in Foundation.
+ * System routes outside the three API groups (DL-11). Public bodies are status-only (AppSec M-3b);
+ * per-dependency detail is logged, never returned. S3 payment callback is not registered.
  */
 export const systemRoutes: FastifyPluginAsync<SystemRoutesOptions> = async (app, opts) => {
+  const monitor = new HealthMonitor({
+    checks: opts.healthChecks,
+    timeoutMs: opts.healthCheckTimeoutMs,
+    ttlMs: 1500,
+    log: app.log,
+  });
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.get(
@@ -45,8 +41,8 @@ export const systemRoutes: FastifyPluginAsync<SystemRoutesOptions> = async (app,
       },
     },
     async (_request, reply) => {
-      const report = await runHealthChecks(opts.healthChecks, opts.healthCheckTimeoutMs);
-      return reply.code(200).send(report);
+      const report = await monitor.snapshot();
+      return reply.code(200).send({ status: report.status });
     },
   );
 
@@ -61,15 +57,13 @@ export const systemRoutes: FastifyPluginAsync<SystemRoutesOptions> = async (app,
       },
     },
     async (_request, reply) => {
-      const report = await runHealthChecks(opts.healthChecks, opts.healthCheckTimeoutMs);
+      const report = await monitor.snapshot();
       if (report.status === 'ok') {
-        return reply.code(200).send({ status: 'ok' as const, checks: report.checks });
+        return reply.code(200).send({ status: 'ok' as const });
       }
-      return reply.code(503).send(
-        errorEnvelope('DEPENDENCY_UNAVAILABLE', 'One or more dependencies are unavailable', {
-          checks: report.checks,
-        }),
-      );
+      return reply
+        .code(503)
+        .send(errorEnvelope('DEPENDENCY_UNAVAILABLE', 'One or more dependencies are unavailable'));
     },
   );
 };

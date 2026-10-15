@@ -23,6 +23,13 @@ module.exports = {
       to: { path: '^src/modules/' },
     },
     {
+      name: 'bootstrap-no-mock-adapters',
+      comment: 'M-5: main/worker/app must not import mock SMS/PSP/auth adapters',
+      severity: 'error',
+      from: { path: '^src/(app|main|worker)\\.ts$' },
+      to: { path: 'src/modules/.*/(infra/mock/|infra/providers/mock\\.ts$)' },
+    },
+    {
       name: 'domain-no-infra-libs',
       comment: '§9.3.6 domain/ must not depend on Fastify, Drizzle or Redis',
       severity: 'error',

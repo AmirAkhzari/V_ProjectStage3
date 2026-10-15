@@ -6,7 +6,6 @@ export type DependencyStatus = 'up' | 'down';
 export interface DependencyCheckResult {
   status: DependencyStatus;
   latencyMs: number;
-  error?: string;
 }
 
 export interface HealthCheck {
@@ -17,6 +16,10 @@ export interface HealthCheck {
 export interface HealthReport {
   status: 'ok' | 'degraded';
   checks: Record<string, DependencyCheckResult>;
+}
+
+export interface HealthSink {
+  warn(bindings: Record<string, unknown>, message: string): void;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -37,21 +40,48 @@ export async function runHealthChecks(
       try {
         await withTimeout(hc.check(), timeoutMs);
         return [hc.name, { status: 'up', latencyMs: Math.round(performance.now() - started) }];
-      } catch (error) {
-        return [
-          hc.name,
-          {
-            status: 'down',
-            latencyMs: Math.round(performance.now() - started),
-            error: error instanceof Error ? error.message : 'unknown error',
-          },
-        ];
+      } catch {
+        return [hc.name, { status: 'down', latencyMs: Math.round(performance.now() - started) }];
       }
     }),
   );
-  const results = Object.fromEntries(entries);
   const allUp = entries.every(([, r]) => r.status === 'up');
-  return { status: allUp ? 'ok' : 'degraded', checks: results };
+  return { status: allUp ? 'ok' : 'degraded', checks: Object.fromEntries(entries) };
+}
+
+export interface HealthMonitorOptions {
+  checks: readonly HealthCheck[];
+  timeoutMs: number;
+  /** Cache TTL in ms. AppSec M-3b: about 1–2 s. */
+  ttlMs?: number;
+  now?: () => number;
+  log?: HealthSink;
+}
+
+/** Caches probe results so unauthenticated `/health` and `/ready` do not hammer dependencies. */
+export class HealthMonitor {
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  private cached: { at: number; report: HealthReport } | undefined;
+
+  constructor(private readonly options: HealthMonitorOptions) {
+    this.ttlMs = options.ttlMs ?? 1500;
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  async snapshot(): Promise<HealthReport> {
+    const now = this.now();
+    if (this.cached && now - this.cached.at < this.ttlMs) return this.cached.report;
+    const report = await runHealthChecks(this.options.checks, this.options.timeoutMs);
+    this.cached = { at: now, report };
+    if (report.status === 'degraded') {
+      const down = Object.entries(report.checks)
+        .filter(([, r]) => r.status === 'down')
+        .map(([name]) => name);
+      this.options.log?.warn({ down }, 'dependency probe degraded');
+    }
+    return report;
+  }
 }
 
 export function postgresHealthCheck(pool: pg.Pool): HealthCheck {

@@ -28,6 +28,15 @@ describe('route group guards', () => {
     expect(response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
   });
 
+  it('rejects HEAD and OPTIONS on grouped paths without a token', async () => {
+    app = await buildApp({ config: testConfig(), healthChecks: [] });
+    const head = await app.inject({ method: 'HEAD', url: '/v1/admin/anything' });
+    expect(head.statusCode).toBe(401);
+    const options = await app.inject({ method: 'OPTIONS', url: '/v1/app/anything' });
+    expect(options.statusCode).toBe(401);
+    expect(options.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+  });
+
   it('rejects a driver token on /v1/admin', async () => {
     app = await buildApp({
       config: testConfig(),

@@ -99,6 +99,12 @@ export default defineConfig(
               allow: { to: { element: { type: 'platform' } } },
             },
             {
+              from: { file: { categories: 'bootstrap' } },
+              disallow: {
+                to: { file: { path: ['**/infra/mock/**', '**/providers/mock.ts'] } },
+              },
+            },
+            {
               from: { file: { path: '**/domain/**' } },
               disallow: {
                 to: {

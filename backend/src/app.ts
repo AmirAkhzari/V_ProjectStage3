@@ -16,11 +16,7 @@ import { InProcessEventBus } from './platform/events/bus.js';
 import { InMemoryInboxStore } from './platform/events/inbox.js';
 import type { HealthCheck } from './platform/health.js';
 import { registerErrorHandling } from './platform/http/errors.js';
-import {
-  generateRequestId,
-  registerRequestContext,
-  REQUEST_ID_HEADER,
-} from './platform/http/requestContext.js';
+import { generateRequestId, registerRequestContext } from './platform/http/requestContext.js';
 import { pinoOptions } from './platform/logger.js';
 
 export interface BuildAppOptions {
@@ -33,7 +29,8 @@ export async function buildApp(options: BuildAppOptions) {
   const app = Fastify({
     logger: pinoOptions(options.config),
     genReqId: generateRequestId,
-    requestIdHeader: REQUEST_ID_HEADER,
+    // Do not let Fastify copy x-request-id before validation (AppSec L-3).
+    requestIdHeader: false,
   });
 
   app.setValidatorCompiler(validatorCompiler);

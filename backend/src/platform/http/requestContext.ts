@@ -6,10 +6,14 @@ export const REQUEST_ID_HEADER = 'x-request-id';
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{8,128}$/;
 
+export function isSafeRequestId(value: string): boolean {
+  return SAFE_REQUEST_ID.test(value);
+}
+
 /** Reuses a well-formed inbound `x-request-id`, otherwise generates a UUID. */
-export function generateRequestId(req: IncomingMessage): string {
+export function generateRequestId(req: Pick<IncomingMessage, 'headers'>): string {
   const inbound = req.headers[REQUEST_ID_HEADER];
-  if (typeof inbound === 'string' && SAFE_REQUEST_ID.test(inbound)) return inbound;
+  if (typeof inbound === 'string' && isSafeRequestId(inbound)) return inbound;
   return randomUUID();
 }
 

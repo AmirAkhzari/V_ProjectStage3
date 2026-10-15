@@ -24,7 +24,7 @@ function run(command, args) {
 }
 
 await run('docker', ['compose', 'up', '-d', '--wait']);
-await run('pnpm', ['db:migrate']);
+await run('pnpm', ['exec', 'tsx', 'src/platform/db/migrate.ts', '--apply-roles']);
 
 const api = spawn('pnpm', ['exec', 'tsx', 'watch', 'src/main.ts'], {
   cwd: backendRoot,

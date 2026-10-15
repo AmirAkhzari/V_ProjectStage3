@@ -6,3 +6,5 @@ coverage
 tests
 .env
 .env.*
+db/roles.sql
+db/local-grants.sql

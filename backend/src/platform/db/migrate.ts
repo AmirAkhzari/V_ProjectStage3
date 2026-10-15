@@ -4,29 +4,41 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import { z } from 'zod';
+import { assertLocalRolesTarget } from './localRoles.js';
 
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL('../../../db/migrations', import.meta.url));
 export const ROLES_SQL_PATH = fileURLToPath(new URL('../../../db/roles.sql', import.meta.url));
+export const LOCAL_GRANTS_SQL_PATH = fileURLToPath(
+  new URL('../../../db/local-grants.sql', import.meta.url),
+);
+
+async function execSqlFile(client: pg.Client, path: string): Promise<void> {
+  const sql = await readFile(path, 'utf8');
+  await client.query(sql);
+}
 
 export async function applyRoles(
   client: pg.Client,
   rolesSqlPath: string = ROLES_SQL_PATH,
 ): Promise<void> {
-  const sql = await readFile(rolesSqlPath, 'utf8');
-  await client.query(sql);
+  await execSqlFile(client, rolesSqlPath);
 }
 
 export async function runMigrations(
   databaseUrl: string,
-  options?: { applyRoles?: boolean },
+  options?: { applyRoles?: boolean; nodeEnv?: string },
 ): Promise<void> {
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
   try {
-    if (options?.applyRoles !== false) {
+    if (options?.applyRoles === true) {
+      assertLocalRolesTarget(databaseUrl, options.nodeEnv ?? process.env['NODE_ENV']);
       await applyRoles(client);
     }
     await migrate(drizzle({ client }), { migrationsFolder: MIGRATIONS_FOLDER });
+    if (options?.applyRoles === true) {
+      await execSqlFile(client, LOCAL_GRANTS_SQL_PATH);
+    }
   } finally {
     await client.end();
   }
@@ -35,6 +47,7 @@ export async function runMigrations(
 const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isEntrypoint) {
+  const applyRolesFlag = process.argv.includes('--apply-roles');
   const env = z
     .object({
       MIGRATION_DATABASE_URL: z.url().optional(),
@@ -45,6 +58,10 @@ if (isEntrypoint) {
     process.stderr.write(`Invalid migration environment: ${z.prettifyError(env.error)}\n`);
     process.exit(1);
   }
-  await runMigrations(env.data.MIGRATION_DATABASE_URL ?? env.data.DATABASE_URL);
-  process.stdout.write('migrations applied\n');
+  await runMigrations(env.data.MIGRATION_DATABASE_URL ?? env.data.DATABASE_URL, {
+    applyRoles: applyRolesFlag,
+  });
+  process.stdout.write(
+    applyRolesFlag ? 'migrations + local roles applied\n' : 'migrations applied\n',
+  );
 }

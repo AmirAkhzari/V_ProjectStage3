@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
 import { createDb } from '../../src/platform/db/pool.js';
 import { postgresHealthCheck, redisHealthCheck } from '../../src/platform/health.js';
@@ -40,17 +41,27 @@ describe('health against real Postgres 16 and Redis 7', () => {
     await stopDeps(deps);
   });
 
-  it('GET /health is 200 with both dependencies up', async () => {
+  it('GET /health is 200 with a status-only body', async () => {
     const response = await app.inject({ method: 'GET', url: '/health' });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { status: string; checks: Record<string, { status: string }> };
-    expect(body.status).toBe('ok');
-    expect(body.checks['postgres']?.status).toBe('up');
-    expect(body.checks['redis']?.status).toBe('up');
+    expect(response.json()).toEqual({ status: 'ok' });
   });
 
   it('GET /ready is 200 when dependencies are up', async () => {
     const response = await app.inject({ method: 'GET', url: '/ready' });
     expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: 'ok' });
+  });
+
+  it('does not apply local roles unless opted in', async () => {
+    const pool = new pg.Pool({ connectionString: deps.databaseUrl });
+    try {
+      const result = await pool.query<{ rolname: string }>(
+        `SELECT rolname FROM pg_roles WHERE rolname LIKE 'vproject_%'`,
+      );
+      expect(result.rows).toEqual([]);
+    } finally {
+      await pool.end();
+    }
   });
 });

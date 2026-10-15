@@ -11,17 +11,82 @@ const postgresUrl = z
 
 const redisUrl = z.url({ protocol: /^rediss?$/ }).describe('redis://host:6379');
 
-export const configSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  HOST: z.string().min(1).default('0.0.0.0'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  DATABASE_URL: postgresUrl,
-  REDIS_URL: redisUrl,
-  HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(1000),
-  WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
-  OPENAPI_DOCS_ENABLED: booleanString,
-});
+const FORBIDDEN_PROD_LOG_LEVELS = new Set(['debug', 'trace']);
+
+function postgresRequiresTls(url: string): boolean {
+  const parsed = new URL(url);
+  const sslmode = parsed.searchParams.get('sslmode')?.toLowerCase();
+  if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') return true;
+  const ssl = parsed.searchParams.get('ssl')?.toLowerCase();
+  return ssl === 'true' || ssl === '1';
+}
+
+function redisRequiresTls(url: string): boolean {
+  return new URL(url).protocol === 'rediss:';
+}
+
+function productionEnvFlagIssues(env: NodeJS.ProcessEnv): { field: string; message: string }[] {
+  const issues: { field: string; message: string }[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined || value === '' || value === 'false') continue;
+    if (key.startsWith('DEMO_')) {
+      issues.push({ field: key, message: 'DEMO_* flags are forbidden in production' });
+    }
+    if (key.startsWith('MOCK_')) {
+      issues.push({ field: key, message: 'MOCK_* flags are forbidden in production' });
+    }
+    if (key.endsWith('_PROVIDER') && value === 'mock') {
+      issues.push({ field: key, message: 'mock providers are forbidden in production' });
+    }
+  }
+  return issues;
+}
+
+export const configSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']),
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+      .default('info'),
+    HOST: z.string().min(1).default('0.0.0.0'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    DATABASE_URL: postgresUrl,
+    REDIS_URL: redisUrl,
+    HEALTH_CHECK_TIMEOUT_MS: z.coerce.number().int().min(50).max(10_000).default(1000),
+    WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
+    OPENAPI_DOCS_ENABLED: booleanString,
+  })
+  .superRefine((value, ctx) => {
+    if (value.NODE_ENV !== 'production') return;
+    if (value.OPENAPI_DOCS_ENABLED) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OPENAPI_DOCS_ENABLED'],
+        message: 'OpenAPI docs must be disabled in production',
+      });
+    }
+    if (FORBIDDEN_PROD_LOG_LEVELS.has(value.LOG_LEVEL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LOG_LEVEL'],
+        message: 'debug/trace log levels are forbidden in production',
+      });
+    }
+    if (!postgresRequiresTls(value.DATABASE_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_URL'],
+        message: 'production DATABASE_URL must require TLS (sslmode=require|verify-ca|verify-full)',
+      });
+    }
+    if (!redisRequiresTls(value.REDIS_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_URL'],
+        message: 'production REDIS_URL must use rediss://',
+      });
+    }
+  });
 
 export type Config = z.infer<typeof configSchema>;
 
@@ -44,13 +109,16 @@ export class ConfigError extends Error {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const result = configSchema.safeParse(env);
-  if (!result.success) {
-    throw new ConfigError(
-      result.error.issues.map((issue) => ({
-        field: issue.path.join('.') || '(root)',
-        message: issue.message,
-      })),
-    );
+  const extra =
+    env['NODE_ENV'] === 'production' ? productionEnvFlagIssues(env) : ([] as ConfigIssue[]);
+  if (!result.success || extra.length > 0) {
+    const schemaIssues = result.success
+      ? []
+      : result.error.issues.map((issue) => ({
+          field: issue.path.join('.') || '(root)',
+          message: issue.message,
+        }));
+    throw new ConfigError([...schemaIssues, ...extra]);
   }
   return result.data;
 }
