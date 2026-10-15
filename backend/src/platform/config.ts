@@ -46,7 +46,6 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
 const API_FORBIDDEN_URLS = [
   'MIGRATION_DATABASE_URL',
   'DATABASE_URL_WORKER',
-  'DATABASE_URL_IDENTITY',
   'DATABASE_URL',
 ] as const;
 
@@ -127,11 +126,14 @@ export const apiConfigSchema = z
   .object({
     ...processShared,
     DATABASE_URL_APP: postgresUrl,
+    DATABASE_URL_IDENTITY: postgresUrl,
   })
   .superRefine((value, ctx) => {
     applyProductionShared(value, ctx);
-    if (value.NODE_ENV === 'production')
+    if (value.NODE_ENV === 'production') {
       requireTls(ctx, 'DATABASE_URL_APP', value.DATABASE_URL_APP);
+      requireTls(ctx, 'DATABASE_URL_IDENTITY', value.DATABASE_URL_IDENTITY);
+    }
   });
 
 export const workerConfigSchema = z

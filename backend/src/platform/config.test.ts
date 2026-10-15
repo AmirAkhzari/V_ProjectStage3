@@ -4,12 +4,15 @@ import { ConfigError, loadApiConfig, loadConfig, loadWorkerConfig } from './conf
 const validApi = {
   NODE_ENV: 'test',
   DATABASE_URL_APP: 'postgres://vproject_app:vproject@127.0.0.1:5432/vproject',
+  DATABASE_URL_IDENTITY: 'postgres://vproject_identity:vproject@127.0.0.1:5432/vproject',
   REDIS_URL: 'redis://127.0.0.1:6379',
 };
 
 const validApiProduction = {
   NODE_ENV: 'production',
   DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.example.ir:5432/vproject?sslmode=require',
+  DATABASE_URL_IDENTITY:
+    'postgres://vproject_identity:vproject@db.example.ir:5432/vproject?sslmode=require',
   REDIS_URL: 'rediss://cache.example.ir:6379',
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
@@ -33,7 +36,7 @@ describe('loadApiConfig', () => {
     expect(config.OPENAPI_DOCS_ENABLED).toBe(false);
   });
 
-  it('does not require worker, identity or migrator URLs', () => {
+  it('requires app and identity URLs, not worker or migrator', () => {
     expect(() => loadApiConfig(validApi)).not.toThrow();
     const issues = (() => {
       try {
@@ -44,6 +47,7 @@ describe('loadApiConfig', () => {
       }
     })();
     expect(issues).toContain('DATABASE_URL_APP');
+    expect(issues).toContain('DATABASE_URL_IDENTITY');
     expect(issues).toContain('REDIS_URL');
     expect(issues).not.toContain('DATABASE_URL_WORKER');
     expect(issues).not.toContain('MIGRATION_DATABASE_URL');
@@ -94,6 +98,12 @@ describe('loadApiConfig', () => {
         DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.example.ir:5432/vproject',
       }),
     ).toThrow(ConfigError);
+    expect(() =>
+      loadApiConfig({
+        ...validApiProduction,
+        DATABASE_URL_IDENTITY: 'postgres://vproject_identity:vproject@db.example.ir:5432/vproject',
+      }),
+    ).toThrow(ConfigError);
   });
 
   it('rejects Redis URLs without TLS in production', () => {
@@ -126,7 +136,7 @@ describe('loadApiConfig', () => {
     }
   });
 
-  it('forbids worker and identity URLs on the API in production', () => {
+  it('forbids worker and owner URLs on the API in production', () => {
     expect(() =>
       loadApiConfig({
         ...validApiProduction,
@@ -134,6 +144,11 @@ describe('loadApiConfig', () => {
           'postgres://vproject_worker:vproject@db.example.ir:5432/vproject?sslmode=require',
       }),
     ).toThrow(/DATABASE_URL_WORKER/);
+  });
+
+  it('requires DATABASE_URL_IDENTITY on the API', () => {
+    const config = loadApiConfig(validApiProduction);
+    expect(config.DATABASE_URL_IDENTITY).toMatch(/vproject_identity/);
   });
 });
 

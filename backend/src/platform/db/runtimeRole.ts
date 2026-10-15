@@ -14,8 +14,13 @@ export interface RuntimeDbRoleRow {
   rolbypassrls: boolean;
 }
 
+export type RuntimeDbRoleName = (typeof DB_ROLE_NAMES)[keyof typeof DB_ROLE_NAMES];
+
 /** Runtime processes must not hold owner/migrator or BYPASSRLS credentials (Architect R2-2). */
-export function inspectRuntimeDbRole(row: RuntimeDbRoleRow | undefined): void {
+export function inspectRuntimeDbRole(
+  row: RuntimeDbRoleRow | undefined,
+  expected?: RuntimeDbRoleName,
+): void {
   if (!row) {
     throw new UnsafeDbRoleError('could not resolve current database role');
   }
@@ -28,13 +33,19 @@ export function inspectRuntimeDbRole(row: RuntimeDbRoleRow | undefined): void {
   if (row.current_user === DB_ROLE_NAMES.migrator) {
     throw new UnsafeDbRoleError('runtime must not connect as the migrator');
   }
+  if (expected && row.current_user !== expected) {
+    throw new UnsafeDbRoleError(`runtime must connect as ${expected}, got ${row.current_user}`);
+  }
 }
 
-export async function assertRuntimeDbRole(pool: Pick<pg.Pool, 'query'>): Promise<void> {
+export async function assertRuntimeDbRole(
+  pool: Pick<pg.Pool, 'query'>,
+  expected: RuntimeDbRoleName,
+): Promise<void> {
   const result = await pool.query<RuntimeDbRoleRow>(
     `SELECT current_user, rolsuper, rolbypassrls
      FROM pg_roles
      WHERE rolname = current_user`,
   );
-  inspectRuntimeDbRole(result.rows[0]);
+  inspectRuntimeDbRole(result.rows[0], expected);
 }

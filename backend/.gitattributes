@@ -1,3 +1,5 @@
 # Frozen contract (DECISION_LOG §I): keep bytes exactly as committed so the sha256 check holds.
 openapi/openapi-v1.0.0.yaml -text
 openapi/openapi-v1.0.0.yaml.sha256 -text
+openapi/openapi-v1.1.0.yaml -text
+openapi/openapi-v1.1.0.yaml.sha256 -text

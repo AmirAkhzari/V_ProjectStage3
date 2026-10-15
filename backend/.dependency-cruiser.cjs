@@ -30,6 +30,16 @@ module.exports = {
       to: { path: 'src/modules/.*/(infra/mock/|infra/providers/mock\\.ts$)' },
     },
     {
+      name: 'identity-pool-isolation',
+      comment: '7-6: only identity code and the composition root may import the identity pool',
+      severity: 'error',
+      from: {
+        path: '^src/',
+        pathNot: '^src/(main\\.ts$|modules/identity/)',
+      },
+      to: { path: '^src/modules/identity/infra/db/pool\\.ts$' },
+    },
+    {
       name: 'domain-no-infra-libs',
       comment: '§9.3.6 domain/ must not depend on Fastify, Drizzle or Redis',
       severity: 'error',

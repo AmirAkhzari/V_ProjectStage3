@@ -15,6 +15,13 @@
       "when": 1792060854273,
       "tag": "0001_platform_infra",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792081191600,
+      "tag": "0002_s11b_identity_tables",
+      "breakpoints": true
     }
   ]
 }

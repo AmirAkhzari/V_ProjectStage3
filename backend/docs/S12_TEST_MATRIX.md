@@ -1,39 +1,39 @@
-# S-12 / S11b-0 P0 test matrix
+# S-12 / S11b-0 + S11b-1 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
-S-14 gate = **17 exec** + **91 exec-auth**. This slice (S11b-0) covers the **17 exec** Foundation rows only.
+Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`).  
+S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**).
 
 Status:
 
-- **green** — Foundation coverage exists (file + `it(...)`, or the AUTH-XSS-02 SCA CI step).
+- **green** — coverage exists (file + `it(...)`, or the AUTH-XSS-02 SCA CI step).
 - **partial** — a Foundation slice exists; the ID is not fully met. After this slice: **0** among the 17 exec rows.
 - **pending** — later S-11b slice (`exec-auth`) or an epic (`deferred:P2|P3`).
 - **missing** — Foundation-level gap. After this slice: **0**.
 
 Totals (**17 exec**): **green 17 / partial 0 / missing 0**.  
-**exec-auth** (91) stay pending until S11b-1..6. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
+**exec-auth** this slice: **green 2** (TENANT-01-S11B, TEN-02-S11B) / **pending 89**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
 
 ## Exec mapping (17)
 
-| ID            | P0                                              | Status | Owner    | Mapping                                                                                                                                                                                                     |
-| ------------- | ----------------------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TXN-OUT-01    | exec (harness; O10/D6 re-run at P2/P3)          | green  | platform | `tests/outbox/pg.harness.test.ts` — rollback of state/audit/outbox on fault; clean retry ⇒ one claimable row                                                                                                |
-| TENANT-01     | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-01: scopes rows to the tenant and hides the other tenant`; unset GUC ⇒ 0 rows; FORCE RLS cannot be disabled. Writes are TENANT-W-01                                   |
-| AUTH-PW-05    | exec                                            | green  | identity | `src/platform/logger.test.ts` — `redacts nested password, kyc and card fields`                                                                                                                              |
-| AUTH-JW-04    | exec                                            | green  | identity | `tests/unit/guards.test.ts` — `AUTH-JW-04` rejects `shopkeeperId` / `driverId` / `distributorId` in body and query. Real-token re-run is AUTH-JW-04-RA (exec-auth)                                          |
-| AUTH-XSS-02   | exec                                            | green  | platform | SCA: CI `AUTH-XSS-02 production dependency audit` (`pnpm audit --prod --audit-level=high`) + `tests/unit/auth-xss-audit.test.ts`                                                                            |
-| AUTH-DM-01    | exec                                            | green  | platform | `tests/unit/auth-dm-01.test.ts` — A5/B5 404 `NOT_FOUND` in production, identical to unknown. Prod-mode re-run with flag is AUTH-DM-01-RA (exec-auth)                                                        |
-| PAY-ENV-01    | exec (startup guard; mock-complete deferred:P2) | green  | platform | `src/platform/config.test.ts` — `DEMO_*` / `MOCK_*` / `*_PROVIDER=mock` rejected in production                                                                                                              |
-| TEN-01        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-01: grants vproject_app nothing on identity and leaves schemas owned by the migrator`; role flags / NOBYPASSRLS. Ownership is TEN-01-OWN                                 |
-| TEN-02        | exec                                            | green  | platform | Same evidence as TEN-02-GATE (FORCE RLS registry). Outbox SELECT is N-2, not this ID                                                                                                                        |
-| TEN-03        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-03: does not leak tenant GUCs after commit on a pooled connection`                                                                                                       |
-| TEN-04        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS`. Payment `distributor_id IS NULL` deferred:P2                                             |
-| TEN-05        | exec (role part only)                           | green  | platform | `tests/outbox/pg.harness.test.ts` — `worker role / outbox claim (infra): claims both tenants without an HTTP scope header`. `is_platform` = TEN-05-PLAT (exec-auth). Aggregate-derivation deferred:P2       |
-| TENANT-W-01   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-W-01: cross-tenant UPDATE and DELETE affect 0 rows`; `TENANT-W-01: INSERT for another tenant fails WITH CHECK`                                                        |
-| TEN-02-GATE   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-02-GATE: tenant-schema tables have FORCE RLS, a policy, and are listed in the harness` (fail-closed)                                                                     |
-| TEN-01-OWN    | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-01-OWN: vproject_app and vproject_worker own no tables`                                                                                                                  |
-| PUB-ROUTES-01 | exec                                            | green  | platform | `tests/contract/public-routes.test.ts` — `PUB-ROUTES-01: matches the contract public operations exactly`                                                                                                    |
-| ROLE-GUARD-01 | exec                                            | green  | platform | `src/platform/db/runtimeRole.test.ts` — `ROLE-GUARD-01 inspectRuntimeDbRole`; `tests/rls/harness.test.ts` — `ROLE-GUARD-01: refuses to start as a superuser or the migrator`. Identity pool added in S11b-1 |
+| ID            | P0                                              | Status | Owner    | Mapping                                                                                                                                                                                                            |
+| ------------- | ----------------------------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TXN-OUT-01    | exec (harness; O10/D6 re-run at P2/P3)          | green  | platform | `tests/outbox/pg.harness.test.ts` — rollback of state/audit/outbox on fault; clean retry ⇒ one claimable row                                                                                                       |
+| TENANT-01     | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-01: scopes rows to the tenant and hides the other tenant`; unset GUC ⇒ 0 rows; FORCE RLS cannot be disabled. Writes are TENANT-W-01                                          |
+| AUTH-PW-05    | exec                                            | green  | identity | `src/platform/logger.test.ts` — `redacts nested password, kyc and card fields`                                                                                                                                     |
+| AUTH-JW-04    | exec                                            | green  | identity | `tests/unit/guards.test.ts` — `AUTH-JW-04` rejects `shopkeeperId` / `driverId` / `distributorId` in body and query. Real-token re-run is AUTH-JW-04-RA (exec-auth)                                                 |
+| AUTH-XSS-02   | exec                                            | green  | platform | SCA: CI `AUTH-XSS-02 production dependency audit` (`pnpm audit --prod --audit-level=high`) + `tests/unit/auth-xss-audit.test.ts`                                                                                   |
+| AUTH-DM-01    | exec                                            | green  | platform | `tests/unit/auth-dm-01.test.ts` — A5/B5 404 `NOT_FOUND` in production, identical to unknown. Prod-mode re-run with flag is AUTH-DM-01-RA (exec-auth)                                                               |
+| PAY-ENV-01    | exec (startup guard; mock-complete deferred:P2) | green  | platform | `src/platform/config.test.ts` — `DEMO_*` / `MOCK_*` / `*_PROVIDER=mock` rejected in production                                                                                                                     |
+| TEN-01        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-01: grants vproject_app nothing on identity and leaves schemas owned by the migrator`; role flags / NOBYPASSRLS. Ownership is TEN-01-OWN                                        |
+| TEN-02        | exec                                            | green  | platform | Same evidence as TEN-02-GATE (FORCE RLS registry). Outbox SELECT is N-2, not this ID                                                                                                                               |
+| TEN-03        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-03: does not leak tenant GUCs after commit on a pooled connection`                                                                                                              |
+| TEN-04        | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS`. Payment `distributor_id IS NULL` deferred:P2                                                    |
+| TEN-05        | exec (role part only)                           | green  | platform | `tests/outbox/pg.harness.test.ts` — `worker role / outbox claim (infra): claims both tenants without an HTTP scope header`. `is_platform` = TEN-05-PLAT (exec-auth). Aggregate-derivation deferred:P2              |
+| TENANT-W-01   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-W-01: cross-tenant UPDATE and DELETE affect 0 rows`; `TENANT-W-01: INSERT for another tenant fails WITH CHECK`                                                               |
+| TEN-02-GATE   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-02-GATE: tenant-schema tables have FORCE RLS, a policy, and are listed in the harness` (fail-closed)                                                                            |
+| TEN-01-OWN    | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-01-OWN: vproject_app and vproject_worker own no tables`                                                                                                                         |
+| PUB-ROUTES-01 | exec                                            | green  | platform | `tests/contract/public-routes.test.ts` — `PUB-ROUTES-01: matches the contract public operations exactly` (frozen v1.1.0)                                                                                           |
+| ROLE-GUARD-01 | exec                                            | green  | platform | `src/platform/db/runtimeRole.test.ts` — `ROLE-GUARD-01 inspectRuntimeDbRole`; `tests/rls/harness.test.ts` — `ROLE-GUARD-01: refuses to start as a superuser or the migrator` and identity pool `vproject_identity` |
 
 ## Foundation extras (not among the 17 exec IDs)
 
@@ -47,19 +47,19 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 
 ## exec-auth (91) — owner and slice (R-5)
 
-Every pending exec-auth row has an owner and an S-11b slice. S11b-1 turns **TENANT-01-S11B** and **TEN-02-S11B** green (tables + harness). No endpoints in S11b-0/1.
+This slice: **green 2** / **pending 89**. No endpoints in S11b-1.
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
 | Slice     | Owner    | Status  | IDs (count)                                                                                                                                                         |
 | --------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| S11b-1    | platform | pending | TENANT-01-S11B, TEN-02-S11B (2)                                                                                                                                     |
+| S11b-1    | platform | green   | TENANT-01-S11B, TEN-02-S11B (2) — harness per-table read/write + ENABLE+FORCE RLS                                                                                   |
 | S11b-2    | identity | pending | AUTH-PW-01, AUTH-PW-02, AUTH-PW-03, AUTH-PW-04, AUTH-PW-02-OFF, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-02, AUTH-RT-03, AUTH-RT-04, AUTH-RT-05 (13) |
 | S11b-3    | identity | pending | SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                                   |
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                               |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                  |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                       |
-| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.11 (13; need v1.1.0 freeze)                                                                                                             |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; need v1.1.0 freeze)                                                                                                             |
 
 **91** = 2+13+17+36+8+2+13.
 
