@@ -14,12 +14,19 @@ import {
 } from '../helpers/containers.js';
 
 const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
-/** Schemas whose business tables must ENABLE+FORCE RLS (identity is not tenant-scoped). */
-const TENANT_SCHEMAS = DB_SCHEMAS.filter((schema) => schema !== 'identity');
+const GATE_SCHEMAS = DB_SCHEMAS;
 const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}`));
-/** Fail-closed: every non-exempt tenant-schema table must appear here. */
+/** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
+const IDENTITY_UNSCOPED = [
+  'identity.accounts',
+  'identity.refresh_tokens',
+  'identity.sessions',
+] as const;
+/** Fail-closed: every non-exempt, non-unscoped table in GATE_SCHEMAS must appear here. */
 const HARNESS_TENANT_TABLES = [
   'customers.shopkeepers',
+  'identity.driver_credentials',
+  'identity.staff_memberships',
   'platform.rls_probe',
   'tenancy.distributors',
 ] as const;
@@ -69,14 +76,18 @@ describe('RLS harness skeleton', () => {
         ('${ROW_A}', '${DIST_A}'),
         ('${ROW_B}', '${DIST_B}');
     `);
-    await seedDemoTenants({ appUrl: deps.appUrl, identityUrl: deps.identityUrl });
+    await seedDemoTenants({
+      ownerUrl: deps.ownerUrl,
+      appUrl: deps.appUrl,
+      identityUrl: deps.identityUrl,
+    });
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at) VALUES
+         ($1, 'Harness D1', 'active', now()),
+         ($2, 'Harness D2', 'active', now())`,
+      [DIST_A, DIST_B],
+    );
     await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
-      await tx.client.query(
-        `INSERT INTO tenancy.distributors (id, name, status, created_at) VALUES
-           ($1, 'Harness D1', 'active', now()),
-           ($2, 'Harness D2', 'active', now())`,
-        [DIST_A, DIST_B],
-      );
       await tx.client.query(
         `INSERT INTO customers.shopkeepers
            (id, account_id, phone, primary_distributor_id, status, created_at) VALUES
@@ -235,11 +246,16 @@ describe('RLS harness skeleton', () => {
        WHERE n.nspname = ANY($1::text[])
          AND c.relkind IN ('r', 'p')
        ORDER BY 1`,
-      [TENANT_SCHEMAS],
+      [GATE_SCHEMAS],
     );
-    const tenantTables = found.rows.filter((row) => !RLS_EXEMPT_TABLES.has(row.qualified));
+    const unscoped = new Set<string>(IDENTITY_UNSCOPED);
+    const tenantTables = found.rows.filter(
+      (row) => !RLS_EXEMPT_TABLES.has(row.qualified) && !unscoped.has(row.qualified),
+    );
     expect(tenantTables.map((row) => row.qualified)).toEqual([...HARNESS_TENANT_TABLES].sort());
-    for (const row of tenantTables) {
+    const identityUnscoped = found.rows.filter((row) => unscoped.has(row.qualified));
+    expect(identityUnscoped.map((row) => row.qualified)).toEqual([...IDENTITY_UNSCOPED].sort());
+    for (const row of [...tenantTables, ...identityUnscoped]) {
       expect(row.relrowsecurity, `${row.qualified} must ENABLE RLS`).toBe(true);
       expect(row.relforcerowsecurity, `${row.qualified} must FORCE RLS`).toBe(true);
       expect(Number(row.policies), `${row.qualified} must have ≥1 policy`).toBeGreaterThan(0);
@@ -393,23 +409,26 @@ describe('RLS harness skeleton', () => {
     expect(drivers.rows[0]?.c).toBe('4');
   });
 
-  it('TENANT-01-S11B: tenancy.distributors is tenant-scoped for read and write', async () => {
+  it('TENANT-01-S11B: tenancy.distributors is SELECT-only for the app; DA cannot write own row', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const rows = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM tenancy.distributors WHERE id IN ($1, $2) ORDER BY id`,
         [DIST_A, DIST_B],
       );
       expect(rows.rows.map((r) => r.id)).toEqual([DIST_A]);
-      const updated = await tx.client.query(
-        `UPDATE tenancy.distributors SET name = name WHERE id = $1`,
-        [DIST_B],
-      );
-      expect(updated.rowCount).toBe(0);
-      const deleted = await tx.client.query(`DELETE FROM tenancy.distributors WHERE id = $1`, [
-        DIST_B,
-      ]);
-      expect(deleted.rowCount).toBe(0);
     });
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`UPDATE tenancy.distributors SET name = 'hacked' WHERE id = $1`, [
+          DIST_A,
+        ]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    const unchanged = await ownerPool.query<{ name: string }>(
+      `SELECT name FROM tenancy.distributors WHERE id = $1`,
+      [DIST_A],
+    );
+    expect(unchanged.rows[0]?.name).toBe('Harness D1');
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
         await tx.client.query(
@@ -418,19 +437,24 @@ describe('RLS harness skeleton', () => {
           [randomUUID()],
         );
       }),
-    ).rejects.toThrow(/row-level security policy/i);
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`DELETE FROM tenancy.distributors WHERE id = $1`, [DIST_A]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
   });
 
-  it('TENANT-01-S11B: customers.shopkeepers is tenant-scoped for read and write', async () => {
+  it('TENANT-01-S11B: customers.shopkeepers is owner-shopkeeper + platform only (DL-18 deferred)', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const rows = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
         [SK_A, SK_B],
       );
-      expect(rows.rows.map((r) => r.id)).toEqual([SK_A]);
+      expect(rows.rows.map((r) => r.id)).toEqual([]);
       const updated = await tx.client.query(
         `UPDATE customers.shopkeepers SET status = status WHERE id = $1`,
-        [SK_B],
+        [SK_A],
       );
       expect(updated.rowCount).toBe(0);
     });
@@ -441,16 +465,28 @@ describe('RLS harness skeleton', () => {
       );
       expect(self.rows.map((r) => r.id)).toEqual([SK_A]);
     });
+    await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      const all = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
+        [SK_A, SK_B],
+      );
+      expect(all.rows.map((r) => r.id)).toEqual([SK_A, SK_B].sort());
+    });
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
         await tx.client.query(
           `INSERT INTO customers.shopkeepers
              (id, account_id, phone, primary_distributor_id, status, created_at)
            VALUES ($1, $2, '+989000000000', $3, 'active', now())`,
-          [randomUUID(), randomUUID(), DIST_B],
+          [randomUUID(), randomUUID(), DIST_A],
         );
       }),
     ).rejects.toThrow(/row-level security policy/i);
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(`DELETE FROM customers.shopkeepers WHERE id = $1`, [SK_A]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
   });
 
   it('TENANT-01-S11B: identity.driver_credentials is tenant-scoped for read and write', async () => {
@@ -519,5 +555,114 @@ describe('RLS harness skeleton', () => {
         );
       }),
     ).rejects.toThrow(/row-level security policy/i);
+  });
+
+  it('identity can INSERT platform.audit_log but cannot UPDATE or DELETE it', async () => {
+    const auditId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO platform.audit_log (
+         id, at, actor_type, actor_id, actor_name, distributor_id,
+         action, entity, entity_id, data, ip
+       ) VALUES ($1, now(), 'system', 'identity', 'identity', NULL,
+         'login', 'account', $2, '{}'::jsonb, NULL)`,
+      [auditId, ACC_DR_A],
+    );
+    const inserted = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.audit_log WHERE id = $1`,
+      [auditId],
+    );
+    expect(inserted.rows[0]?.c).toBe('1');
+    await expect(
+      identityPool.query(`UPDATE platform.audit_log SET action = 'tamper' WHERE id = $1`, [
+        auditId,
+      ]),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      identityPool.query(`DELETE FROM platform.audit_log WHERE id = $1`, [auditId]),
+    ).rejects.toThrow(/permission denied/i);
+    const still = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE id = $1`,
+      [auditId],
+    );
+    expect(still.rows[0]?.action).toBe('login');
+  });
+
+  it('identity can INSERT platform.outbox_events but cannot UPDATE or DELETE it', async () => {
+    const eventId = randomUUID();
+    await identityPool.query(
+      `INSERT INTO platform.outbox_events (
+         id, event_type, event_version, aggregate_type, aggregate_id, payload, occurred_at
+       ) VALUES ($1, 'identity.sessions_revoked', 1, 'session', $2, '{}'::jsonb, now())`,
+      [eventId, ACC_DR_A],
+    );
+    await expect(
+      identityPool.query(`UPDATE platform.outbox_events SET attempts = 1 WHERE id = $1`, [eventId]),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      identityPool.query(`DELETE FROM platform.outbox_events WHERE id = $1`, [eventId]),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('lookup_driver_login returns credentials without is_platform', async () => {
+    const none = await identityPool.query(
+      `SELECT count(*)::text AS c FROM identity.driver_credentials`,
+    );
+    expect(none.rows[0]?.c).toBe('0');
+    const found = await identityPool.query<{
+      account_id: string;
+      distributor_id: string;
+      password_hash: string;
+      status: string;
+    }>(`SELECT * FROM identity.lookup_driver_login($1)`, ['harness-dr-a']);
+    expect(found.rows).toEqual([
+      {
+        account_id: ACC_DR_A,
+        distributor_id: DIST_A,
+        password_hash: 'harness-hash',
+        status: 'active',
+      },
+    ]);
+  });
+
+  it('accounts.username_norm CHECK rejects mixed case', async () => {
+    await expect(
+      withTenant(identityPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO identity.accounts
+             (id, typ, username_norm, status, session_version, must_change_password, created_at)
+           VALUES ($1, 'driver', 'NotLower', 'active', 0, false, now())`,
+          [randomUUID()],
+        );
+      }),
+    ).rejects.toThrow(/username_norm|check constraint/i);
+  });
+
+  it('identity cannot DELETE sessions or refresh_tokens', async () => {
+    await expect(identityPool.query(`DELETE FROM identity.sessions`)).rejects.toThrow(
+      /permission denied/i,
+    );
+    await expect(identityPool.query(`DELETE FROM identity.refresh_tokens`)).rejects.toThrow(
+      /permission denied/i,
+    );
+  });
+
+  it('indexes family_id, account_id and sid for session revocation', async () => {
+    const idx = await ownerPool.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE schemaname = 'identity'
+         AND indexname IN (
+           'refresh_tokens_family_id_idx',
+           'refresh_tokens_sid_idx',
+           'sessions_account_id_idx',
+           'sessions_family_id_idx'
+         )
+       ORDER BY 1`,
+    );
+    expect(idx.rows.map((r) => r.indexname)).toEqual([
+      'refresh_tokens_family_id_idx',
+      'refresh_tokens_sid_idx',
+      'sessions_account_id_idx',
+      'sessions_family_id_idx',
+    ]);
   });
 });

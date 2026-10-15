@@ -1,4 +1,5 @@
 import { buildApp } from './app.js';
+import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { assertStartupAdapters } from './platform/adapters.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
@@ -12,7 +13,7 @@ const config = loadConfigOrExit();
 assertStartupAdapters(config.NODE_ENV);
 const log = pino(pinoOptions(config));
 const db = createDb(config.DATABASE_URL_APP, { log });
-const identityDb = createDb(config.DATABASE_URL_IDENTITY, { log });
+const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
 const redis = createRedis(config.REDIS_URL, log);
 
 const closeInfra = async () => {

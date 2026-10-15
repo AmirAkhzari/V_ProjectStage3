@@ -120,4 +120,37 @@ export default defineConfig(
       ],
     },
   },
+  {
+    files: ['src/**/*.ts'],
+    ignores: [
+      'src/modules/identity/**',
+      'src/main.ts',
+      'src/platform/config.ts',
+      'src/platform/config.test.ts',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Identifier[name='DATABASE_URL_IDENTITY']",
+          message:
+            'only identity code and the composition root may use DATABASE_URL_IDENTITY (AppSec 7-6)',
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/platform/db/tenant.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Literal[value='app.is_platform']",
+          message:
+            "is_platform may only be named in tenant.ts; login uses lookup_driver_login, not set_config('app.is_platform') (AppSec 7-7)",
+        },
+      ],
+    },
+  },
 );

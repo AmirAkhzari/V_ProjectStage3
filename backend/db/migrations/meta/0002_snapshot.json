@@ -420,7 +420,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "accounts_username_norm_check": {
+          "name": "accounts_username_norm_check",
+          "value": "\"identity\".\"accounts\".\"username_norm\" = lower(\"identity\".\"accounts\".\"username_norm\") AND length(\"identity\".\"accounts\".\"username_norm\") <= 64"
+        }
+      },
       "isRLSEnabled": false
     },
     "identity.driver_credentials": {
@@ -510,7 +515,38 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "refresh_tokens_family_id_idx": {
+          "name": "refresh_tokens_family_id_idx",
+          "columns": [
+            {
+              "expression": "family_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "refresh_tokens_sid_idx": {
+          "name": "refresh_tokens_sid_idx",
+          "columns": [
+            {
+              "expression": "sid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "refresh_tokens_sid_sessions_sid_fk": {
           "name": "refresh_tokens_sid_sessions_sid_fk",
@@ -592,7 +628,38 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "sessions_account_id_idx": {
+          "name": "sessions_account_id_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sessions_family_id_idx": {
+          "name": "sessions_family_id_idx",
+          "columns": [
+            {
+              "expression": "family_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "sessions_account_id_accounts_id_fk": {
           "name": "sessions_account_id_accounts_id_fk",
