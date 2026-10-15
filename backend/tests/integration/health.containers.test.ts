@@ -31,7 +31,7 @@ describe('health against real Postgres 16 and Redis 7', () => {
     };
     app = await buildApp({
       config: testConfig({
-        DATABASE_URL: deps.databaseUrl,
+        DATABASE_URL_APP: deps.databaseUrl,
         REDIS_URL: deps.redisUrl,
       }),
       healthChecks: [

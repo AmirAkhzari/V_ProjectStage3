@@ -136,6 +136,16 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     expect(count).toBe(1);
   });
 
+  it('does not let vproject_app SELECT outbox payloads', async () => {
+    await expect(appPool.query(`SELECT payload FROM platform.outbox_events`)).rejects.toThrow(
+      /permission denied/i,
+    );
+    const lag = await appPool.query<{ lagged: boolean }>(
+      `SELECT platform.outbox_lag_exceeded(30000) AS lagged`,
+    );
+    expect(lag.rows[0]?.lagged).toBe(false);
+  });
+
   it('stores idempotency keys for the same scope/subject/key', async () => {
     const store = new PgIdempotencyStore(appPool);
     await store.put('checkout', 'sub-1', 'key-1', {

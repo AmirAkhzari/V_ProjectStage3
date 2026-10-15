@@ -1,5 +1,6 @@
-import { loadConfigOrExit } from './platform/config.js';
-import { createRoleDb } from './platform/db/pool.js';
+import { assertStartupAdapters } from './platform/adapters.js';
+import { loadWorkerConfigOrExit } from './platform/config.js';
+import { createDb } from './platform/db/pool.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { PgInboxStore } from './platform/events/inboxPg.js';
 import { PgOutboxStore } from './platform/events/outboxPg.js';
@@ -15,11 +16,12 @@ import { pinoOptions } from './platform/logger.js';
 import { createRedis } from './platform/redis.js';
 import { pino } from 'pino';
 
-const config = loadConfigOrExit();
+const config = loadWorkerConfigOrExit();
+assertStartupAdapters(config.NODE_ENV);
 const log = pino(pinoOptions(config));
 
-const db = createRoleDb(config, 'worker');
-const redis = createRedis(config.REDIS_URL);
+const db = createDb(config.DATABASE_URL_WORKER, { log });
+const redis = createRedis(config.REDIS_URL, log);
 
 const inbox = new PgInboxStore(db.pool);
 const bus = new InProcessEventBus(inbox);

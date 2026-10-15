@@ -39,9 +39,16 @@ function run(command, args) {
 await run('docker', ['compose', 'up', '-d', '--wait']);
 await run('pnpm', ['exec', 'tsx', 'src/platform/db/migrate.ts', '--apply-roles']);
 
+const {
+  MIGRATION_DATABASE_URL: _migrateUrl,
+  DATABASE_URL: _ownerUrl,
+  DATABASE_URL_WORKER: _workerUrl,
+  DATABASE_URL_IDENTITY: _identityUrl,
+  ...apiEnv
+} = env;
 const api = spawn('pnpm', ['exec', 'tsx', 'watch', 'src/main.ts'], {
   cwd: backendRoot,
-  env,
+  env: apiEnv,
   stdio: 'inherit',
 });
 

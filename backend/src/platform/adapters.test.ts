@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertAdapterAllowed } from './adapters.js';
+import { assertAdapterAllowed, assertStartupAdapters, STARTUP_ADAPTERS } from './adapters.js';
 
 describe('assertAdapterAllowed', () => {
   it('allows mock adapters outside production', () => {
@@ -19,5 +19,12 @@ describe('assertAdapterAllowed', () => {
 
   it('allows non-mock adapters in production', () => {
     expect(() => assertAdapterAllowed('sms', 'kavenegar', 'production')).not.toThrow();
+  });
+
+  it('wires the composition-root map at startup', () => {
+    expect(() => assertStartupAdapters('production')).not.toThrow();
+    expect(() => assertStartupAdapters('production', { ...STARTUP_ADAPTERS, sms: 'mock' })).toThrow(
+      /sms mock adapter/,
+    );
   });
 });

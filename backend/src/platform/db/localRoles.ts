@@ -49,3 +49,16 @@ export function assertLocalRolesTarget(
   if (nodeEnv === 'test' && isPrivateOrLoopbackHost(host)) return;
   throw new LocalRolesError('local roles.sql refused: target host is not loopback/Testcontainers');
 }
+
+/** Missing DB roles may be skipped only on loopback/Testcontainers, never in production (AppSec N-3). */
+export function allowMissingRoles(
+  databaseUrl: string,
+  nodeEnv: string | undefined = process.env['NODE_ENV'],
+): boolean {
+  if (nodeEnv === 'production') return false;
+  try {
+    return isPrivateOrLoopbackHost(new URL(databaseUrl).hostname);
+  } catch {
+    return false;
+  }
+}

@@ -79,7 +79,26 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 --> statement-breakpoint
 DO $grants$
+DECLARE
+  allow_missing boolean := current_setting('vproject.allow_missing_roles', true) = 'on';
+  missing text := '';
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
+    missing := missing || 'vproject_migrator ';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_app') THEN
+    missing := missing || 'vproject_app ';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_worker') THEN
+    missing := missing || 'vproject_worker ';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
+    missing := missing || 'vproject_identity ';
+  END IF;
+  IF missing <> '' AND NOT allow_missing THEN
+    RAISE EXCEPTION 'platform infra migration requires roles % (provision them before migrate)', missing;
+  END IF;
+
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
     ALTER TABLE platform.outbox_events OWNER TO vproject_migrator;
     ALTER TABLE platform.inbox_processed OWNER TO vproject_migrator;
@@ -88,6 +107,7 @@ BEGIN
     ALTER DEFAULT PRIVILEGES FOR ROLE vproject_migrator REVOKE ALL ON TABLES FROM PUBLIC;
     ALTER DEFAULT PRIVILEGES FOR ROLE vproject_migrator REVOKE ALL ON SEQUENCES FROM PUBLIC;
     ALTER DEFAULT PRIVILEGES FOR ROLE vproject_migrator REVOKE ALL ON FUNCTIONS FROM PUBLIC;
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO vproject_migrator', current_database());
   END IF;
 
   EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC', current_database());
@@ -96,7 +116,6 @@ BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO vproject_app', current_database());
     GRANT USAGE ON SCHEMA platform TO vproject_app;
     GRANT INSERT ON TABLE platform.outbox_events, platform.inbox_processed, platform.audit_log TO vproject_app;
-    GRANT SELECT ON TABLE platform.outbox_events TO vproject_app;
     GRANT SELECT, INSERT, UPDATE ON TABLE platform.idempotency_keys TO vproject_app;
   END IF;
 
@@ -113,13 +132,43 @@ BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO vproject_identity', current_database());
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
-    EXECUTE format('GRANT CONNECT ON DATABASE %I TO vproject_migrator', current_database());
-  END IF;
-
   REVOKE ALL ON TABLE platform.outbox_events FROM PUBLIC;
   REVOKE ALL ON TABLE platform.inbox_processed FROM PUBLIC;
   REVOKE ALL ON TABLE platform.audit_log FROM PUBLIC;
   REVOKE ALL ON TABLE platform.idempotency_keys FROM PUBLIC;
 END
 $grants$;
+--> statement-breakpoint
+CREATE OR REPLACE FUNCTION platform.outbox_lag_exceeded(max_lag_ms integer)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = platform, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM platform.outbox_events
+    WHERE published_at IS NULL
+      AND dead_lettered_at IS NULL
+      AND occurred_at < now() - (max_lag_ms * interval '1 millisecond')
+  );
+$$;
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION platform.outbox_lag_exceeded(integer) FROM PUBLIC;
+--> statement-breakpoint
+DO $lagfn$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
+    ALTER FUNCTION platform.outbox_lag_exceeded(integer) OWNER TO vproject_migrator;
+  ELSIF current_setting('vproject.allow_missing_roles', true) IS DISTINCT FROM 'on' THEN
+    RAISE EXCEPTION 'vproject_migrator is required to own platform.outbox_lag_exceeded';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_app') THEN
+    GRANT EXECUTE ON FUNCTION platform.outbox_lag_exceeded(integer) TO vproject_app;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_worker') THEN
+    GRANT EXECUTE ON FUNCTION platform.outbox_lag_exceeded(integer) TO vproject_worker;
+  END IF;
+END
+$lagfn$;
+
