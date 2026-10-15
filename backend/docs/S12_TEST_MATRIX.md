@@ -1,6 +1,6 @@
 # S-12 / S11b-0 + S11b-1 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
+Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`).  
 S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**).
 
 Status:

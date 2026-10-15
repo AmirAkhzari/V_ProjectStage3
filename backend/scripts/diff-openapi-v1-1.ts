@@ -28,6 +28,30 @@ export const ALLOWED_OPERATION_IDS = new Set([
 const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']);
 const ALLOWED_INFO_KEYS = new Set(['version', 'description', 'x-freeze-status']);
 
+/** O-4 verbatim contract-wide rules that must stay in info.description. */
+export const REQUIRED_RULE_SNIPPETS = [
+  '(R1, AppSec C-3) A resource outside the caller tenant or ownership returns 404 NOT_FOUND with a body byte-identical to a genuinely missing resource',
+  '(R2, AppSec C-2) driver_inactive (403) is returned only to an already-authenticated driver request',
+  '(R3, AppSec C-4) A33 cancel: optional Idempotency-Key',
+] as const;
+
+/**
+ * Frozen 200 responses that $ref session schemas carrying accessToken / refreshToken.
+ * A5/B5 are demo login (same session as A2/B2); C11 returns a new DriverSession.
+ */
+export const TOKEN_RESPONSE_OPERATION_IDS = new Set([
+  'A2',
+  'A3',
+  'A5',
+  'B2',
+  'B3',
+  'B5',
+  'C1',
+  'C2',
+  'C11',
+]);
+const TOKEN_PROPERTY_NAMES = new Set(['accessToken', 'refreshToken']);
+
 type JsonObject = Record<string, unknown>;
 
 export interface OpenApiDoc {
@@ -96,6 +120,100 @@ function pathItemMeta(item: JsonObject): JsonObject {
   const meta = { ...item };
   for (const method of HTTP_METHODS) delete meta[method];
   return meta;
+}
+
+function collapseWs(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function checkNormativeRules(v11: OpenApiDoc): string[] {
+  const description = collapseWs(String(v11.info?.['description'] ?? ''));
+  return REQUIRED_RULE_SNIPPETS.filter((snippet) => !description.includes(snippet)).map(
+    (snippet) => `info.description missing ${snippet.slice(0, 24).trim()}… (O-4)`,
+  );
+}
+
+function isObjectSchema(schema: JsonObject): boolean {
+  const type = schema['type'];
+  if (type === 'object') return true;
+  if (Array.isArray(type) && type.includes('object')) return true;
+  return isObject(schema['properties']);
+}
+
+function objectSchemaIsClosed(schema: unknown): boolean {
+  if (!isObject(schema)) return true;
+  if (!isObjectSchema(schema)) return true;
+  if (schema['additionalProperties'] !== false) return false;
+  const properties = schema['properties'];
+  if (!isObject(properties)) return true;
+  return Object.values(properties).every((value) => objectSchemaIsClosed(value));
+}
+
+function checkNewSchemasClosed(schemas10: JsonObject, schemas11: JsonObject): string[] {
+  const errors: string[] = [];
+  for (const name of Object.keys(schemas11)) {
+    if (name in schemas10) continue;
+    if (!objectSchemaIsClosed(schemas11[name])) {
+      errors.push(`new schema ${name} must set additionalProperties: false`);
+    }
+  }
+  return errors;
+}
+
+function schemaRefName(schema: JsonObject): string | undefined {
+  const ref = schema['$ref'];
+  if (typeof ref === 'string' && ref.startsWith('#/components/schemas/')) {
+    return ref.slice('#/components/schemas/'.length);
+  }
+  return undefined;
+}
+
+function collectTokenProperties(schema: unknown, schemas: JsonObject, seen: Set<string>): string[] {
+  if (!isObject(schema)) return [];
+  const ref = schemaRefName(schema);
+  if (ref) {
+    if (seen.has(ref)) return [];
+    seen.add(ref);
+    return collectTokenProperties(schemas[ref], schemas, seen);
+  }
+  const found: string[] = [];
+  const properties = schema['properties'];
+  if (isObject(properties)) {
+    for (const [key, value] of Object.entries(properties)) {
+      if (TOKEN_PROPERTY_NAMES.has(key)) found.push(key);
+      found.push(...collectTokenProperties(value, schemas, seen));
+    }
+  }
+  return found;
+}
+
+function operationJsonSchema(op: JsonObject): unknown {
+  const responses = op['responses'];
+  if (!isObject(responses)) return undefined;
+  const ok = responses['200'];
+  if (!isObject(ok)) return undefined;
+  const content = ok['content'];
+  if (!isObject(content)) return undefined;
+  const json = content['application/json'];
+  if (!isObject(json)) return undefined;
+  return json['schema'];
+}
+
+function checkTokenPlacement(v11: OpenApiDoc, schemas11: JsonObject): string[] {
+  const errors: string[] = [];
+  for (const listed of listOperations(v11)) {
+    if (!listed.id) continue;
+    const tokens = [
+      ...new Set(collectTokenProperties(operationJsonSchema(listed.op), schemas11, new Set())),
+    ];
+    if (tokens.length === 0) continue;
+    if (!TOKEN_RESPONSE_OPERATION_IDS.has(listed.id)) {
+      errors.push(
+        `tokens (${tokens.join(', ')}) appear in ${listed.id} 200; only A2/A3/A5/B2/B3/B5/C1/C2/C11 200 may carry tokens`,
+      );
+    }
+  }
+  return errors;
 }
 
 function operationCore(op: JsonObject, stripAllowedBody: boolean): JsonObject {
@@ -214,6 +332,10 @@ export function checkOpenApiV11Scope(v10raw: unknown, v11raw: unknown): string[]
       errors.push(`schema ${name} changed (existing schemas must stay byte-equivalent)`);
     }
   }
+
+  errors.push(...checkNormativeRules(v11));
+  errors.push(...checkNewSchemasClosed(schemas10, schemas11));
+  errors.push(...checkTokenPlacement(v11, schemas11));
 
   return errors;
 }
