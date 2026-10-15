@@ -42,7 +42,9 @@ interface LockedRefreshRow {
 /**
  * Postgres refresh-token store. Writes hashes only (AUTH-RT-05). Revocation is UPDATE,
  * never DELETE (AppSec 7-1 / AUTH-RT-02). Rotate / issue / revokeFamily are one transaction
- * (AppSec 9-1): SELECT FOR UPDATE + UPDATE WHERE rotated_at IS NULL.
+ * (AppSec 9-1 / arch §7.1.1): blocking SELECT FOR UPDATE + SET LOCAL lock_timeout='2s'
+ * for unused-token waiters and grace/replay waiters alike. 55P03 → retryable
+ * lock_timeout, no state change. No pg_try_advisory_xact_lock.
  */
 export class PgRefreshTokenStore implements RefreshTokenStore {
   constructor(private readonly pool: pg.Pool) {}

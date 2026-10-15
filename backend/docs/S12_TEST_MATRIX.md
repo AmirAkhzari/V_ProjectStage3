@@ -65,21 +65,21 @@ Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in productio
 
 ### S11b-2 exec-auth mapping (13)
 
-| ID             | Status  | Mapping                                                                                                                                                                     |
-| -------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AUTH-PW-01     | green   | `src/modules/identity/infra/crypto/argon2Hasher.test.ts` — argon2id m=19456,t=2,p=1; seed `PLACEHOLDER_PASSWORD_HASH` and non-`$argon2id$` hashes never verify; hasher NFKC |
-| AUTH-PW-02     | partial | `passwordPolicy.test.ts` — NFKC, length 8–128. HTTP login/C11 still S11b-4                                                                                                  |
-| AUTH-PW-02-OFF | partial | same file + `tests/integration/s11b-2-crypto.test.ts` — offline list + SHA-256 artifact; `PASSWORD_BREACHED`; no HIBP. Not wired at API boot / login (S11b-4)               |
-| AUTH-PW-03     | partial | `passwordPolicy.test.ts` — unbiased CSPRNG ≥12 chars, 72h, `must_change_password`. Credential issuance HTTP is S11b-4                                                       |
-| AUTH-PW-04     | partial | `passwordPolicy.test.ts` — only C11 `/v1/driver/auth/password` while `must_change_password`. No request middleware yet                                                      |
-| AUTH-JW-01     | green   | `src/platform/auth/eddsa.test.ts` — EdDSA, `kid` required, 15 min `exp`, `iat` required                                                                                     |
-| AUTH-JW-02     | green   | same — alg allowlist (reject HS256 / missing kid), aud/typ/exp; `exp - iat` capped at 15 min                                                                                |
-| AUTH-JW-03     | partial | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify. Secret-manager boot wiring is S11b-3                                      |
-| AUTH-RT-01     | green   | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                                  |
-| AUTH-RT-02     | partial | store: 20 s grace once, access-only; concurrent replay is reuse (G5 blocking FOR UPDATE, lock_timeout 2s). HTTP refresh + access mint is S11b-4                             |
-| AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                                           |
-| AUTH-RT-04     | green   | same — RT bound to route-group `typ`; reuse is checked before typ                                                                                                           |
-| AUTH-RT-05     | green   | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist; 10 parallel refreshes ⇒ 1 successor (AppSec 9-1)                   |
+| ID             | Status  | Mapping                                                                                                                                                                                |
+| -------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUTH-PW-01     | green   | `src/modules/identity/infra/crypto/argon2Hasher.test.ts` — argon2id m=19456,t=2,p=1; seed `PLACEHOLDER_PASSWORD_HASH` and non-`$argon2id$` hashes never verify; hasher NFKC            |
+| AUTH-PW-02     | partial | `passwordPolicy.test.ts` — NFKC, length 8–128. HTTP login/C11 still S11b-4                                                                                                             |
+| AUTH-PW-02-OFF | partial | same file + `tests/integration/s11b-2-crypto.test.ts` — offline list + SHA-256 artifact; `PASSWORD_BREACHED`; no HIBP. Not wired at API boot / login (S11b-4)                          |
+| AUTH-PW-03     | partial | `passwordPolicy.test.ts` — unbiased CSPRNG ≥12 chars, 72h, `must_change_password`. Credential issuance HTTP is S11b-4                                                                  |
+| AUTH-PW-04     | partial | `passwordPolicy.test.ts` — only C11 `/v1/driver/auth/password` while `must_change_password`. No request middleware yet                                                                 |
+| AUTH-JW-01     | green   | `src/platform/auth/eddsa.test.ts` — EdDSA, `kid` required, 15 min `exp`, `iat` required                                                                                                |
+| AUTH-JW-02     | green   | same — alg allowlist (reject HS256 / missing kid), aud/typ/exp; `exp - iat` capped at 15 min                                                                                           |
+| AUTH-JW-03     | partial | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify. Secret-manager boot wiring is S11b-3                                                 |
+| AUTH-RT-01     | green   | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                                             |
+| AUTH-RT-02     | partial | store: 20 s grace once, access-only; concurrent replay is reuse (G5 blocking FOR UPDATE, lock_timeout 2s, 0 new RT, revoke_reason=refresh_reuse). HTTP refresh + access mint is S11b-4 |
+| AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                                                      |
+| AUTH-RT-04     | green   | same — RT bound to route-group `typ`; reuse is checked before typ                                                                                                                      |
+| AUTH-RT-05     | green   | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist; 10 parallel refreshes ⇒ 1 successor (AppSec 9-1)                              |
 
 ## deferred:P2\|P3 (DL-48 approved) — not this slice
 

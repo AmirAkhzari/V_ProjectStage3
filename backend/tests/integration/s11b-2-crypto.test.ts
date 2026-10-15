@@ -27,6 +27,27 @@ async function seedShopkeeper(pool: pg.Pool): Promise<string> {
   return accountId;
 }
 
+async function familyRefreshTokenCount(pool: pg.Pool, familyId: string): Promise<number> {
+  const found = await pool.query<{ c: string }>(
+    `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE family_id = $1`,
+    [familyId],
+  );
+  return Number(found.rows[0]?.c ?? '0');
+}
+
+async function familyRevokeReasons(pool: pg.Pool, familyId: string): Promise<Array<string | null>> {
+  const found = await pool.query<{ revoke_reason: string | null }>(
+    `SELECT revoke_reason FROM identity.sessions WHERE family_id = $1`,
+    [familyId],
+  );
+  return found.rows.map((row) => row.revoke_reason);
+}
+
+function expectFamilyRevokedForReuse(reasons: Array<string | null>): void {
+  expect(reasons.length).toBeGreaterThan(0);
+  expect(reasons.every((reason) => reason === 'refresh_reuse')).toBe(true);
+}
+
 describe('S11b-2 crypto integration', () => {
   let deps: StartedPostgresRoles;
   let identityPool: pg.Pool;
@@ -210,6 +231,7 @@ describe('S11b-2 crypto integration', () => {
         payload: expect.objectContaining({ familyId: issued.familyId, reason: 'refresh_reuse' }),
       }),
     ]);
+    expectFamilyRevokedForReuse(await familyRevokeReasons(identityPool, issued.familyId));
   });
 
   it('AUTH-RT-02-G5: ten parallel replays give exactly 1 AT, 0 RT, and revoke the family', async () => {
@@ -223,11 +245,7 @@ describe('S11b-2 crypto integration', () => {
     });
     const first = await store.rotate(issued.refreshToken, 'shopkeeper');
     expect(first.status).toBe('rotated');
-    const before = await identityPool.query<{ c: string }>(
-      `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE sid = $1`,
-      [issued.sid],
-    );
-    expect(before.rows[0]?.c).toBe('2');
+    expect(await familyRefreshTokenCount(identityPool, issued.familyId)).toBe(2);
 
     const results = await Promise.all(
       Array.from({ length: 10 }, () => store.rotate(issued.refreshToken, 'shopkeeper')),
@@ -240,16 +258,13 @@ describe('S11b-2 crypto integration', () => {
     expect(reuses.length).toBeGreaterThanOrEqual(1);
     expect(graces[0]).not.toHaveProperty('refreshToken');
 
-    const after = await identityPool.query<{ c: string }>(
-      `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE sid = $1`,
-      [issued.sid],
-    );
-    expect(after.rows[0]?.c).toBe('2');
+    expect(await familyRefreshTokenCount(identityPool, issued.familyId)).toBe(2);
     const session = await identityPool.query<{ revoked_at: Date | null }>(
       `SELECT revoked_at FROM identity.sessions WHERE sid = $1`,
       [issued.sid],
     );
     expect(session.rows[0]?.revoked_at).not.toBeNull();
+    expectFamilyRevokedForReuse(await familyRevokeReasons(identityPool, issued.familyId));
     const audits = await ownerPool.query<{ action: string }>(
       `SELECT action FROM platform.audit_log WHERE entity_id = $1 ORDER BY at`,
       [issued.familyId],
@@ -292,11 +307,49 @@ describe('S11b-2 crypto integration', () => {
       [issued.hash],
     );
     expect(tokens.rows[0]?.grace_used_at).toBeNull();
+    expect(await familyRefreshTokenCount(identityPool, issued.familyId)).toBe(2);
     const session = await identityPool.query<{ revoked_at: Date | null }>(
       `SELECT revoked_at FROM identity.sessions WHERE sid = $1`,
       [issued.sid],
     );
     expect(session.rows[0]?.revoked_at).toBeNull();
+    expect(await familyRevokeReasons(identityPool, issued.familyId)).toEqual([null]);
+    const audits = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.audit_log WHERE entity_id = $1`,
+      [issued.familyId],
+    );
+    expect(audits.rows[0]?.c).toBe('0');
+  });
+
+  it('AUTH-RT-05 / AppSec 9-1: unused-token lock_timeout is retryable and changes no state', async () => {
+    const accountId = await seedShopkeeper(identityPool);
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    const locker = await identityPool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query(`SELECT hash FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`, [
+        issued.hash,
+      ]);
+      const result = await store.rotate(issued.refreshToken, 'shopkeeper');
+      expect(result).toEqual({ status: 'rejected', reason: 'lock_timeout' });
+      await locker.query('COMMIT');
+    } finally {
+      locker.release();
+    }
+    const token = await identityPool.query<{
+      rotated_at: Date | null;
+      successor: string | null;
+    }>(`SELECT rotated_at, successor FROM identity.refresh_tokens WHERE hash = $1`, [issued.hash]);
+    expect(token.rows[0]?.rotated_at).toBeNull();
+    expect(token.rows[0]?.successor).toBeNull();
+    expect(await familyRefreshTokenCount(identityPool, issued.familyId)).toBe(1);
+    expect(await familyRevokeReasons(identityPool, issued.familyId)).toEqual([null]);
     const audits = await ownerPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM platform.audit_log WHERE entity_id = $1`,
       [issued.familyId],
@@ -323,6 +376,7 @@ describe('S11b-2 crypto integration', () => {
       status: 'rejected',
       reason: 'reuse',
     });
+    expectFamilyRevokedForReuse(await familyRevokeReasons(identityPool, afterWindow.familyId));
 
     const secondGrace = await store.issue({
       accountId: await seedShopkeeper(identityPool),
@@ -337,6 +391,7 @@ describe('S11b-2 crypto integration', () => {
       status: 'rejected',
       reason: 'reuse',
     });
+    expectFamilyRevokedForReuse(await familyRevokeReasons(identityPool, secondGrace.familyId));
 
     const used = await store.issue({
       accountId: await seedShopkeeper(identityPool),
@@ -352,6 +407,7 @@ describe('S11b-2 crypto integration', () => {
       status: 'rejected',
       reason: 'reuse',
     });
+    expectFamilyRevokedForReuse(await familyRevokeReasons(identityPool, used.familyId));
   });
 
   it('N9-3: used_at / grace_used_at / successor require rotated_at', async () => {
