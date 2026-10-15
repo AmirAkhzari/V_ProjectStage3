@@ -47,6 +47,8 @@ jobs:
         run: pnpm lint
       - name: Frozen OpenAPI checksum
         run: pnpm contract:verify
+      - name: OpenAPI v1.0.0 to v1.1.0 scope check
+        run: pnpm contract:diff-v1.1
       - name: Migration policy / empty-schema check
         run: pnpm db:drift
       - name: Drizzle kit check
