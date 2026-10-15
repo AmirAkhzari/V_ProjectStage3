@@ -1,6 +1,6 @@
 # S-12 / S11b-0 + S11b-1 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.11** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
+Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
 S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**).
 
 Status:
@@ -20,7 +20,7 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | TXN-OUT-01    | exec (harness; O10/D6 re-run at P2/P3)          | green  | platform | `tests/outbox/pg.harness.test.ts` — rollback of state/audit/outbox on fault; clean retry ⇒ one claimable row                                                                                                       |
 | TENANT-01     | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-01: scopes rows to the tenant and hides the other tenant`; unset GUC ⇒ 0 rows; FORCE RLS cannot be disabled. Writes are TENANT-W-01                                          |
 | AUTH-PW-05    | exec                                            | green  | identity | `src/platform/logger.test.ts` — `redacts nested password, kyc and card fields`                                                                                                                                     |
-| AUTH-JW-04    | exec                                            | green  | identity | `tests/unit/guards.test.ts` — `AUTH-JW-04: rejects client-supplied identity fields`. Real-token re-run is AUTH-JW-04-RA (exec-auth)                                                                                |
+| AUTH-JW-04    | exec                                            | green  | identity | `tests/unit/guards.test.ts` — `AUTH-JW-04` rejects `shopkeeperId` / `driverId` / `distributorId` in body and query. Real-token re-run is AUTH-JW-04-RA (exec-auth)                                                  |
 | AUTH-XSS-02   | exec                                            | green  | platform | SCA: CI `AUTH-XSS-02 production dependency audit` (`pnpm audit --prod --audit-level=high`) + `tests/unit/auth-xss-audit.test.ts`                                                                                   |
 | AUTH-DM-01    | exec                                            | green  | platform | `tests/unit/auth-dm-01.test.ts` — A5/B5 404 `NOT_FOUND` in production, identical to unknown. Prod-mode re-run with flag is AUTH-DM-01-RA (exec-auth)                                                               |
 | PAY-ENV-01    | exec (startup guard; mock-complete deferred:P2) | green  | platform | `src/platform/config.test.ts` — `DEMO_*` / `MOCK_*` / `*_PROVIDER=mock` rejected in production                                                                                                                     |
@@ -59,7 +59,7 @@ Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in productio
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                               |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                  |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                       |
-| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.11 (13; need v1.1.0 freeze)                                                                                                             |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; need v1.1.0 freeze)                                                                                                             |
 
 **91** = 2+13+17+36+8+2+13.
 
