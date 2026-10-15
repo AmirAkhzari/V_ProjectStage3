@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const srcRoot = join(import.meta.dirname, '../../src');
-const FORBIDDEN = /set_config\(\s*['"]app\.is_platform['"]/;
+const FORBIDDEN = /app\.is_platform/;
+const TENANT = join('platform', 'db', 'tenant.ts');
 
 function walk(dir: string, acc: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -15,9 +16,10 @@ function walk(dir: string, acc: string[] = []): string[] {
 }
 
 describe('is_platform lint (AppSec 7-7)', () => {
-  it('does not set app.is_platform via set_config in src', () => {
+  it('does not name app.is_platform outside tenant.ts', () => {
     const hits: string[] = [];
     for (const file of walk(srcRoot)) {
+      if (file.endsWith(TENANT)) continue;
       const text = readFileSync(file, 'utf8');
       if (FORBIDDEN.test(text)) hits.push(file.slice(srcRoot.length + 1));
     }
