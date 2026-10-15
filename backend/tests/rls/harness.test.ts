@@ -100,7 +100,7 @@ describe('RLS harness skeleton', () => {
     await expect(assertRuntimeDbRole(appPool)).resolves.toBeUndefined();
   });
 
-  it('refuses to start as a superuser or the migrator', async () => {
+  it('ROLE-GUARD-01: refuses to start as a superuser or the migrator', async () => {
     await expect(assertRuntimeDbRole(ownerPool)).rejects.toThrow(/superuser/);
     const migratorPool = new pg.Pool({
       connectionString: databaseUrlAs(deps.ownerUrl, 'vproject_migrator', TEST_ROLE_PASSWORD),
@@ -138,22 +138,30 @@ describe('RLS harness skeleton', () => {
     }
   });
 
-  it('TEN-01: vproject_app owns no tables', async () => {
-    const owned = await ownerPool.query<{ schemaname: string; tablename: string }>(
-      `SELECT schemaname, tablename FROM pg_tables WHERE tableowner = 'vproject_app' ORDER BY 1, 2`,
+  it('TEN-01-OWN: vproject_app and vproject_worker own no tables', async () => {
+    const owned = await ownerPool.query<{
+      schemaname: string;
+      tablename: string;
+      tableowner: string;
+    }>(
+      `SELECT schemaname, tablename, tableowner FROM pg_tables
+       WHERE tableowner IN ('vproject_app', 'vproject_worker')
+       ORDER BY 1, 2`,
     );
     expect(owned.rows).toEqual([]);
   });
 
-  it('TEN-02: tenant-schema tables have FORCE RLS and are listed in the harness', async () => {
+  it('TEN-02-GATE: tenant-schema tables have FORCE RLS, a policy, and are listed in the harness', async () => {
     const found = await ownerPool.query<{
       qualified: string;
       relrowsecurity: boolean;
       relforcerowsecurity: boolean;
+      policies: string;
     }>(
       `SELECT n.nspname || '.' || c.relname AS qualified,
               c.relrowsecurity,
-              c.relforcerowsecurity
+              c.relforcerowsecurity,
+              (SELECT count(*)::text FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = ANY($1::text[])
@@ -166,6 +174,7 @@ describe('RLS harness skeleton', () => {
     for (const row of tenantTables) {
       expect(row.relrowsecurity, `${row.qualified} must ENABLE RLS`).toBe(true);
       expect(row.relforcerowsecurity, `${row.qualified} must FORCE RLS`).toBe(true);
+      expect(Number(row.policies), `${row.qualified} must have ≥1 policy`).toBeGreaterThan(0);
     }
   });
 
@@ -231,7 +240,7 @@ describe('RLS harness skeleton', () => {
     });
   });
 
-  it('TENANT-01: cross-tenant UPDATE and DELETE affect 0 rows', async () => {
+  it('TENANT-W-01: cross-tenant UPDATE and DELETE affect 0 rows', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const updated = await tx.client.query(`UPDATE platform.rls_probe SET id = id WHERE id = $1`, [
         ROW_B,
@@ -249,7 +258,7 @@ describe('RLS harness skeleton', () => {
     expect(stillThere.rows[0]?.c).toBe('1');
   });
 
-  it('TENANT-01: INSERT for another tenant fails WITH CHECK', async () => {
+  it('TENANT-W-01: INSERT for another tenant fails WITH CHECK', async () => {
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
         await tx.client.query(

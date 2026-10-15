@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 const backendRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflowPath = join(backendRoot, '../.github/workflows/backend-ci.yml');
 
-describe('AUTH-XSS-02 production dependency audit', () => {
+describe('AUTH-XSS-02 SCA production dependency audit', () => {
   it('is wired as a CI step and finds no high/critical runtime vulns', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
     expect(workflow).toMatch(/AUTH-XSS-02/);

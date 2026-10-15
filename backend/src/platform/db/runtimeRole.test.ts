@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { inspectRuntimeDbRole, UnsafeDbRoleError } from './runtimeRole.js';
 
-describe('inspectRuntimeDbRole', () => {
+describe('ROLE-GUARD-01 inspectRuntimeDbRole', () => {
   it('allows vproject_app and vproject_worker', () => {
     expect(() =>
       inspectRuntimeDbRole({
