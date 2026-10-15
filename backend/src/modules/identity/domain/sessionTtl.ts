@@ -3,6 +3,9 @@ import type { SubjectType } from '../../../platform/auth/jwt.js';
 /** AUTH-RT-02 / Amir 9-2: one access-only replay within 20s; reuse after that revokes the family. */
 export const REFRESH_GRACE_MS = 20_000;
 
+/** AppSec G5: blocking FOR UPDATE wait; then retryable lock_timeout, no state change. */
+export const REFRESH_LOCK_TIMEOUT = '2s';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 

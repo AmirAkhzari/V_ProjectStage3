@@ -49,7 +49,7 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
   readonly tokens = new Map<string, TokenRow>();
   readonly audits: AuditEntry[] = [];
   readonly events: EventEnvelope[] = [];
-  private readonly inflight = new Set<string>();
+  private readonly queues = new Map<string, Promise<void>>();
 
   issue(input: RefreshIssueInput, clock: Clock = systemClock): Promise<RefreshIssueResult> {
     const now = clock();
@@ -92,15 +92,13 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     clock: Clock = systemClock,
   ): Promise<RefreshRotateResult> {
     const hash = hashRefreshToken(presented);
-    if (this.inflight.has(hash)) {
-      return Promise.resolve({ status: 'rejected', reason: 'conflict' });
-    }
-    this.inflight.add(hash);
-    try {
-      return Promise.resolve(this.rotateLocked(presented, expectedTyp, clock));
-    } finally {
-      this.inflight.delete(hash);
-    }
+    const previous = this.queues.get(hash) ?? Promise.resolve();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.queues.set(hash, gate);
+    return previous.then(() => this.rotateLocked(presented, expectedTyp, clock)).finally(release);
   }
 
   peek(hash: string): TokenRow | undefined {

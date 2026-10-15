@@ -34,7 +34,7 @@ describe('S11b-2 crypto integration', () => {
 
   beforeAll(async () => {
     deps = await startPostgresWithRoles();
-    identityPool = new pg.Pool({ connectionString: deps.identityUrl });
+    identityPool = new pg.Pool({ connectionString: deps.identityUrl, max: 16 });
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
   });
 
@@ -212,7 +212,7 @@ describe('S11b-2 crypto integration', () => {
     ]);
   });
 
-  it('AUTH-RT-02-G1: ten parallel grace replays yield ≤1 grace AT, 0 new RT, 1 grace audit', async () => {
+  it('AUTH-RT-02-G5: ten parallel replays give exactly 1 AT, 0 RT, and revoke the family', async () => {
     const accountId = await seedShopkeeper(identityPool);
     const store = new PgRefreshTokenStore(identityPool);
     const issued = await store.issue({
@@ -234,23 +234,74 @@ describe('S11b-2 crypto integration', () => {
     );
     const graces = results.filter((row) => row.status === 'grace');
     const minted = results.filter((row) => row.status === 'rotated');
-    expect(graces.length).toBeLessThanOrEqual(1);
+    const reuses = results.filter((row) => row.status === 'rejected' && row.reason === 'reuse');
+    expect(graces).toHaveLength(1);
     expect(minted).toHaveLength(0);
-    for (const grace of graces) {
-      expect(grace).not.toHaveProperty('refreshToken');
-    }
+    expect(reuses.length).toBeGreaterThanOrEqual(1);
+    expect(graces[0]).not.toHaveProperty('refreshToken');
 
     const after = await identityPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM identity.refresh_tokens WHERE sid = $1`,
       [issued.sid],
     );
     expect(after.rows[0]?.c).toBe('2');
-    const audits = await ownerPool.query<{ action: string }>(
-      `SELECT action FROM platform.audit_log WHERE entity_id = $1 AND action = $2`,
-      [issued.familyId, REFRESH_GRACE_AUDIT_ACTION],
+    const session = await identityPool.query<{ revoked_at: Date | null }>(
+      `SELECT revoked_at FROM identity.sessions WHERE sid = $1`,
+      [issued.sid],
     );
-    expect(audits.rows).toHaveLength(1);
-    expect(REFRESH_GRACE_AUDIT_ACTION).toBe('refresh_grace_replay');
+    expect(session.rows[0]?.revoked_at).not.toBeNull();
+    const audits = await ownerPool.query<{ action: string }>(
+      `SELECT action FROM platform.audit_log WHERE entity_id = $1 ORDER BY at`,
+      [issued.familyId],
+    );
+    expect(audits.rows.map((row) => row.action)).toEqual(
+      expect.arrayContaining([REFRESH_GRACE_AUDIT_ACTION, REFRESH_REUSE_AUDIT_ACTION]),
+    );
+    expect(audits.rows.filter((row) => row.action === REFRESH_GRACE_AUDIT_ACTION)).toHaveLength(1);
+    const outbox = await ownerPool.query<{ event_type: string }>(
+      `SELECT event_type FROM platform.outbox_events WHERE aggregate_id = $1`,
+      [issued.familyId],
+    );
+    expect(outbox.rows.some((row) => row.event_type === SESSIONS_REVOKED_EVENT)).toBe(true);
+  });
+
+  it('AUTH-RT-02: lock_timeout is retryable and changes no state', async () => {
+    const accountId = await seedShopkeeper(identityPool);
+    const store = new PgRefreshTokenStore(identityPool);
+    const issued = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'shopkeeper',
+    });
+    await store.rotate(issued.refreshToken, 'shopkeeper');
+    const locker = await identityPool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query(`SELECT hash FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`, [
+        issued.hash,
+      ]);
+      const result = await store.rotate(issued.refreshToken, 'shopkeeper');
+      expect(result).toEqual({ status: 'rejected', reason: 'lock_timeout' });
+      await locker.query('COMMIT');
+    } finally {
+      locker.release();
+    }
+    const tokens = await identityPool.query<{ grace_used_at: Date | null }>(
+      `SELECT grace_used_at FROM identity.refresh_tokens WHERE hash = $1`,
+      [issued.hash],
+    );
+    expect(tokens.rows[0]?.grace_used_at).toBeNull();
+    const session = await identityPool.query<{ revoked_at: Date | null }>(
+      `SELECT revoked_at FROM identity.sessions WHERE sid = $1`,
+      [issued.sid],
+    );
+    expect(session.rows[0]?.revoked_at).toBeNull();
+    const audits = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.audit_log WHERE entity_id = $1`,
+      [issued.familyId],
+    );
+    expect(audits.rows[0]?.c).toBe('0');
   });
 
   it('AUTH-RT-02-G1: PG negatives — after 20s, second grace, or used successor revoke', async () => {

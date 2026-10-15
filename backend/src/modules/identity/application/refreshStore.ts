@@ -10,7 +10,8 @@ export type RefreshRejectReason =
   | 'absolute_expired'
   | 'idle_expired'
   | 'reuse'
-  | 'conflict';
+  | 'conflict'
+  | 'lock_timeout';
 
 export interface RefreshIssueInput {
   accountId: string;

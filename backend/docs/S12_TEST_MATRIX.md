@@ -76,7 +76,7 @@ Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in productio
 | AUTH-JW-02     | green   | same — alg allowlist (reject HS256 / missing kid), aud/typ/exp; `exp - iat` capped at 15 min                                                                                |
 | AUTH-JW-03     | partial | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify. Secret-manager boot wiring is S11b-3                                      |
 | AUTH-RT-01     | green   | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                                  |
-| AUTH-RT-02     | partial | store: 20 s grace once, access-only, no new RT (Amir 9-2 / TEST_CATALOG v1.13 §O G1–G5). HTTP refresh + access mint is S11b-4                                               |
+| AUTH-RT-02     | partial | store: 20 s grace once, access-only; concurrent replay is reuse (G5 blocking FOR UPDATE, lock_timeout 2s). HTTP refresh + access mint is S11b-4                             |
 | AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                                           |
 | AUTH-RT-04     | green   | same — RT bound to route-group `typ`; reuse is checked before typ                                                                                                           |
 | AUTH-RT-05     | green   | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist; 10 parallel refreshes ⇒ 1 successor (AppSec 9-1)                   |

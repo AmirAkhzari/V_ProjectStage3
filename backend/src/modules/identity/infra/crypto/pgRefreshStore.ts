@@ -5,6 +5,7 @@ import { systemClock } from '../../../../platform/lib/clock.js';
 import type { SubjectType } from '../../../../platform/auth/jwt.js';
 import {
   REFRESH_GRACE_MS,
+  REFRESH_LOCK_TIMEOUT,
   isAbsoluteExpired,
   isIdleExpired,
   sessionWindows,
@@ -83,37 +84,43 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   ): Promise<RefreshRotateResult> {
     const now = clock();
     const hash = hashRefreshToken(presented);
-    return this.withTx(async (client) => {
-      const locked = await tryRefreshAdvisoryLock(client, hash);
-      if (!locked) return { status: 'rejected', reason: 'conflict' };
-
-      const found = await client.query<LockedRefreshRow>(
-        `SELECT t.hash, t.family_id, t.sid, t.rotated_at, t.successor, t.used_at, t.grace_used_at,
+    try {
+      return await this.withTx(async (client) => {
+        await client.query('SELECT set_config($1, $2, true)', [
+          'lock_timeout',
+          REFRESH_LOCK_TIMEOUT,
+        ]);
+        const found = await client.query<LockedRefreshRow>(
+          `SELECT t.hash, t.family_id, t.sid, t.rotated_at, t.successor, t.used_at, t.grace_used_at,
                 s.typ, s.created_at, s.last_used_at, s.absolute_expires_at, s.revoked_at, s.account_id
            FROM identity.refresh_tokens t
            JOIN identity.sessions s ON s.sid = t.sid
           WHERE t.hash = $1
           FOR UPDATE OF t, s`,
-        [hash],
-      );
-      const row = found.rows[0];
-      if (!row) return { status: 'rejected', reason: 'unknown' };
+          [hash],
+        );
+        const row = found.rows[0];
+        if (!row) return { status: 'rejected', reason: 'unknown' };
 
-      if (row.rotated_at !== null) {
-        return this.replayRotated(client, row, expectedTyp, now);
-      }
+        if (row.rotated_at !== null) {
+          return this.replayRotated(client, row, expectedTyp, now);
+        }
 
-      if (row.revoked_at !== null) return { status: 'rejected', reason: 'family_revoked' };
-      if (row.typ !== expectedTyp) return { status: 'rejected', reason: 'typ_mismatch' };
-      if (isAbsoluteExpired(row.typ as SubjectType, row.created_at, now)) {
-        return { status: 'rejected', reason: 'absolute_expired' };
-      }
-      if (isIdleExpired(row.typ as SubjectType, row.created_at, row.last_used_at, now)) {
-        return { status: 'rejected', reason: 'idle_expired' };
-      }
+        if (row.revoked_at !== null) return { status: 'rejected', reason: 'family_revoked' };
+        if (row.typ !== expectedTyp) return { status: 'rejected', reason: 'typ_mismatch' };
+        if (isAbsoluteExpired(row.typ as SubjectType, row.created_at, now)) {
+          return { status: 'rejected', reason: 'absolute_expired' };
+        }
+        if (isIdleExpired(row.typ as SubjectType, row.created_at, row.last_used_at, now)) {
+          return { status: 'rejected', reason: 'idle_expired' };
+        }
 
-      return this.claimRotation(client, row, now);
-    });
+        return this.claimRotation(client, row, now);
+      });
+    } catch (error) {
+      if (isPgLockTimeout(error)) return { status: 'rejected', reason: 'lock_timeout' };
+      throw error;
+    }
   }
 
   private async replayRotated(
@@ -285,15 +292,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   }
 }
 
-async function tryRefreshAdvisoryLock(client: pg.PoolClient, hash: string): Promise<boolean> {
-  const result = await client.query<{ pg_try_advisory_xact_lock: boolean }>(
-    `SELECT pg_try_advisory_xact_lock(
-       ('x' || substr($1, 1, 8))::bit(32)::int,
-       ('x' || substr($1, 9, 8))::bit(32)::int
-     )`,
-    [hash],
-  );
-  return result.rows[0]?.pg_try_advisory_xact_lock === true;
+function isPgLockTimeout(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? error.code : undefined;
+  const message = 'message' in error ? error.message : undefined;
+  return code === '55P03' || (typeof message === 'string' && /lock timeout/i.test(message));
 }
 
 async function insertAudit(
