@@ -170,16 +170,16 @@ describe('RLS harness skeleton', () => {
       `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user`,
     );
     expect(flag.rows[0]?.rolbypassrls).toBe(false);
-    await expect(assertRuntimeDbRole(appPool)).resolves.toBeUndefined();
+    await expect(assertRuntimeDbRole(appPool, 'vproject_app')).resolves.toBeUndefined();
   });
 
   it('ROLE-GUARD-01: refuses to start as a superuser or the migrator', async () => {
-    await expect(assertRuntimeDbRole(ownerPool)).rejects.toThrow(/superuser/);
+    await expect(assertRuntimeDbRole(ownerPool, 'vproject_app')).rejects.toThrow(/superuser/);
     const migratorPool = new pg.Pool({
       connectionString: databaseUrlAs(deps.ownerUrl, 'vproject_migrator', TEST_ROLE_PASSWORD),
     });
     try {
-      await expect(assertRuntimeDbRole(migratorPool)).rejects.toThrow(/migrator/);
+      await expect(assertRuntimeDbRole(migratorPool, 'vproject_app')).rejects.toThrow(/migrator/);
     } finally {
       await migratorPool.end();
     }
@@ -188,7 +188,16 @@ describe('RLS harness skeleton', () => {
   it('ROLE-GUARD-01: identity pool is vproject_identity with NOBYPASSRLS', async () => {
     const who = await identityPool.query<{ current_user: string }>(`SELECT current_user`);
     expect(who.rows[0]?.current_user).toBe('vproject_identity');
-    await expect(assertRuntimeDbRole(identityPool)).resolves.toBeUndefined();
+    await expect(assertRuntimeDbRole(identityPool, 'vproject_identity')).resolves.toBeUndefined();
+  });
+
+  it('ROLE-GUARD-01: refuses swapped app and identity pools', async () => {
+    await expect(assertRuntimeDbRole(appPool, 'vproject_identity')).rejects.toThrow(
+      /must connect as vproject_identity, got vproject_app/,
+    );
+    await expect(assertRuntimeDbRole(identityPool, 'vproject_app')).rejects.toThrow(
+      /must connect as vproject_app, got vproject_identity/,
+    );
   });
 
   it('TEN-01: grants vproject_app nothing on identity and leaves schemas owned by the migrator', async () => {
@@ -447,6 +456,10 @@ describe('RLS harness skeleton', () => {
 
   it('TENANT-01-S11B: customers.shopkeepers is owner-shopkeeper + platform only (DL-18 deferred)', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const visible = await tx.client.query<{ c: string }>(
+        `SELECT count(*)::text AS c FROM customers.shopkeepers`,
+      );
+      expect(visible.rows[0]?.c).toBe('0');
       const rows = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
         [SK_A, SK_B],
@@ -487,6 +500,19 @@ describe('RLS harness skeleton', () => {
         await tx.client.query(`DELETE FROM customers.shopkeepers WHERE id = $1`, [SK_A]);
       }),
     ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('customers.shopkeepers.account_id is UNIQUE', async () => {
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO customers.shopkeepers
+             (id, account_id, phone, primary_distributor_id, status, created_at)
+           VALUES ($1, $2, '+989000000001', $3, 'active', now())`,
+          [randomUUID(), ACC_DA_A, DIST_A],
+        );
+      }),
+    ).rejects.toThrow(/unique|duplicate/i);
   });
 
   it('TENANT-01-S11B: identity.driver_credentials is tenant-scoped for read and write', async () => {
