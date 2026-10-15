@@ -2,10 +2,12 @@
 /**
  * Non-prod seed for S11b-1: 2 distributors, 1 SA, 1 DA per distributor
  * (`drivers.manage`), 2 drivers per distributor. Password hashes are placeholders
- * until S11b-2 argon2id.
+ * until S11b-2 argon2id. Distributor rows are written via the owner/migrator URL
+ * (app has SELECT only on tenancy.distributors).
  */
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { assertLocalRolesTarget, LocalRolesError } from '../src/platform/db/localRoles.js';
 
 export class SeedError extends Error {
   constructor(message: string) {
@@ -77,6 +79,21 @@ export function assertNonProdSeed(env: NodeJS.ProcessEnv = process.env): void {
   }
 }
 
+/** Reuse local-roles host rules: loopback, or private only in test (AppSec 7-10). */
+export function assertSeedDatabaseTarget(
+  databaseUrl: string,
+  nodeEnv: string | undefined = process.env['NODE_ENV'],
+): void {
+  try {
+    assertLocalRolesTarget(databaseUrl, nodeEnv);
+  } catch (error) {
+    if (error instanceof LocalRolesError) {
+      throw new SeedError(error.message.replace('local roles.sql', 'seed script'));
+    }
+    throw error;
+  }
+}
+
 async function withPlatform(
   pool: pg.Pool,
   fn: (client: pg.PoolClient) => Promise<void>,
@@ -96,22 +113,25 @@ async function withPlatform(
 }
 
 export async function seedDemoTenants(urls: {
+  ownerUrl: string;
   appUrl: string;
   identityUrl: string;
 }): Promise<void> {
-  const appPool = new pg.Pool({ connectionString: urls.appUrl, max: 2 });
+  assertSeedDatabaseTarget(urls.ownerUrl);
+  assertSeedDatabaseTarget(urls.appUrl);
+  assertSeedDatabaseTarget(urls.identityUrl);
+
+  const ownerPool = new pg.Pool({ connectionString: urls.ownerUrl, max: 2 });
   const identityPool = new pg.Pool({ connectionString: urls.identityUrl, max: 2 });
   try {
-    await withPlatform(appPool, async (client) => {
-      for (const dist of SEED.distributors) {
-        await client.query(
-          `INSERT INTO tenancy.distributors (id, name, status, created_at)
-           VALUES ($1, $2, 'active', now())
-           ON CONFLICT (id) DO NOTHING`,
-          [dist.id, dist.name],
-        );
-      }
-    });
+    for (const dist of SEED.distributors) {
+      await ownerPool.query(
+        `INSERT INTO tenancy.distributors (id, name, status, created_at)
+         VALUES ($1, $2, 'active', now())
+         ON CONFLICT (id) DO NOTHING`,
+        [dist.id, dist.name],
+      );
+    }
 
     await withPlatform(identityPool, async (client) => {
       await client.query(
@@ -162,7 +182,7 @@ export async function seedDemoTenants(urls: {
       }
     });
   } finally {
-    await Promise.all([appPool.end(), identityPool.end()]);
+    await Promise.all([ownerPool.end(), identityPool.end()]);
   }
 }
 
@@ -171,12 +191,18 @@ const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url);
 if (isEntrypoint) {
   try {
     assertNonProdSeed();
+    const ownerUrl = process.env['MIGRATION_DATABASE_URL'];
     const appUrl = process.env['DATABASE_URL_APP'];
     const identityUrl = process.env['DATABASE_URL_IDENTITY'];
-    if (!appUrl || !identityUrl) {
-      throw new SeedError('DATABASE_URL_APP and DATABASE_URL_IDENTITY are required');
+    if (!ownerUrl || !appUrl || !identityUrl) {
+      throw new SeedError(
+        'MIGRATION_DATABASE_URL, DATABASE_URL_APP and DATABASE_URL_IDENTITY are required',
+      );
     }
-    await seedDemoTenants({ appUrl, identityUrl });
+    assertSeedDatabaseTarget(ownerUrl);
+    assertSeedDatabaseTarget(appUrl);
+    assertSeedDatabaseTarget(identityUrl);
+    await seedDemoTenants({ ownerUrl, appUrl, identityUrl });
     process.stdout.write('seed applied (2 distributors, 1 SA, 2 DA, 4 drivers)\n');
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

@@ -17,7 +17,8 @@ CREATE TABLE "identity"."accounts" (
 	"must_change_password" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone NOT NULL,
 	CONSTRAINT "accounts_phone_unique" UNIQUE("phone"),
-	CONSTRAINT "accounts_username_norm_unique" UNIQUE("username_norm")
+	CONSTRAINT "accounts_username_norm_unique" UNIQUE("username_norm"),
+	CONSTRAINT "accounts_username_norm_check" CHECK ("username_norm" = lower("username_norm") AND length("username_norm") <= 64)
 );
 --> statement-breakpoint
 CREATE TABLE "identity"."driver_credentials" (
@@ -65,6 +66,16 @@ ALTER TABLE "identity"."driver_credentials" ADD CONSTRAINT "driver_credentials_a
 ALTER TABLE "identity"."refresh_tokens" ADD CONSTRAINT "refresh_tokens_sid_sessions_sid_fk" FOREIGN KEY ("sid") REFERENCES "identity"."sessions"("sid") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "identity"."sessions" ADD CONSTRAINT "sessions_account_id_accounts_id_fk" FOREIGN KEY ("account_id") REFERENCES "identity"."accounts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "identity"."staff_memberships" ADD CONSTRAINT "staff_memberships_account_id_accounts_id_fk" FOREIGN KEY ("account_id") REFERENCES "identity"."accounts"("id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+CREATE INDEX "refresh_tokens_family_id_idx" ON "identity"."refresh_tokens" USING btree ("family_id");
+--> statement-breakpoint
+CREATE INDEX "refresh_tokens_sid_idx" ON "identity"."refresh_tokens" USING btree ("sid");
+--> statement-breakpoint
+CREATE INDEX "sessions_account_id_idx" ON "identity"."sessions" USING btree ("account_id");
+--> statement-breakpoint
+CREATE INDEX "sessions_family_id_idx" ON "identity"."sessions" USING btree ("family_id");
+--> statement-breakpoint
+COMMENT ON COLUMN identity.refresh_tokens.successor IS 'Hash of the successor refresh token; never store plaintext.';
 --> statement-breakpoint
 ALTER TABLE identity.accounts ENABLE ROW LEVEL SECURITY;
 --> statement-breakpoint
@@ -122,15 +133,21 @@ ALTER TABLE tenancy.distributors ENABLE ROW LEVEL SECURITY;
 --> statement-breakpoint
 ALTER TABLE tenancy.distributors FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
-CREATE POLICY distributors_tenant ON tenancy.distributors
+CREATE POLICY distributors_select ON tenancy.distributors
+  FOR SELECT
   USING (
     current_setting('app.is_platform', true) = 'true'
     OR id = NULLIF(current_setting('app.distributor_id', true), '')::uuid
-  )
-  WITH CHECK (
-    current_setting('app.is_platform', true) = 'true'
-    OR id = NULLIF(current_setting('app.distributor_id', true), '')::uuid
   );
+--> statement-breakpoint
+CREATE POLICY distributors_write ON tenancy.distributors
+  FOR INSERT
+  WITH CHECK (current_setting('app.is_platform', true) = 'true');
+--> statement-breakpoint
+CREATE POLICY distributors_update ON tenancy.distributors
+  FOR UPDATE
+  USING (current_setting('app.is_platform', true) = 'true')
+  WITH CHECK (current_setting('app.is_platform', true) = 'true');
 --> statement-breakpoint
 ALTER TABLE customers.shopkeepers ENABLE ROW LEVEL SECURITY;
 --> statement-breakpoint
@@ -140,13 +157,32 @@ CREATE POLICY shopkeepers_tenant ON customers.shopkeepers
   USING (
     current_setting('app.is_platform', true) = 'true'
     OR id = NULLIF(current_setting('app.shopkeeper_id', true), '')::uuid
-    OR primary_distributor_id = NULLIF(current_setting('app.distributor_id', true), '')::uuid
   )
   WITH CHECK (
     current_setting('app.is_platform', true) = 'true'
     OR id = NULLIF(current_setting('app.shopkeeper_id', true), '')::uuid
-    OR primary_distributor_id = NULLIF(current_setting('app.distributor_id', true), '')::uuid
   );
+--> statement-breakpoint
+CREATE OR REPLACE FUNCTION identity.lookup_driver_login(p_username_norm text)
+RETURNS TABLE (
+  account_id uuid,
+  distributor_id uuid,
+  password_hash text,
+  status text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = identity, pg_temp
+AS $$
+  SELECT a.id, dc.distributor_id, dc.password_hash, a.status
+  FROM identity.accounts a
+  INNER JOIN identity.driver_credentials dc ON dc.account_id = a.id
+  WHERE a.username_norm = p_username_norm
+    AND a.typ = 'driver';
+$$;
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION identity.lookup_driver_login(text) FROM PUBLIC;
 --> statement-breakpoint
 DO $grants$
 DECLARE
@@ -174,25 +210,33 @@ BEGIN
     ALTER TABLE identity.refresh_tokens OWNER TO vproject_migrator;
     ALTER TABLE tenancy.distributors OWNER TO vproject_migrator;
     ALTER TABLE customers.shopkeepers OWNER TO vproject_migrator;
+    ALTER FUNCTION identity.lookup_driver_login(text) OWNER TO vproject_migrator;
+    CREATE POLICY driver_credentials_login_lookup ON identity.driver_credentials
+      FOR SELECT TO vproject_migrator
+      USING (true);
+    CREATE POLICY accounts_login_lookup ON identity.accounts
+      FOR SELECT TO vproject_migrator
+      USING (true);
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
     GRANT USAGE ON SCHEMA identity TO vproject_identity;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+    GRANT SELECT, INSERT, UPDATE ON TABLE
       identity.accounts,
       identity.driver_credentials,
       identity.staff_memberships,
       identity.sessions,
       identity.refresh_tokens
       TO vproject_identity;
+    GRANT USAGE ON SCHEMA platform TO vproject_identity;
+    GRANT INSERT ON TABLE platform.audit_log, platform.outbox_events TO vproject_identity;
+    GRANT EXECUTE ON FUNCTION identity.lookup_driver_login(text) TO vproject_identity;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_app') THEN
     GRANT USAGE ON SCHEMA tenancy, customers TO vproject_app;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-      tenancy.distributors,
-      customers.shopkeepers
-      TO vproject_app;
+    GRANT SELECT ON TABLE tenancy.distributors TO vproject_app;
+    GRANT SELECT, INSERT, UPDATE ON TABLE customers.shopkeepers TO vproject_app;
   END IF;
 
   REVOKE ALL ON TABLE identity.accounts FROM PUBLIC;

@@ -52,7 +52,19 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | TENANT-01-S11B | green  | `tests/rls/harness.test.ts` — per-table read/write on distributors, shopkeepers, driver_credentials, staff_memberships |
 | TEN-02-S11B    | green  | `tests/rls/harness.test.ts` — `TEN-02-S11B: S-11b tables have ENABLE+FORCE RLS and a policy`                           |
 
-Still pending (later slices; **no endpoints / no v1.1.0** in S11b-1): AUTH-PW-01..04, AUTH-PW-02-OFF, AUTH-LG-01..05, AUTH-RT-01..05, AUTH-RV-01, AUTH-LO-01, AUTH-JW-01..03, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, SESS-01..07, AUTH-AV-01..05, AUTH-DI-01, TEN-404-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-DM-01-RA, AUTH-PW-05-RA, AUTH-JW-04-RA, AUTH-LG-02-PR, LIM-OTP-T-01..08, plus §N V11-* (need v1.1.0 freeze; S11b-4..6 forbidden until then).
+Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
+
+| Slice     | Owner    | Status  | IDs (count)                                                                                                                                                         |
+| --------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S11b-1    | platform | green   | TENANT-01-S11B, TEN-02-S11B (2) — harness per-table read/write + ENABLE+FORCE RLS                                                                                   |
+| S11b-2    | identity | pending | AUTH-PW-01, AUTH-PW-02, AUTH-PW-03, AUTH-PW-04, AUTH-PW-02-OFF, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-02, AUTH-RT-03, AUTH-RT-04, AUTH-RT-05 (13) |
+| S11b-3    | identity | pending | SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                                   |
+| S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                               |
+| S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                  |
+| S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                       |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.11 (13; need v1.1.0 freeze)                                                                                                             |
+
+**91** = 2+13+17+36+8+2+13.
 
 ## deferred:P2\|P3 (DL-48 approved) — not this slice
 

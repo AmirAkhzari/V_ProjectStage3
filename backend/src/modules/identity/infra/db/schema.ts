@@ -1,4 +1,5 @@
-import { boolean, integer, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { boolean, check, index, integer, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { pgSchema } from 'drizzle-orm/pg-core';
 
 /** Identity schema: `vproject_identity` only; never granted to the app (TEN-01). */
@@ -19,6 +20,10 @@ export const accounts = identitySchema.table(
   (table) => [
     unique('accounts_phone_unique').on(table.phone),
     unique('accounts_username_norm_unique').on(table.usernameNorm),
+    check(
+      'accounts_username_norm_check',
+      sql`${table.usernameNorm} = lower(${table.usernameNorm}) AND length(${table.usernameNorm}) <= 64`,
+    ),
   ],
 );
 
@@ -40,29 +45,44 @@ export const staffMemberships = identitySchema.table('staff_memberships', {
   permissions: text('permissions').array().notNull(),
 });
 
-export const sessions = identitySchema.table('sessions', {
-  sid: uuid('sid').primaryKey(),
-  accountId: uuid('account_id')
-    .notNull()
-    .references(() => accounts.id),
-  typ: text('typ').notNull(),
-  familyId: uuid('family_id').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
-  lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }).notNull(),
-  absoluteExpiresAt: timestamp('absolute_expires_at', {
-    withTimezone: true,
-    mode: 'date',
-  }).notNull(),
-  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
-  revokeReason: text('revoke_reason'),
-});
+export const sessions = identitySchema.table(
+  'sessions',
+  {
+    sid: uuid('sid').primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    typ: text('typ').notNull(),
+    familyId: uuid('family_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }).notNull(),
+    absoluteExpiresAt: timestamp('absolute_expires_at', {
+      withTimezone: true,
+      mode: 'date',
+    }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    revokeReason: text('revoke_reason'),
+  },
+  (table) => [
+    index('sessions_account_id_idx').on(table.accountId),
+    index('sessions_family_id_idx').on(table.familyId),
+  ],
+);
 
-export const refreshTokens = identitySchema.table('refresh_tokens', {
-  hash: text('hash').primaryKey(),
-  familyId: uuid('family_id').notNull(),
-  sid: uuid('sid')
-    .notNull()
-    .references(() => sessions.sid),
-  rotatedAt: timestamp('rotated_at', { withTimezone: true, mode: 'date' }),
-  successor: text('successor'),
-});
+export const refreshTokens = identitySchema.table(
+  'refresh_tokens',
+  {
+    hash: text('hash').primaryKey(),
+    familyId: uuid('family_id').notNull(),
+    sid: uuid('sid')
+      .notNull()
+      .references(() => sessions.sid),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true, mode: 'date' }),
+    /** Hash of the next refresh token in the family; never plaintext. */
+    successor: text('successor'),
+  },
+  (table) => [
+    index('refresh_tokens_family_id_idx').on(table.familyId),
+    index('refresh_tokens_sid_idx').on(table.sid),
+  ],
+);
