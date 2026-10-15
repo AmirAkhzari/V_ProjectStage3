@@ -3,6 +3,7 @@ import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { assertStartupAdapters } from './platform/adapters.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
+import { DB_ROLE_NAMES } from './platform/db/roles.js';
 import { assertRuntimeDbRole } from './platform/db/runtimeRole.js';
 import { outboxLagHealthCheck, postgresHealthCheck, redisHealthCheck } from './platform/health.js';
 import { pinoOptions } from './platform/logger.js';
@@ -22,8 +23,8 @@ const closeInfra = async () => {
 };
 
 try {
-  await assertRuntimeDbRole(db.pool);
-  await assertRuntimeDbRole(identityDb.pool);
+  await assertRuntimeDbRole(db.pool, DB_ROLE_NAMES.app);
+  await assertRuntimeDbRole(identityDb.pool, DB_ROLE_NAMES.identity);
 } catch (error) {
   log.error({ err: error }, 'api refused unsafe database role');
   await closeInfra();

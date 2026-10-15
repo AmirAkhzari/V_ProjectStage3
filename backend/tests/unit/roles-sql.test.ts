@@ -104,5 +104,6 @@ describe('0002_s11b_identity_tables.sql', () => {
     expect(sql).not.toMatch(
       /primary_distributor_id = NULLIF\(current_setting\('app\.distributor_id'/,
     );
+    expect(sql).toMatch(/shopkeepers_account_id_unique/);
   });
 });

@@ -4,7 +4,8 @@ CREATE TABLE "customers"."shopkeepers" (
 	"phone" text NOT NULL,
 	"primary_distributor_id" uuid,
 	"status" text NOT NULL,
-	"created_at" timestamp with time zone NOT NULL
+	"created_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "shopkeepers_account_id_unique" UNIQUE("account_id")
 );
 --> statement-breakpoint
 CREATE TABLE "identity"."accounts" (

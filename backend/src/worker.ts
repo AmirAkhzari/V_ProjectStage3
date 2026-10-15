@@ -1,6 +1,7 @@
 import { assertStartupAdapters } from './platform/adapters.js';
 import { loadWorkerConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
+import { DB_ROLE_NAMES } from './platform/db/roles.js';
 import { assertRuntimeDbRole } from './platform/db/runtimeRole.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { PgInboxStore } from './platform/events/inboxPg.js';
@@ -25,7 +26,7 @@ const db = createDb(config.DATABASE_URL_WORKER, { log });
 const redis = createRedis(config.REDIS_URL, log);
 
 try {
-  await assertRuntimeDbRole(db.pool);
+  await assertRuntimeDbRole(db.pool, DB_ROLE_NAMES.worker);
 } catch (error) {
   log.error({ err: error }, 'worker refused unsafe database role');
   await redis.quit().catch(() => redis.disconnect());
