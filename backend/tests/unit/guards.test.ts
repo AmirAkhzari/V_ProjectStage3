@@ -21,7 +21,7 @@ describe('route group guards', () => {
     app = undefined;
   });
 
-  it('AUTH-JW-04: deny-all verifier rejects a presented bearer token', async () => {
+  it('deny-all verifier rejects a presented bearer token', async () => {
     app = await buildApp({ config: testConfig(), healthChecks: [] });
     const response = await app.inject({
       method: 'GET',
@@ -63,7 +63,7 @@ describe('route group guards', () => {
     expect(response.json()).toMatchObject({ error: { code: 'TOKEN_TYPE_MISMATCH' } });
   });
 
-  it('rejects client-supplied identity fields', async () => {
+  it('AUTH-JW-04: rejects client-supplied identity fields', async () => {
     app = await buildApp({
       config: testConfig(),
       healthChecks: [],

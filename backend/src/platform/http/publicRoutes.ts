@@ -33,3 +33,7 @@ export const PUBLIC_ROUTES: readonly PublicRoute[] = [
 export const PUBLIC_OPERATION_IDS: ReadonlySet<string> = new Set(
   PUBLIC_ROUTES.map((r) => r.operationId),
 );
+
+export function isListedPublicRoute(method: string, path: string): boolean {
+  return PUBLIC_ROUTES.some((route) => route.method === method && route.path === path);
+}

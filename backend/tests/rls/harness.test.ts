@@ -193,7 +193,7 @@ describe('RLS harness skeleton', () => {
     expect(result.rows[0]?.c).toBe('0');
   });
 
-  it('TEN-03/TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS', async () => {
+  it('TEN-04: unset distributor GUC yields 0 rows, not an error, and cannot disable RLS', async () => {
     const client = await appPool.connect();
     try {
       const unset = await client.query<{ current_setting: string | null }>(
