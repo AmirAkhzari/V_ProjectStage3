@@ -71,8 +71,14 @@ export class MockOtpService implements OtpService {
   }
 }
 
-/** NOT a password hash. Placeholder until argon2id is authorized (DL-09, P0-E6-T4). */
+/** NOT a password hash. Forbidden in production (brief §6.6). */
 export class InsecureMockPasswordHasher implements PasswordHasher {
+  constructor(nodeEnv: string | undefined = process.env['NODE_ENV']) {
+    if (nodeEnv === 'production') {
+      throw new Error('mock password hasher is forbidden in production');
+    }
+  }
+
   hash(plain: string): Promise<string> {
     return Promise.resolve(`mock$${Buffer.from(plain).toString('base64url')}`);
   }

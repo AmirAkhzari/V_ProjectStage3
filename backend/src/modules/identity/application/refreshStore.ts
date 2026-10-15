@@ -1,0 +1,59 @@
+import type { Clock } from '../../../platform/lib/clock.js';
+import type { SubjectType } from '../../../platform/auth/jwt.js';
+
+export type RefreshRotateStatus = 'rotated' | 'grace' | 'rejected';
+
+export type RefreshRejectReason =
+  'unknown' | 'family_revoked' | 'typ_mismatch' | 'absolute_expired' | 'idle_expired' | 'reuse';
+
+export interface RefreshIssueInput {
+  accountId: string;
+  sid: string;
+  familyId: string;
+  typ: SubjectType;
+}
+
+export interface RefreshIssueResult {
+  refreshToken: string;
+  hash: string;
+  sid: string;
+  familyId: string;
+  typ: SubjectType;
+  refreshExpiresAt: Date;
+  absoluteExpiresAt: Date;
+}
+
+export interface RefreshRotateOk {
+  status: 'rotated' | 'grace';
+  refreshToken: string;
+  hash: string;
+  sid: string;
+  familyId: string;
+  typ: SubjectType;
+  refreshExpiresAt: Date;
+  absoluteExpiresAt: Date;
+}
+
+export interface RefreshRotateFail {
+  status: 'rejected';
+  reason: RefreshRejectReason;
+}
+
+export type RefreshRotateResult = RefreshRotateOk | RefreshRotateFail;
+
+export interface RefreshTokenRow {
+  hash: string;
+  familyId: string;
+  sid: string;
+  rotatedAt: Date | null;
+  successor: string | null;
+}
+
+export interface RefreshTokenStore {
+  issue(input: RefreshIssueInput, clock?: Clock): Promise<RefreshIssueResult>;
+  rotate(presented: string, expectedTyp: SubjectType, clock?: Clock): Promise<RefreshRotateResult>;
+}
+
+export function isRefreshRejected(result: RefreshRotateResult): result is RefreshRotateFail {
+  return result.status === 'rejected';
+}

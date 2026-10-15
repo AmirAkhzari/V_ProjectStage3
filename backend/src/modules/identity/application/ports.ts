@@ -1,8 +1,8 @@
 import type { SubjectType } from '../../../platform/auth/jwt.js';
 
 /**
- * Auth skeleton (P0-E6-T0). Real JWT/refresh/OTP/login is out of Foundation scope (DL-46, DL-13);
- * only these interfaces and in-memory mocks exist, and no login endpoint is registered.
+ * Auth ports. S11b-2 wires argon2id, EdDSA JWT, and the refresh-token store.
+ * Login HTTP remains S11b-4; OTP remains S11b-5. Mocks stay unwired.
  */
 export interface IssuedTokens {
   accessToken: string;

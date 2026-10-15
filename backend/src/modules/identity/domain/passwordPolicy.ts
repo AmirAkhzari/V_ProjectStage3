@@ -1,0 +1,116 @@
+import { randomBytes } from 'node:crypto';
+
+/** C11 — the only driver route allowed while `must_change_password` (AUTH-PW-04). */
+export const DRIVER_PASSWORD_CHANGE_PATH = '/v1/driver/auth/password';
+
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 128;
+export const TEMP_PASSWORD_MIN_LENGTH = 12;
+export const TEMP_PASSWORD_TTL_MS = 72 * 60 * 60 * 1000;
+
+const TEMP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+export type PasswordPolicyCode =
+  'PASSWORD_TOO_SHORT' | 'PASSWORD_TOO_LONG' | 'PASSWORD_BREACHED' | 'PASSWORD_CHANGE_REQUIRED';
+
+export class PasswordPolicyError extends Error {
+  readonly code: PasswordPolicyCode;
+
+  constructor(code: PasswordPolicyCode, message: string) {
+    super(message);
+    this.name = 'PasswordPolicyError';
+    this.code = code;
+  }
+}
+
+export function normalizePassword(plain: string): string {
+  return plain.normalize('NFKC');
+}
+
+export type PasswordCheck =
+  | { ok: true; normalized: string }
+  | { ok: false; code: Exclude<PasswordPolicyCode, 'PASSWORD_CHANGE_REQUIRED'> };
+
+export function evaluateNewPassword(
+  plain: string,
+  isBreached: (normalized: string) => boolean,
+): PasswordCheck {
+  const normalized = normalizePassword(plain);
+  if (normalized.length < PASSWORD_MIN_LENGTH) {
+    return { ok: false, code: 'PASSWORD_TOO_SHORT' };
+  }
+  if (normalized.length > PASSWORD_MAX_LENGTH) {
+    return { ok: false, code: 'PASSWORD_TOO_LONG' };
+  }
+  if (isBreached(normalized)) {
+    return { ok: false, code: 'PASSWORD_BREACHED' };
+  }
+  return { ok: true, normalized };
+}
+
+export function assertNewPassword(
+  plain: string,
+  isBreached: (normalized: string) => boolean,
+): string {
+  const result = evaluateNewPassword(plain, isBreached);
+  if (!result.ok) {
+    throw new PasswordPolicyError(result.code, result.code);
+  }
+  return result.normalized;
+}
+
+export function isDriverRouteAllowed(mustChangePassword: boolean, path: string): boolean {
+  if (!mustChangePassword) return true;
+  return path === DRIVER_PASSWORD_CHANGE_PATH;
+}
+
+export function assertDriverRouteAllowed(mustChangePassword: boolean, path: string): void {
+  if (!isDriverRouteAllowed(mustChangePassword, path)) {
+    throw new PasswordPolicyError(
+      'PASSWORD_CHANGE_REQUIRED',
+      'Only the password-change route is allowed',
+    );
+  }
+}
+
+export interface TempCredential {
+  password: string;
+  mustChangePassword: true;
+  tempExpiresAt: Date;
+}
+
+/** System-generated one-time password: ≥12 CSPRNG chars, 72h, must_change_password (AUTH-PW-03). */
+export function generateTempCredential(
+  now: Date,
+  isBreached: (normalized: string) => boolean = () => false,
+): TempCredential {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const password = randomChars(TEMP_PASSWORD_MIN_LENGTH);
+    const check = evaluateNewPassword(password, isBreached);
+    if (check.ok) {
+      return {
+        password: check.normalized,
+        mustChangePassword: true,
+        tempExpiresAt: new Date(now.getTime() + TEMP_PASSWORD_TTL_MS),
+      };
+    }
+  }
+  throw new PasswordPolicyError(
+    'PASSWORD_BREACHED',
+    'could not generate a non-breached temp password',
+  );
+}
+
+function randomChars(length: number): string {
+  const bytes = randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    const byte = bytes[i];
+    if (byte === undefined) throw new Error('CSPRNG underflow');
+    const idx = byte % TEMP_ALPHABET.length;
+    const ch = TEMP_ALPHABET[idx];
+    if (ch === undefined) throw new Error('alphabet underflow');
+    out += ch;
+  }
+  return out;
+}

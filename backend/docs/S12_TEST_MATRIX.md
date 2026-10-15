@@ -1,7 +1,7 @@
 # S-12 / S11b-0 + S11b-1 P0 test matrix
 
 Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`).  
-S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**).
+S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**). S11b-2 adds argon2id, the offline breached-password list, jose EdDSA JWT + rotation, and the refresh-token store.
 
 Status:
 
@@ -11,7 +11,7 @@ Status:
 - **missing** — Foundation-level gap. After this slice: **0**.
 
 Totals (**17 exec**): **green 17 / partial 0 / missing 0**.  
-**exec-auth** this slice: **green 2** (TENANT-01-S11B, TEN-02-S11B) / **pending 89**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
+**exec-auth** this slice: **green 15** (TENANT-01-S11B, TEN-02-S11B + S11b-2 13) / **pending 76**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
 
 ## Exec mapping (17)
 
@@ -47,14 +47,14 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 
 ## exec-auth (91) — owner and slice (R-5)
 
-This slice: **green 2** / **pending 89**. No endpoints in S11b-1.
+This slice: **green 15** / **pending 76**. No endpoints in S11b-2.
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
 | Slice     | Owner    | Status  | IDs (count)                                                                                                                                                         |
 | --------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | S11b-1    | platform | green   | TENANT-01-S11B, TEN-02-S11B (2) — harness per-table read/write + ENABLE+FORCE RLS                                                                                   |
-| S11b-2    | identity | pending | AUTH-PW-01, AUTH-PW-02, AUTH-PW-03, AUTH-PW-04, AUTH-PW-02-OFF, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-02, AUTH-RT-03, AUTH-RT-04, AUTH-RT-05 (13) |
+| S11b-2    | identity | green   | AUTH-PW-01, AUTH-PW-02, AUTH-PW-03, AUTH-PW-04, AUTH-PW-02-OFF, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-02, AUTH-RT-03, AUTH-RT-04, AUTH-RT-05 (13) |
 | S11b-3    | identity | pending | SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                                   |
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                               |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                  |
@@ -62,6 +62,24 @@ Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in productio
 | S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; need v1.1.0 freeze)                                                                                                             |
 
 **91** = 2+13+17+36+8+2+13.
+
+### S11b-2 exec-auth mapping (13)
+
+| ID             | Status | Mapping                                                                                                                                                        |
+| -------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUTH-PW-01     | green  | `src/modules/identity/infra/crypto/argon2Hasher.test.ts` — argon2id m=19456,t=2,p=1; seed `PLACEHOLDER_PASSWORD_HASH` and non-`$argon2id$` hashes never verify |
+| AUTH-PW-02     | green  | `src/modules/identity/domain/passwordPolicy.test.ts` — NFKC, length 8–128                                                                                      |
+| AUTH-PW-02-OFF | green  | same file + `tests/integration/s11b-2-crypto.test.ts` — offline list + SHA-256 artifact; `PASSWORD_BREACHED`; fetch/HIBP never called; version logged at boot  |
+| AUTH-PW-03     | green  | `passwordPolicy.test.ts` — CSPRNG ≥12 chars, 72h, `must_change_password`                                                                                       |
+| AUTH-PW-04     | green  | `passwordPolicy.test.ts` — only C11 `/v1/driver/auth/password` while `must_change_password`                                                                    |
+| AUTH-JW-01     | green  | `src/platform/auth/eddsa.test.ts` — EdDSA, `kid` required, 15 min `exp`                                                                                        |
+| AUTH-JW-02     | green  | same — alg allowlist (reject HS256 / missing kid), aud/typ/exp                                                                                                 |
+| AUTH-JW-03     | green  | same — rotate signing `kid`; previous kid verifies until retired; JWKS from keyset                                                                             |
+| AUTH-RT-01     | green  | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                     |
+| AUTH-RT-02     | green  | same — 20 s grace returns a fresh rotation; reuse after grace revokes the family (UPDATE, no DELETE)                                                           |
+| AUTH-RT-03     | green  | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                              |
+| AUTH-RT-04     | green  | same — RT bound to route-group `typ`                                                                                                                           |
+| AUTH-RT-05     | green  | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist                                                        |
 
 ## deferred:P2\|P3 (DL-48 approved) — not this slice
 
