@@ -1,0 +1,47 @@
+name: backend-ci
+
+on:
+  push:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-*.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-*.yml'
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: typecheck-lint-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: backend/.nvmrc
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint (eslint, prettier, boundaries, structure)
+        run: pnpm lint
+      - name: Frozen OpenAPI checksum
+        run: pnpm contract:verify
+      - name: Migration policy / empty-schema check
+        run: pnpm db:drift
+      - name: Test (unit + Testcontainers)
+        run: pnpm test
+      - name: Build
+        run: pnpm build
