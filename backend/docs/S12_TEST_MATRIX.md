@@ -1,6 +1,6 @@
 # S-12 / S11b-0 + S11b-1 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.11** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
+Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI `ef2a2fff…175a`).  
 S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**).
 
 Status:
@@ -45,12 +45,9 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | Idempotency / inbox | green  | `tests/outbox/pg.harness.test.ts`                                                           |
 | N-2 outbox SELECT   | green  | `tests/outbox/pg.harness.test.ts` — `N-2: does not let vproject_app SELECT outbox payloads` |
 
-## exec-auth this slice (2 green / 89 pending)
+## exec-auth (91) — owner and slice (R-5)
 
-| ID             | Status | Mapping                                                                                                                |
-| -------------- | ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| TENANT-01-S11B | green  | `tests/rls/harness.test.ts` — per-table read/write on distributors, shopkeepers, driver_credentials, staff_memberships |
-| TEN-02-S11B    | green  | `tests/rls/harness.test.ts` — `TEN-02-S11B: S-11b tables have ENABLE+FORCE RLS and a policy`                           |
+This slice: **green 2** / **pending 89**. No endpoints in S11b-1.
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
@@ -62,7 +59,7 @@ Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in productio
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                               |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                  |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                       |
-| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.11 (13; need v1.1.0 freeze)                                                                                                             |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; need v1.1.0 freeze)                                                                                                             |
 
 **91** = 2+13+17+36+8+2+13.
 

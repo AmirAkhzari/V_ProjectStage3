@@ -4,6 +4,47 @@ import boundaries from 'eslint-plugin-boundaries';
 import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
+const IDENTITY_URL_MESSAGE =
+  'only identity code and the composition root may use DATABASE_URL_IDENTITY (AppSec 7-6)';
+const IS_PLATFORM_MESSAGE =
+  'is_platform may only be named in tenant.ts; login uses lookup_driver_login, not set_config / SET LOCAL app.is_platform (AppSec 7-7)';
+
+/** Identifier + env member + quoted env key (process.env['DATABASE_URL_IDENTITY']). */
+const identityUrlSelectors = [
+  {
+    selector: "Identifier[name='DATABASE_URL_IDENTITY']",
+    message: IDENTITY_URL_MESSAGE,
+  },
+  {
+    selector: "Literal[value='DATABASE_URL_IDENTITY']",
+    message: IDENTITY_URL_MESSAGE,
+  },
+  {
+    selector:
+      "MemberExpression[computed=true][property.type='Literal'][property.value='DATABASE_URL_IDENTITY']",
+    message: IDENTITY_URL_MESSAGE,
+  },
+];
+
+/** Quotes, SET LOCAL, and template strings — not only set_config('app.is_platform'). */
+const isPlatformSelectors = [
+  {
+    selector: 'Literal[value=/app\\.is_platform/]',
+    message: IS_PLATFORM_MESSAGE,
+  },
+  {
+    selector: 'TemplateElement[value.raw=/app\\.is_platform/]',
+    message: IS_PLATFORM_MESSAGE,
+  },
+];
+
+const identityUrlExempt = [
+  'src/modules/identity/**',
+  'src/main.ts',
+  'src/platform/config.ts',
+  'src/platform/config.test.ts',
+];
+
 export default defineConfig(
   {
     ignores: [
@@ -122,35 +163,26 @@ export default defineConfig(
   },
   {
     files: ['src/**/*.ts'],
-    ignores: [
-      'src/modules/identity/**',
+    ignores: [...identityUrlExempt, 'src/platform/db/tenant.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...identityUrlSelectors, ...isPlatformSelectors],
+    },
+  },
+  {
+    files: ['src/platform/db/tenant.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...identityUrlSelectors],
+    },
+  },
+  {
+    files: [
+      'src/modules/identity/**/*.ts',
       'src/main.ts',
       'src/platform/config.ts',
       'src/platform/config.test.ts',
     ],
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "Identifier[name='DATABASE_URL_IDENTITY']",
-          message:
-            'only identity code and the composition root may use DATABASE_URL_IDENTITY (AppSec 7-6)',
-        },
-      ],
-    },
-  },
-  {
-    files: ['src/**/*.ts'],
-    ignores: ['src/platform/db/tenant.ts'],
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "Literal[value='app.is_platform']",
-          message:
-            "is_platform may only be named in tenant.ts; login uses lookup_driver_login, not set_config('app.is_platform') (AppSec 7-7)",
-        },
-      ],
+      'no-restricted-syntax': ['error', ...isPlatformSelectors],
     },
   },
 );
