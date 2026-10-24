@@ -19,6 +19,10 @@ const SENSITIVE_KEYS = new Set([
   'cookie',
   'x-api-key',
   'x-scope-distributor',
+  'jwks',
+  'jwt_eddsa_jwks',
+  'privatekey',
+  'private_key',
 ]);
 
 const HEADER_REDACT_PATHS = [
@@ -43,6 +47,10 @@ export const REDACT_PATHS = [
   '*.iban',
   '*.card_hash',
   '*.cardHash',
+  '*.jwks',
+  '*.JWT_EDDSA_JWKS',
+  '*.privateKey',
+  '*.private_key',
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

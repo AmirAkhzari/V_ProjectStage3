@@ -31,4 +31,17 @@ describe('redactDeep', () => {
     expect(headers?.['authorization']).toBe('[REDACTED]');
     expect(headers?.['x-scope-distributor']).toBe('[REDACTED]');
   });
+
+  it('redacts JWKS and JWT private-key material', () => {
+    const redacted = redactDeep({
+      JWT_EDDSA_JWKS: '{"keys":[{"d":"secret"}]}',
+      jwks: { keys: [{ kid: 'k1', d: 'secret' }] },
+      privateKey: '-----BEGIN PRIVATE KEY-----',
+      private_key: 'raw',
+    }) as Record<string, unknown>;
+    expect(redacted['JWT_EDDSA_JWKS']).toBe('[REDACTED]');
+    expect(redacted['jwks']).toBe('[REDACTED]');
+    expect(redacted['privateKey']).toBe('[REDACTED]');
+    expect(redacted['private_key']).toBe('[REDACTED]');
+  });
 });

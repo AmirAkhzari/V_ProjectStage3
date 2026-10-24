@@ -30,4 +30,8 @@ describe('mock auth ports', () => {
     expect(await hasher.verify(hash, 'secret')).toBe(true);
     expect(await hasher.verify(hash, 'other')).toBe(false);
   });
+
+  it('refuses to construct in production', () => {
+    expect(() => new InsecureMockPasswordHasher('production')).toThrow(/forbidden in production/);
+  });
 });
