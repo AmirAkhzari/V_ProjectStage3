@@ -1,0 +1,3 @@
+ALTER TABLE "identity"."refresh_tokens" ADD CONSTRAINT "refresh_tokens_used_at_rotated_chk" CHECK ("identity"."refresh_tokens"."used_at" IS NULL OR "identity"."refresh_tokens"."rotated_at" IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "identity"."refresh_tokens" ADD CONSTRAINT "refresh_tokens_grace_used_at_rotated_chk" CHECK ("identity"."refresh_tokens"."grace_used_at" IS NULL OR "identity"."refresh_tokens"."rotated_at" IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "identity"."refresh_tokens" ADD CONSTRAINT "refresh_tokens_successor_rotated_chk" CHECK ("identity"."refresh_tokens"."successor" IS NULL OR "identity"."refresh_tokens"."rotated_at" IS NOT NULL);
