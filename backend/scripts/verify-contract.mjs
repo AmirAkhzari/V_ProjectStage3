@@ -8,12 +8,15 @@ import { fileURLToPath } from 'node:url';
 export const PINNED_V1_0_0 = 'ef2a2fffe53b23b026b908924810f954d2b7010aa11b62cfdf79c9fb62a6175a';
 /** Pinned in DECISION_LOG §I FREEZE v1.1.0 (Amir 2026-10-15). */
 export const PINNED_V1_1_0 = 'a62e4465f24e3dd18e9200472966d130f40bad196e21c8bee024d8948cdbd0b1';
+/** Pinned in DECISION_LOG §I FREEZE v1.2.0 (Amir 2026-10-16). */
+export const PINNED_V1_2_0 = 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e054601';
 
 const openapiDir = join(dirname(fileURLToPath(import.meta.url)), '../openapi');
 
 const ARTIFACTS = [
   { file: 'openapi-v1.0.0.yaml', pin: PINNED_V1_0_0 },
   { file: 'openapi-v1.1.0.yaml', pin: PINNED_V1_1_0 },
+  { file: 'openapi-v1.2.0.yaml', pin: PINNED_V1_2_0 },
 ];
 
 export async function verifyFrozenArtifact(file, pin, dir = openapiDir) {

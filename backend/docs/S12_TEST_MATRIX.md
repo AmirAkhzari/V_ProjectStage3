@@ -1,6 +1,6 @@
 # S-12 / S11b-0 + S11b-1 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`).  
+Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`, v1.2.0 `e3dc40d5…4601`).  
 S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**). S11b-2 adds argon2id, the offline breached-password list, jose EdDSA JWT + rotation, and the refresh-token store.
 
 Status:
@@ -32,7 +32,7 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | TENANT-W-01   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TENANT-W-01: cross-tenant UPDATE and DELETE affect 0 rows`; `TENANT-W-01: INSERT for another tenant fails WITH CHECK`                                                               |
 | TEN-02-GATE   | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-02-GATE: tenant-schema tables have FORCE RLS, a policy, and are listed in the harness` (fail-closed)                                                                            |
 | TEN-01-OWN    | exec                                            | green  | platform | `tests/rls/harness.test.ts` — `TEN-01-OWN: vproject_app and vproject_worker own no tables`                                                                                                                         |
-| PUB-ROUTES-01 | exec                                            | green  | platform | `tests/contract/public-routes.test.ts` — `PUB-ROUTES-01: matches the contract public operations exactly` (frozen v1.1.0)                                                                                           |
+| PUB-ROUTES-01 | exec                                            | green  | platform | `tests/contract/public-routes.test.ts` — `PUB-ROUTES-01: matches the contract public operations exactly` (frozen v1.2.0)                                                                                           |
 | ROLE-GUARD-01 | exec                                            | green  | platform | `src/platform/db/runtimeRole.test.ts` — `ROLE-GUARD-01 inspectRuntimeDbRole`; `tests/rls/harness.test.ts` — `ROLE-GUARD-01: refuses to start as a superuser or the migrator` and identity pool `vproject_identity` |
 
 ## Foundation extras (not among the 17 exec IDs)
@@ -61,7 +61,7 @@ AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                                              |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                                 |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                                      |
-| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; need v1.1.0 freeze)                                                                                                                            |
+| S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; contract frozen at v1.2.0)                                                                                                                     |
 
 **91** = 2+13+17+36+8+2+13.
 

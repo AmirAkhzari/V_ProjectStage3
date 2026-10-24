@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { PLATFORM_ERROR_CODES } from '../../src/platform/http/errors.js';
 
-const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/openapi-v1.1.0.yaml');
+const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/openapi-v1.2.0.yaml');
 
 describe('frozen ErrorCode catalogue', () => {
   it('contains every platform-emitted code', () => {

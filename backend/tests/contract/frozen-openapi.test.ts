@@ -15,6 +15,10 @@ const ARTIFACTS = [
     file: 'openapi-v1.1.0.yaml',
     pin: 'a62e4465f24e3dd18e9200472966d130f40bad196e21c8bee024d8948cdbd0b1',
   },
+  {
+    file: 'openapi-v1.2.0.yaml',
+    pin: 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e054601',
+  },
 ] as const;
 
 describe('frozen OpenAPI artifacts', () => {
