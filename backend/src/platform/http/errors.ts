@@ -14,6 +14,7 @@ export const PLATFORM_ERROR_CODES = [
   'FORBIDDEN',
   'NOT_FOUND',
   'RATE_LIMITED',
+  'too_many_attempts',
   'invalid_credentials',
   'driver_inactive',
   'PASSWORD_CHANGE_REQUIRED',

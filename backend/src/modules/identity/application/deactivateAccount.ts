@@ -10,7 +10,7 @@ export async function deactivateAccount(
   pool: pg.Pool,
   authority: SessionAuthority,
   accountId: string,
-  log?: DrainLog,
+  log: DrainLog,
 ): Promise<{ sids: string[] }> {
   const revoked = await deactivateAccountAtomic(pool, { accountId });
   if (revoked.sids.length > 0) {

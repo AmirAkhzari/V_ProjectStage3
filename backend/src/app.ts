@@ -42,11 +42,13 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(options: BuildAppOptions) {
+  const hops = options.config.TRUST_PROXY_HOPS;
   const app = Fastify({
     logger: pinoOptions(options.config),
     genReqId: generateRequestId,
     // Do not let Fastify copy x-request-id before validation (AppSec L-3).
     requestIdHeader: false,
+    trustProxy: hops > 0 ? (_address: string, hop: number) => hop < hops : false,
   });
 
   app.setValidatorCompiler(validatorCompiler);

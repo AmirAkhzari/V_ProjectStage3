@@ -39,6 +39,8 @@ describe('loadApiConfig', () => {
     expect(config.SESSION_TTL_STAFF_ABSOLUTE_DAYS).toBe(7);
     expect(config.SESSION_TTL_STAFF_IDLE_HOURS).toBe(12);
     expect(config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS).toBe(10);
+    expect(config.TRUST_PROXY_HOPS).toBe(0);
+    expect(loadApiConfig({ ...validApi, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
   });
 
   it('11-13: rejects session TTL values above the policy caps', () => {

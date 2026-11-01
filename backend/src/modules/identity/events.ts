@@ -18,8 +18,7 @@ export type SessionRevokeReason =
   | 'password_reset'
   | 'password_change'
   | 'logout_all'
-  | 'session_limit'
-  | 'lockout';
+  | 'session_limit';
 
 export interface SessionsRevokedPayload {
   familyId: string;

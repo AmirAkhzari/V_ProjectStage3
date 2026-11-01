@@ -2,7 +2,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
 import { loginDriver, refreshDriver, type DriverAuthRuntime } from '../application/driverAuth.js';
-import { otpNotImplemented } from './otpStub.js';
 
 const driverUser = z
   .object({
@@ -40,7 +39,7 @@ const driverRefreshSession = z
     message: 'refreshToken and refreshExpiresAt are paired',
   });
 
-const loginBody = z.object({ username: z.string(), password: z.string().max(128) }).strict();
+const loginBody = z.object({ username: z.string(), password: z.string() }).strict();
 const refreshBody = z.object({ refreshToken: z.string().min(43).max(512) }).strict();
 
 function runtimeOf(app: { driverAuth?: DriverAuthRuntime }): DriverAuthRuntime {
@@ -71,5 +70,4 @@ export const driverRoutes: FastifyPluginAsync = async (app) => {
       return driverRefreshSession.parse(await refreshDriver(runtimeOf(app), body.refreshToken));
     },
   );
-  void otpNotImplemented;
 };

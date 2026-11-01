@@ -68,6 +68,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
     jwt = new EddsaAccessTokenService({ iss: 'vproject', activeKid: 'k1', keys: [key] });
     store = new PgRefreshTokenStore(identityPool, {
       onSidsRevoked: async (sids) => authority.deny(sids),
+      log: { error() {} },
     });
     api = createIdentityApi(identityPool, authority, redis);
     app = await buildApp({
@@ -681,7 +682,9 @@ describe('S11b-3 session SoT + auth plugin', () => {
     await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
     const pending = await listOpenPendingDenies(identityPool);
     expect(pending).toContain(sid);
-    await drainPendingDenies(identityPool, (sids) => liveAuthority.deny(sids));
+    await drainPendingDenies(identityPool, (sids) => liveAuthority.deny(sids), {
+      error() {},
+    });
     const isolated = await buildApp({
       config: testConfig(),
       verifier: jwt,

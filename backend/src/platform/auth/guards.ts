@@ -16,6 +16,17 @@ declare module 'fastify' {
   }
 }
 
+/** 11-10 / R12-12: typ is bound to the route group. Shared by the guard and C2. */
+export function assertRouteGroupTyp(actual: string, expected: string): void {
+  if (actual !== expected) {
+    throw new AppError('TOKEN_TYPE_MISMATCH', 401, 'Token type not accepted on this route group');
+  }
+}
+
+export function tokenTypeMismatch(): AppError {
+  return new AppError('TOKEN_TYPE_MISMATCH', 401, 'Token type not accepted on this route group');
+}
+
 function bearerToken(header: string | undefined): string | undefined {
   if (!header) return undefined;
   const [scheme, token] = header.split(' ');
@@ -44,9 +55,7 @@ export function subjectGuard(
     } catch {
       throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
     }
-    if (claims.typ !== expected) {
-      throw new AppError('TOKEN_TYPE_MISMATCH', 401, 'Token type not accepted on this route group');
-    }
+    assertRouteGroupTyp(claims.typ, expected);
 
     const fresh = options.fresh === true || request.routeOptions.config.sensitive === true;
     const decision = await options.sessionAuthority.check(

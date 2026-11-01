@@ -61,7 +61,6 @@ const app = await buildApp({
   assertIssuance: () => assertRedisForAuthIssuance(redis),
   driverAuth: {
     identityPool: identityDb.pool,
-    appPool: db.pool,
     redis,
     jwt: verifier,
     authority: sessionAuthority,

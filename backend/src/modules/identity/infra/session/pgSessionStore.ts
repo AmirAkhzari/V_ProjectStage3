@@ -266,6 +266,36 @@ export interface DrainLog {
   error(bindings: Record<string, unknown>, message: string): void;
 }
 
+export const silentDrainLog: DrainLog = {
+  error() {},
+};
+
+/** R12-10: revoke one session with no session_version bump. */
+export async function revokeSessionsBySid(
+  pool: pg.Pool,
+  input: { sids: readonly string[]; reason: SessionRevokeReason; now?: Date },
+): Promise<string[]> {
+  if (input.sids.length === 0) return [];
+  const { value } = await withRetryableTx(pool, async (client) => {
+    await applyLockTimeout(client);
+    await lockSessionsThenTokensThenAccount(client, { kind: 'sids', sids: input.sids });
+    const now = input.now ?? new Date();
+    await enqueuePendingDenies(client, input.sids, now);
+    await client.query(
+      `UPDATE identity.sessions SET revoked_at = $2, revoke_reason = $3
+        WHERE sid = ANY($1::uuid[]) AND revoked_at IS NULL`,
+      [input.sids, now, input.reason],
+    );
+    await client.query(
+      `UPDATE identity.refresh_tokens SET rotated_at = COALESCE(rotated_at, $2), used_at = COALESCE(used_at, $2)
+        WHERE sid = ANY($1::uuid[])`,
+      [input.sids, now],
+    );
+    return [...input.sids];
+  });
+  return value;
+}
+
 function publicError(error: unknown): { name: string; code?: string } {
   const name = error instanceof Error ? error.name : 'Error';
   const code =
@@ -279,7 +309,7 @@ function publicError(error: unknown): { name: string; code?: string } {
 export async function drainPendingDenies(
   pool: pg.Pool,
   deny: (sids: readonly string[]) => Promise<void>,
-  log?: DrainLog,
+  log: DrainLog,
 ): Promise<void> {
   try {
     const sids = await listOpenPendingDenies(pool);
@@ -291,11 +321,11 @@ export async function drainPendingDenies(
       try {
         await markPendingDenyAttempt(pool, sids, error);
       } catch (markError) {
-        log?.error({ err: publicError(markError) }, 'pending deny mark failed');
+        log.error({ err: publicError(markError) }, 'pending deny mark failed');
       }
     }
   } catch (error) {
-    log?.error({ err: publicError(error) }, 'pending deny drain failed');
+    log.error({ err: publicError(error) }, 'pending deny drain failed');
   }
 }
 

@@ -88,6 +88,8 @@ const processShared = {
   SESSION_TTL_STAFF_IDLE_HOURS: z.coerce.number().int().min(1).max(12).default(12),
   /** Driver 10h absolute: DL-13 / 2026-10-14 (Amir re-confirmed 2026-11-01). Config may only shorten. */
   SESSION_TTL_DRIVER_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(10).default(10),
+  /** R12-2 / N1: trust only this many configured LB hops. 0 = do not trust X-Forwarded-For. */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 };
 
 function applyProductionShared(

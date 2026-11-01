@@ -11,7 +11,17 @@ export const TEMP_PASSWORD_TTL_MS = 72 * 60 * 60 * 1000;
 const TEMP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
 export type PasswordPolicyCode =
-  'PASSWORD_TOO_SHORT' | 'PASSWORD_TOO_LONG' | 'PASSWORD_BREACHED' | 'PASSWORD_CHANGE_REQUIRED';
+  | 'PASSWORD_TOO_SHORT'
+  | 'PASSWORD_TOO_LONG'
+  | 'PASSWORD_BREACHED'
+  | 'PASSWORD_CHANGE_REQUIRED'
+  | 'PASSWORD_CONTAINS_IDENTITY'
+  | 'USERNAME_TAKEN';
+
+export interface PasswordIdentity {
+  username?: string;
+  distributorName?: string;
+}
 
 export class PasswordPolicyError extends Error {
   readonly code: PasswordPolicyCode;
@@ -31,9 +41,36 @@ export type PasswordCheck =
   | { ok: true; normalized: string }
   | { ok: false; code: Exclude<PasswordPolicyCode, 'PASSWORD_CHANGE_REQUIRED'> };
 
+/** R12-7 / 9-4: username must not equal a distributor name (password-set, not login). */
+export function usernameCollidesWithDistributor(
+  username: string,
+  distributorName: string,
+): boolean {
+  const left = username.trim().normalize('NFKC').toLowerCase();
+  const right = distributorName.trim().normalize('NFKC').toLowerCase();
+  return left.length > 0 && left === right;
+}
+
+export function assertUsernameAvailable(username: string, distributorName: string): void {
+  if (usernameCollidesWithDistributor(username, distributorName)) {
+    throw new PasswordPolicyError('USERNAME_TAKEN', 'USERNAME_TAKEN');
+  }
+}
+
+function containsIdentity(normalized: string, identity?: PasswordIdentity): boolean {
+  const haystack = normalized.toLowerCase();
+  for (const raw of [identity?.username, identity?.distributorName]) {
+    if (!raw) continue;
+    const needle = raw.trim().normalize('NFKC').toLowerCase();
+    if (needle.length > 0 && haystack.includes(needle)) return true;
+  }
+  return false;
+}
+
 export function evaluateNewPassword(
   plain: string,
   isBreached: (normalized: string) => boolean,
+  identity?: PasswordIdentity,
 ): PasswordCheck {
   const normalized = normalizePassword(plain);
   if (normalized.length < PASSWORD_MIN_LENGTH) {
@@ -45,14 +82,25 @@ export function evaluateNewPassword(
   if (isBreached(normalized)) {
     return { ok: false, code: 'PASSWORD_BREACHED' };
   }
+  if (containsIdentity(normalized, identity)) {
+    return { ok: false, code: 'PASSWORD_CONTAINS_IDENTITY' };
+  }
+  if (
+    identity?.username &&
+    identity.distributorName &&
+    usernameCollidesWithDistributor(identity.username, identity.distributorName)
+  ) {
+    return { ok: false, code: 'USERNAME_TAKEN' };
+  }
   return { ok: true, normalized };
 }
 
 export function assertNewPassword(
   plain: string,
   isBreached: (normalized: string) => boolean,
+  identity?: PasswordIdentity,
 ): string {
-  const result = evaluateNewPassword(plain, isBreached);
+  const result = evaluateNewPassword(plain, isBreached, identity);
   if (!result.ok) {
     throw new PasswordPolicyError(result.code, result.code);
   }

@@ -133,16 +133,16 @@ describe('MemoryRefreshTokenStore', () => {
     });
   });
 
-  it('AUTH-RT-02: reuse is detected before the typ check', async () => {
+  it('9-16 / 11-10: rotated wrong-group replay is typ_mismatch and does not revoke', async () => {
     const store = new MemoryRefreshTokenStore();
     const now = new Date('2026-10-15T00:00:00.000Z');
     const issued = await store.issue({ ...ids(), typ: 'driver' }, () => now);
     await store.rotate(issued.refreshToken, 'driver', () => now);
     expect(await store.rotate(issued.refreshToken, 'staff', () => now)).toEqual({
       status: 'rejected',
-      reason: 'reuse',
+      reason: 'typ_mismatch',
     });
-    expect(store.sessions.get(issued.sid)?.revokedAt).toEqual(now);
+    expect(store.sessions.get(issued.sid)?.revokedAt).toBeNull();
   });
 
   it('AUTH-RT-03: applies shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute', async () => {

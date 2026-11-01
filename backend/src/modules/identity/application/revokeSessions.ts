@@ -11,7 +11,7 @@ export async function revokeSubjectSessions(
   pool: pg.Pool,
   authority: SessionAuthority,
   input: { accountId: string; reason: SessionRevokeReason },
-  log?: DrainLog,
+  log: DrainLog,
 ): Promise<{ sids: string[] }> {
   const revoked = await revokeAccountSessions(pool, input);
   if (revoked.sids.length > 0) {

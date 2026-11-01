@@ -75,6 +75,7 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
       usedAt: null,
       graceUsedAt: null,
     });
+    this.enforceCap(input, now);
     return Promise.resolve({
       refreshToken,
       hash,
@@ -121,12 +122,12 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     const session = this.sessions.get(token.sid);
     if (!session) return { status: 'rejected', reason: 'unknown' };
 
+    if (session.typ !== expectedTyp) return { status: 'rejected', reason: 'typ_mismatch' };
     if (token.rotatedAt !== null) {
       return this.replayRotated(session, token, expectedTyp, now);
     }
 
     if (session.revokedAt !== null) return { status: 'rejected', reason: 'family_revoked' };
-    if (session.typ !== expectedTyp) return { status: 'rejected', reason: 'typ_mismatch' };
     if (isAbsoluteExpired(session.typ, session.createdAt, now)) {
       return { status: 'rejected', reason: 'absolute_expired' };
     }
@@ -168,6 +169,7 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
         familyId: session.familyId,
         typ: session.typ,
         accountId: session.accountId,
+        absoluteExpiresAt: session.absoluteExpiresAt,
       };
     }
 
@@ -203,6 +205,18 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
       refreshExpiresAt: windows.refreshExpiresAt,
       absoluteExpiresAt: windows.absoluteExpiresAt,
     };
+  }
+
+  private enforceCap(input: RefreshIssueInput, now: Date): void {
+    const cap = input.maxSessions;
+    if (cap === undefined || cap < 1) return;
+    const open = [...this.sessions.values()]
+      .filter((row) => row.accountId === input.accountId && row.revokedAt === null)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sid.localeCompare(b.sid));
+    const overflow = Math.max(0, open.length - cap);
+    for (const victim of open.filter((row) => row.sid !== input.sid).slice(0, overflow)) {
+      victim.revokedAt = now;
+    }
   }
 
   private revokeFamily(familyId: string, now: Date): void {
