@@ -8,6 +8,7 @@ import { assertRuntimeDbRole } from '../../src/platform/db/runtimeRole.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
 import { SEED, seedDemoTenants } from '../../scripts/seed.js';
 import {
+  attachPgTeardownGuard,
   startPostgresWithRoles,
   TEST_ROLE_PASSWORD,
   type StartedPostgresRoles,
@@ -19,6 +20,7 @@ const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}
 /** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
 const IDENTITY_UNSCOPED = [
   'identity.accounts',
+  'identity.pending_session_denies',
   'identity.refresh_tokens',
   'identity.sessions',
 ] as const;
@@ -34,6 +36,7 @@ const S11B_TABLES = [
   'customers.shopkeepers',
   'identity.accounts',
   'identity.driver_credentials',
+  'identity.pending_session_denies',
   'identity.refresh_tokens',
   'identity.sessions',
   'identity.staff_memberships',
@@ -61,6 +64,9 @@ describe('RLS harness skeleton', () => {
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
     appPool = new pg.Pool({ connectionString: deps.appUrl });
     identityPool = new pg.Pool({ connectionString: deps.identityUrl });
+    attachPgTeardownGuard(ownerPool);
+    attachPgTeardownGuard(appPool);
+    attachPgTeardownGuard(identityPool);
     await ownerPool.query(`
       CREATE TABLE platform.rls_probe (
         id uuid PRIMARY KEY,

@@ -9,7 +9,12 @@ import {
 } from '../../src/platform/health.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
-import { startDeps, stopDeps, type StartedDeps } from '../helpers/containers.js';
+import {
+  attachPgTeardownGuard,
+  startDeps,
+  stopDeps,
+  type StartedDeps,
+} from '../helpers/containers.js';
 
 describe('health against real Postgres 16 and Redis 7', () => {
   let deps: StartedDeps;
@@ -20,6 +25,7 @@ describe('health against real Postgres 16 and Redis 7', () => {
   beforeAll(async () => {
     deps = await startDeps();
     const db = createDb(deps.databaseUrl);
+    attachPgTeardownGuard(db.pool);
     const redis = createRedis(deps.redisUrl);
     closeDb = () => db.close();
     closeRedis = async () => {

@@ -1,6 +1,11 @@
 import { buildApp } from './app.js';
 import { createIdentityDb } from './modules/identity/infra/db/pool.js';
+import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
+import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
 import { assertStartupAdapters } from './platform/adapters.js';
+import { createJwtFromEnv } from './platform/auth/eddsa.js';
+import { assertRedisForAuthIssuance } from './platform/auth/failClosed.js';
+import { fallbackPoolOptions, RedisPgSessionAuthority } from './platform/auth/sessionAuthority.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
 import { DB_ROLE_NAMES } from './platform/db/roles.js';
@@ -8,18 +13,29 @@ import { assertRuntimeDbRole } from './platform/db/runtimeRole.js';
 import { outboxLagHealthCheck, postgresHealthCheck, redisHealthCheck } from './platform/health.js';
 import { pinoOptions } from './platform/logger.js';
 import { createRedis } from './platform/redis.js';
+import pg from 'pg';
 import { pino } from 'pino';
 
 const config = loadConfigOrExit();
 assertStartupAdapters(config.NODE_ENV);
+configureSessionTtl({
+  shopkeeperAbsoluteMs: config.SESSION_TTL_SHOPKEEPER_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000,
+  shopkeeperIdleMs: config.SESSION_TTL_SHOPKEEPER_SLIDING_DAYS * 24 * 60 * 60 * 1000,
+  staffAbsoluteMs: config.SESSION_TTL_STAFF_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000,
+  staffIdleMs: config.SESSION_TTL_STAFF_IDLE_HOURS * 60 * 60 * 1000,
+  driverAbsoluteMs: config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS * 60 * 60 * 1000,
+});
 const log = pino(pinoOptions(config));
 const db = createDb(config.DATABASE_URL_APP, { log });
 const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
+const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_IDENTITY));
 const redis = createRedis(config.REDIS_URL, log);
+const sessionAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(sessionLookupPool));
+const verifier = await createJwtFromEnv();
 
 const closeInfra = async () => {
   await redis.quit().catch(() => redis.disconnect());
-  await Promise.all([identityDb.close(), db.close()]);
+  await Promise.all([sessionLookupPool.end(), identityDb.close(), db.close()]);
 };
 
 try {
@@ -33,6 +49,9 @@ try {
 
 const app = await buildApp({
   config,
+  verifier,
+  sessionAuthority,
+  assertIssuance: () => assertRedisForAuthIssuance(redis),
   healthChecks: [
     postgresHealthCheck(db.pool),
     postgresHealthCheck(identityDb.pool, 'postgres_identity'),

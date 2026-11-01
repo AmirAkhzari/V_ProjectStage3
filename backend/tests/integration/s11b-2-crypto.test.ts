@@ -14,7 +14,11 @@ import {
   REFRESH_REUSE_AUDIT_ACTION,
   SESSIONS_REVOKED_EVENT,
 } from '../../src/modules/identity/events.js';
-import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+import {
+  attachPgTeardownGuard,
+  startPostgresWithRoles,
+  type StartedPostgresRoles,
+} from '../helpers/containers.js';
 
 async function seedShopkeeper(pool: pg.Pool): Promise<string> {
   const accountId = randomUUID();
@@ -57,17 +61,8 @@ describe('S11b-2 crypto integration', () => {
     deps = await startPostgresWithRoles();
     identityPool = new pg.Pool({ connectionString: deps.identityUrl, max: 16 });
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
-    // Container stop can emit 57P01 on closing clients; Vitest treats that as a failed run.
-    const ignoreAdminTerminate = (err: Error & { code?: string }): void => {
-      if (err.code === '57P01') return;
-      throw err;
-    };
-    for (const pool of [identityPool, ownerPool]) {
-      pool.on('error', ignoreAdminTerminate);
-      pool.on('connect', (client) => {
-        client.on('error', ignoreAdminTerminate);
-      });
-    }
+    attachPgTeardownGuard(identityPool);
+    attachPgTeardownGuard(ownerPool);
   });
 
   afterAll(async () => {

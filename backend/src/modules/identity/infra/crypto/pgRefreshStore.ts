@@ -21,7 +21,21 @@ import {
   REFRESH_REUSE_AUDIT_ACTION,
   sessionsRevokedEvent,
 } from '../../events.js';
+import {
+  applyLockTimeout,
+  isRetryableLockError,
+  lockSessionsThenTokensThenAccount,
+} from '../session/lockOrder.js';
+import { drainPendingDenies, enqueuePendingDenies } from '../session/pgSessionStore.js';
 import { generateRefreshToken, hashRefreshToken } from './refreshHash.js';
+
+export interface RefreshStoreHooks {
+  onSidsRevoked: (sids: readonly string[]) => Promise<void>;
+}
+
+function requiredOnSidsRevoked(): Promise<void> {
+  return Promise.reject(new Error('onSidsRevoked is required'));
+}
 
 interface LockedRefreshRow {
   hash: string;
@@ -47,7 +61,10 @@ interface LockedRefreshRow {
  * lock_timeout, no state change. No pg_try_advisory_xact_lock.
  */
 export class PgRefreshTokenStore implements RefreshTokenStore {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly hooks: RefreshStoreHooks = { onSidsRevoked: requiredOnSidsRevoked },
+  ) {}
 
   async issue(input: RefreshIssueInput, clock: Clock = systemClock): Promise<RefreshIssueResult> {
     const now = clock();
@@ -87,40 +104,55 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     const now = clock();
     const hash = hashRefreshToken(presented);
     try {
-      return await this.withTx(async (client) => {
-        await client.query('SELECT set_config($1, $2, true)', [
-          'lock_timeout',
-          REFRESH_LOCK_TIMEOUT,
-        ]);
+      const outcome = await this.withTx(async (client) => {
+        await applyLockTimeout(client, REFRESH_LOCK_TIMEOUT);
+        const peeked = await client.query<{ family_id: string }>(
+          `SELECT t.family_id
+             FROM identity.refresh_tokens t
+            WHERE t.hash = $1`,
+          [hash],
+        );
+        const familyId = peeked.rows[0]?.family_id;
+        if (familyId) {
+          await lockSessionsThenTokensThenAccount(client, { kind: 'family', familyId });
+        }
         const found = await client.query<LockedRefreshRow>(
           `SELECT t.hash, t.family_id, t.sid, t.rotated_at, t.successor, t.used_at, t.grace_used_at,
                 s.typ, s.created_at, s.last_used_at, s.absolute_expires_at, s.revoked_at, s.account_id
-           FROM identity.refresh_tokens t
-           JOIN identity.sessions s ON s.sid = t.sid
+           FROM identity.sessions s
+           JOIN identity.refresh_tokens t ON t.sid = s.sid
           WHERE t.hash = $1
-          FOR UPDATE OF t, s`,
+          ORDER BY s.sid, t.hash`,
           [hash],
         );
         const row = found.rows[0];
-        if (!row) return { status: 'rejected', reason: 'unknown' };
+        if (!row) return { result: { status: 'rejected' as const, reason: 'unknown' as const } };
 
         if (row.rotated_at !== null) {
           return this.replayRotated(client, row, expectedTyp, now);
         }
 
-        if (row.revoked_at !== null) return { status: 'rejected', reason: 'family_revoked' };
-        if (row.typ !== expectedTyp) return { status: 'rejected', reason: 'typ_mismatch' };
+        if (row.revoked_at !== null) {
+          return { result: { status: 'rejected' as const, reason: 'family_revoked' as const } };
+        }
+        if (row.typ !== expectedTyp) {
+          return { result: { status: 'rejected' as const, reason: 'typ_mismatch' as const } };
+        }
         if (isAbsoluteExpired(row.typ as SubjectType, row.created_at, now)) {
-          return { status: 'rejected', reason: 'absolute_expired' };
+          return { result: { status: 'rejected' as const, reason: 'absolute_expired' as const } };
         }
         if (isIdleExpired(row.typ as SubjectType, row.created_at, row.last_used_at, now)) {
-          return { status: 'rejected', reason: 'idle_expired' };
+          return { result: { status: 'rejected' as const, reason: 'idle_expired' as const } };
         }
 
-        return this.claimRotation(client, row, now);
+        return { result: await this.claimRotation(client, row, now) };
       });
+      if (outcome.revokedSids && outcome.revokedSids.length > 0) {
+        await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids));
+      }
+      return outcome.result;
     } catch (error) {
-      if (isPgLockTimeout(error)) return { status: 'rejected', reason: 'lock_timeout' };
+      if (isRetryableLockError(error)) return { status: 'rejected', reason: 'lock_timeout' };
       throw error;
     }
   }
@@ -130,9 +162,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     row: LockedRefreshRow,
     expectedTyp: SubjectType,
     now: Date,
-  ): Promise<RefreshRotateResult> {
-    if (row.revoked_at !== null) return { status: 'rejected', reason: 'family_revoked' };
-    if (row.rotated_at === null) return { status: 'rejected', reason: 'unknown' };
+  ): Promise<{ result: RefreshRotateResult; revokedSids?: string[] }> {
+    if (row.revoked_at !== null) {
+      return { result: { status: 'rejected', reason: 'family_revoked' } };
+    }
+    if (row.rotated_at === null) return { result: { status: 'rejected', reason: 'unknown' } };
     const typ = row.typ as SubjectType;
     const age = now.getTime() - row.rotated_at.getTime();
     const successorUnused = await this.successorUnused(client, row.successor);
@@ -159,24 +193,27 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           familyId: row.family_id,
           sid: row.sid,
           now,
+          distributorId: await lookupDistributorId(client, row.account_id),
         });
         return {
-          status: 'grace',
-          sid: row.sid,
-          familyId: row.family_id,
-          typ,
-          accountId: row.account_id,
+          result: {
+            status: 'grace',
+            sid: row.sid,
+            familyId: row.family_id,
+            typ,
+            accountId: row.account_id,
+          },
         };
       }
     }
 
-    await this.revokeFamilyInTx(client, {
+    const revokedSids = await this.revokeFamilyInTx(client, {
       familyId: row.family_id,
       sid: row.sid,
       accountId: row.account_id,
       now,
     });
-    return { status: 'rejected', reason: 'reuse' };
+    return { result: { status: 'rejected', reason: 'reuse' }, revokedSids };
   }
 
   private async claimRotation(
@@ -221,7 +258,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   private async successorUnused(client: pg.PoolClient, successor: string | null): Promise<boolean> {
     if (successor === null) return false;
     const found = await client.query<{ used_at: Date | null; rotated_at: Date | null }>(
-      `SELECT used_at, rotated_at FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`,
+      `SELECT used_at, rotated_at FROM identity.refresh_tokens WHERE hash = $1`,
       [successor],
     );
     const next = found.rows[0];
@@ -231,7 +268,13 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   private async revokeFamilyInTx(
     client: pg.PoolClient,
     input: { familyId: string; sid: string; accountId: string; now: Date },
-  ): Promise<void> {
+  ): Promise<string[]> {
+    const locked = await lockSessionsThenTokensThenAccount(client, {
+      kind: 'family',
+      familyId: input.familyId,
+    });
+    const revokedSids = locked.map((row) => row.sid);
+    await enqueuePendingDenies(client, revokedSids, input.now);
     await client.query(
       `UPDATE identity.sessions
           SET revoked_at = $2, revoke_reason = 'refresh_reuse'
@@ -244,12 +287,14 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         WHERE family_id = $1`,
       [input.familyId, input.now],
     );
+    const distributorId = await lookupDistributorId(client, input.accountId);
     await insertAudit(client, {
       accountId: input.accountId,
       action: REFRESH_REUSE_AUDIT_ACTION,
       familyId: input.familyId,
       sid: input.sid,
       now: input.now,
+      distributorId,
     });
     const event = sessionsRevokedEvent(
       {
@@ -259,6 +304,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         reason: 'refresh_reuse',
       },
       input.now,
+      distributorId,
     );
     await client.query(
       `INSERT INTO platform.outbox_events (
@@ -276,6 +322,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         event.occurredAt,
       ],
     );
+    return revokedSids;
   }
 
   private async withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -294,22 +341,33 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   }
 }
 
-function isPgLockTimeout(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const code = 'code' in error ? error.code : undefined;
-  const message = 'message' in error ? error.message : undefined;
-  return code === '55P03' || (typeof message === 'string' && /lock timeout/i.test(message));
+async function lookupDistributorId(
+  client: pg.PoolClient,
+  accountId: string,
+): Promise<string | null> {
+  const found = await client.query<{ distributor_id: string | null }>(
+    `SELECT distributor_id FROM identity.lookup_account_scope($1)`,
+    [accountId],
+  );
+  return found.rows[0]?.distributor_id ?? null;
 }
 
 async function insertAudit(
   client: pg.PoolClient,
-  input: { accountId: string; action: string; familyId: string; sid: string; now: Date },
+  input: {
+    accountId: string;
+    action: string;
+    familyId: string;
+    sid: string;
+    now: Date;
+    distributorId?: string | null;
+  },
 ): Promise<void> {
   await client.query(
     `INSERT INTO platform.audit_log (
        id, at, actor_type, actor_id, actor_name, distributor_id,
        action, entity, entity_id, data, ip
-     ) VALUES ($1, $2, 'system', $3, 'identity', NULL, $4, 'session', $5, $6, NULL)`,
+     ) VALUES ($1, $2, 'system', $3, 'identity', $7, $4, 'session', $5, $6, NULL)`,
     [
       randomUUID(),
       input.now,
@@ -317,6 +375,7 @@ async function insertAudit(
       input.action,
       input.familyId,
       JSON.stringify({ sid: input.sid, familyId: input.familyId, reason: input.action }),
+      input.distributorId ?? null,
     ],
   );
 }

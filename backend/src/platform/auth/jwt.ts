@@ -9,21 +9,21 @@ export const JWT_AUDIENCE = {
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 export const JWT_CLOCK_SKEW_SECONDS = 60;
 export const JWT_ALG = 'EdDSA';
+export const JWT_TYP = 'JWT';
 
 export interface AccessClaims {
   sub: string;
   typ: SubjectType;
   sid: string;
+  sv: number;
   did?: string;
 }
 
 /**
- * Verifies an access token and returns its claims, or throws.
- * S11b-2 provides the jose EdDSA implementation (`eddsa.ts`); guards stay fail-closed
- * until the composition root wires a keyset (S11b-3).
+ * Verifies an access token bound to a route group (AppSec 9-8).
  */
 export interface AccessTokenVerifier {
-  verify(token: string): Promise<AccessClaims>;
+  verify(token: string, expectedGroup: SubjectType): Promise<AccessClaims>;
 }
 
 export class TokenVerificationError extends Error {

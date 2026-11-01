@@ -7,7 +7,11 @@ import type { EventEnvelope } from '../../src/platform/events/envelope.js';
 import { PgOutboxStore, PgOutboxWriter } from '../../src/platform/events/outboxPg.js';
 import { PgInboxStore } from '../../src/platform/events/inboxPg.js';
 import { PgIdempotencyStore } from '../../src/platform/http/idempotencyPg.js';
-import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+import {
+  attachPgTeardownGuard,
+  startPostgresWithRoles,
+  type StartedPostgresRoles,
+} from '../helpers/containers.js';
 
 const DIST = '11111111-1111-1111-1111-111111111111';
 const DIST_B = '22222222-2222-2222-2222-222222222222';
@@ -36,6 +40,9 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
     appPool = new pg.Pool({ connectionString: deps.appUrl });
     workerPool = new pg.Pool({ connectionString: deps.workerUrl });
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
+    attachPgTeardownGuard(appPool);
+    attachPgTeardownGuard(workerPool);
+    attachPgTeardownGuard(ownerPool);
     await ownerPool.query(`
       CREATE TABLE platform.outbox_fault_probe (
         id uuid PRIMARY KEY,

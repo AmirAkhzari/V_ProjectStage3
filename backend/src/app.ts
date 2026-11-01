@@ -11,6 +11,11 @@ import { driverGroup, driverGroupSpec } from './http/driver.group.js';
 import { systemRoutes } from './http/system.routes.js';
 import { allModules } from './modules/register.js';
 import { denyAllVerifier, type AccessTokenVerifier } from './platform/auth/jwt.js';
+import {
+  failClosedSessionAuthority,
+  type SessionAuthority,
+} from './platform/auth/sessionAuthority.js';
+import { AppError } from './platform/http/errors.js';
 import type { Config } from './platform/config.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { InMemoryInboxStore } from './platform/events/inbox.js';
@@ -23,6 +28,8 @@ export interface BuildAppOptions {
   config: Config;
   healthChecks: readonly HealthCheck[];
   verifier?: AccessTokenVerifier;
+  sessionAuthority?: SessionAuthority;
+  assertIssuance?: () => Promise<void>;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -60,9 +67,22 @@ export async function buildApp(options: BuildAppOptions) {
     readyRetryAfterSeconds: options.config.READY_RETRY_AFTER_SECONDS,
   });
 
+  const verifier = options.verifier ?? denyAllVerifier;
+  if (verifier !== denyAllVerifier && options.sessionAuthority === undefined) {
+    throw new Error('sessionAuthority is required unless the verifier is denyAllVerifier');
+  }
+  const assertIssuance =
+    options.assertIssuance ??
+    (async () => {
+      throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+        retryAfter: 5,
+      });
+    });
   const groupOpts = {
     modules: allModules,
-    verifier: options.verifier ?? denyAllVerifier,
+    verifier,
+    sessionAuthority: options.sessionAuthority ?? failClosedSessionAuthority,
+    assertIssuance,
   };
   await app.register(appGroup, { prefix: appGroupSpec.prefix, ...groupOpts });
   await app.register(adminGroup, { prefix: adminGroupSpec.prefix, ...groupOpts });
