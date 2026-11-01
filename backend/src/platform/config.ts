@@ -86,7 +86,7 @@ const processShared = {
   SESSION_TTL_SHOPKEEPER_ABSOLUTE_DAYS: z.coerce.number().int().min(1).max(90).default(90),
   SESSION_TTL_STAFF_ABSOLUTE_DAYS: z.coerce.number().int().min(1).max(7).default(7),
   SESSION_TTL_STAFF_IDLE_HOURS: z.coerce.number().int().min(1).max(12).default(12),
-  /** Driver 10h absolute confirmed by Amir 2026-11-01 (DL-13). Config may only shorten. */
+  /** Driver 10h absolute: DL-13 / 2026-10-14 (Amir re-confirmed 2026-11-01). Config may only shorten. */
   SESSION_TTL_DRIVER_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(10).default(10),
 };
 

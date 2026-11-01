@@ -191,4 +191,39 @@ describe('session authority Architect 11-1 / 11-4 / 11-11', () => {
     expect(gets).toBeGreaterThan(beforeFailProbe);
     expect(authority.breakerState()).toBe('open');
   });
+
+  it('N12-5: breaker opens on 5 errors in a 10s window, not 5 consecutive', async () => {
+    const now = 1_000;
+    let fail = true;
+    const authority = new RedisPgSessionAuthority(
+      fakeRedis({
+        get: async () => {
+          if (fail) throw new Error('down');
+          return null;
+        },
+      }),
+      { lookup: async () => null },
+      { clock: { now: () => now } },
+    );
+    await authority.check('a');
+    await authority.check('b');
+    await authority.check('c');
+    expect(authority.breakerState()).toBe('closed');
+    fail = false;
+    await authority.check('ok');
+    expect(authority.breakerState()).toBe('closed');
+    fail = true;
+    await authority.check('d');
+    await authority.check('e');
+    expect(authority.breakerState()).toBe('open');
+  });
+
+  it('N12-5: a hung deny pipeline times out', async () => {
+    const authority = new RedisPgSessionAuthority(
+      fakeRedis({ hangExec: true }),
+      { lookup: async () => null },
+      { denyAttempts: 1, denyTimeoutMs: 30 },
+    );
+    await expect(authority.deny(['sid-timeout'])).rejects.toThrow(/timed out after 30ms/);
+  });
 });

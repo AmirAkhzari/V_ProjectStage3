@@ -52,7 +52,22 @@ This slice: **green 25** / **partial 8** / **pending 67**. No login HTTP in S11b
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
-AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10 (dummy-hash), 9-16, and N9-4 (40P01 to retryable or a fixed lock order), plus Low N3-1, N3-2 (SQLSTATE 55P03 only). **JWK kty/crv/use + fail-at-boot** closed here with AUTH-JW-03. **RC-3** closed here — 9-8, 9-17, 9-18, and G3. **RC-4** before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** remain closed.
+AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10 (dummy-hash), 9-16, plus Low N3-1, N3-2 (SQLSTATE 55P03 only). **N9-4 40P01** closed here (shared lock order + retry). **JWK kty/crv/use + fail-at-boot** closed here with AUTH-JW-03. **RC-3** closed here — 9-8, 9-17, 9-18, and G3. **RC-4** stays before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** remain closed.
+
+**RC-5 carry-overs binding on S11b-4/5** (M-1):
+
+| ID    | Slice    | Item                                                                                                                           |
+| ----- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| R11-1 | S11b-4/5 | Drain worker (pending-deny drain is **inline-only** today and **abandons a row after 3 attempts**) plus a backlog metric/alert |
+| R11-4 | S11b-4/5 | Production live write-back plus a load test                                                                                    |
+| R11-5 | S11b-4/5 | Sensitive-route registry with default-deny plus an issuance-path completeness test against the contract                        |
+| R11-6 | S11b-4/5 | Broader deactivate vs logout-all concurrency coverage (N12-1 closes the deadlock / lock-order part)                            |
+| RC-2  | S11b-4   | 9-3, 9-4, 9-5, 9-10, 9-16                                                                                                      |
+| N12-3 | S11b-4   | Periodic drain, alert on abandoned rows, purge of `done` rows                                                                  |
+| N12-4 | S11b-4   | Simplify the fail-epoch (5s revocation bound is **live TTL 5s + PG on a miss**, not the per-process fail epoch)                |
+| N12-7 | S11b-4   | Prefix issuance-route matching; production live-cache writer                                                                   |
+
+**RC-4** remains before S-14.
 
 | Slice     | Owner    | Status  | IDs (count)                                                                                                                                                                        |
 | --------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -81,7 +96,7 @@ AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9
 | AUTH-JW-03     | green   | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify; `createJwtFromEnv` secret-manager/env boot; kty/crv/use; fail-at-boot if active kid has no `d`              |
 | AUTH-RT-01     | green   | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                                                                    |
 | AUTH-RT-02     | partial | store: 20 s grace once, access-only; concurrent replay is reuse (G5 blocking FOR UPDATE, lock_timeout 2s, 0 new RT, revoke_reason=refresh_reuse). HTTP refresh + access mint is S11b-4                        |
-| AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                                                                             |
+| AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute (DL-13 / 2026-10-14; Amir re-confirmed 2026-11-01)                                                                                          |
 | AUTH-RT-04     | green   | same — RT bound to route-group `typ`; reuse is checked before typ                                                                                                                                             |
 | AUTH-RT-05     | partial | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist; 10 parallel refreshes ⇒ 1 successor (AppSec 9-1). HTTP issue/refresh persist is S11b-4 (AppSec RC-1) |
 
@@ -101,7 +116,7 @@ AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9
 | AUTH-AV-03    | green   | same as SESS-04                                                                                                                                                                                                                         |
 | AUTH-AV-04    | green   | same as SESS-07                                                                                                                                                                                                                         |
 | AUTH-AV-05    | green   | same — `AUTH-AV-05: implementation is not Redis-only` (`hasPgFallback`)                                                                                                                                                                 |
-| AUTH-RV-01    | green   | same as SESS-02                                                                                                                                                                                                                         |
+| AUTH-RV-01    | green   | same as SESS-02. 5s revocation bound = live TTL 5s + PG on a miss (R11-2). Drain is inline-only and abandons after 3 attempts (R11-1).                                                                                                  |
 | AUTH-DI-01    | green   | same — `AUTH-DI-01: inactive before revoke is 403; after revoke 401; issuance never driver_inactive`. C1/C2 HTTP is S11b-4; the issuance gate never returns `driver_inactive`                                                           |
 | TEN-05-PLAT   | green   | same + `src/platform/auth/tenantPrincipal.test.ts` — SA without scope ⇒ `is_platform` true; SA with scope / DA / driver / shopkeeper ⇒ false                                                                                            |
 | SCOPE-SA-01   | green   | same + `src/modules/identity/domain/permissions.test.ts` — SA honours `X-Scope-Distributor`; DA stays in own tenant; SA perms from role (28), not the empty seed column                                                                 |

@@ -10,8 +10,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * AUTH-RT-03 / DECISION_LOG §I defaults. Driver 10h absolute confirmed by Amir
- * 2026-11-01 (DL-13). Config may only shorten these caps.
+ * AUTH-RT-03 / DECISION_LOG §I defaults. Driver 10h absolute: DL-13 / 2026-10-14
+ * (Amir re-confirmed 2026-11-01). Config may only shorten these caps.
  */
 export const SESSION_TTL = {
   shopkeeper: { absoluteMs: 90 * DAY_MS, idleMs: 30 * DAY_MS },

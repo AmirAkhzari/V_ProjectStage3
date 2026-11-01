@@ -21,6 +21,11 @@ import {
   REFRESH_REUSE_AUDIT_ACTION,
   sessionsRevokedEvent,
 } from '../../events.js';
+import {
+  applyLockTimeout,
+  isRetryableLockError,
+  lockSessionsThenTokensThenAccount,
+} from '../session/lockOrder.js';
 import { drainPendingDenies, enqueuePendingDenies } from '../session/pgSessionStore.js';
 import { generateRefreshToken, hashRefreshToken } from './refreshHash.js';
 
@@ -100,18 +105,24 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     const hash = hashRefreshToken(presented);
     try {
       const outcome = await this.withTx(async (client) => {
-        await client.query('SELECT set_config($1, $2, true)', [
-          'lock_timeout',
-          REFRESH_LOCK_TIMEOUT,
-        ]);
+        await applyLockTimeout(client, REFRESH_LOCK_TIMEOUT);
+        const peeked = await client.query<{ family_id: string }>(
+          `SELECT t.family_id
+             FROM identity.refresh_tokens t
+            WHERE t.hash = $1`,
+          [hash],
+        );
+        const familyId = peeked.rows[0]?.family_id;
+        if (familyId) {
+          await lockSessionsThenTokensThenAccount(client, { kind: 'family', familyId });
+        }
         const found = await client.query<LockedRefreshRow>(
           `SELECT t.hash, t.family_id, t.sid, t.rotated_at, t.successor, t.used_at, t.grace_used_at,
                 s.typ, s.created_at, s.last_used_at, s.absolute_expires_at, s.revoked_at, s.account_id
            FROM identity.sessions s
            JOIN identity.refresh_tokens t ON t.sid = s.sid
           WHERE t.hash = $1
-          ORDER BY s.sid, t.hash
-          FOR UPDATE OF s, t`,
+          ORDER BY s.sid, t.hash`,
           [hash],
         );
         const row = found.rows[0];
@@ -141,7 +152,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       }
       return outcome.result;
     } catch (error) {
-      if (isPgLockTimeout(error)) return { status: 'rejected', reason: 'lock_timeout' };
+      if (isRetryableLockError(error)) return { status: 'rejected', reason: 'lock_timeout' };
       throw error;
     }
   }
@@ -247,7 +258,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
   private async successorUnused(client: pg.PoolClient, successor: string | null): Promise<boolean> {
     if (successor === null) return false;
     const found = await client.query<{ used_at: Date | null; rotated_at: Date | null }>(
-      `SELECT used_at, rotated_at FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`,
+      `SELECT used_at, rotated_at FROM identity.refresh_tokens WHERE hash = $1`,
       [successor],
     );
     const next = found.rows[0];
@@ -258,19 +269,12 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     client: pg.PoolClient,
     input: { familyId: string; sid: string; accountId: string; now: Date },
   ): Promise<string[]> {
-    const sids = await client.query<{ sid: string }>(
-      `SELECT sid FROM identity.sessions WHERE family_id = $1 ORDER BY sid FOR UPDATE`,
-      [input.familyId],
-    );
-    await client.query(
-      `SELECT hash FROM identity.refresh_tokens WHERE family_id = $1 ORDER BY hash FOR UPDATE`,
-      [input.familyId],
-    );
-    await enqueuePendingDenies(
-      client,
-      sids.rows.map((row) => row.sid),
-      input.now,
-    );
+    const locked = await lockSessionsThenTokensThenAccount(client, {
+      kind: 'family',
+      familyId: input.familyId,
+    });
+    const revokedSids = locked.map((row) => row.sid);
+    await enqueuePendingDenies(client, revokedSids, input.now);
     await client.query(
       `UPDATE identity.sessions
           SET revoked_at = $2, revoke_reason = 'refresh_reuse'
@@ -318,7 +322,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         event.occurredAt,
       ],
     );
-    return sids.rows.map((row) => row.sid);
+    return revokedSids;
   }
 
   private async withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -335,17 +339,6 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       client.release();
     }
   }
-}
-
-function isPgLockTimeout(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const code = 'code' in error ? error.code : undefined;
-  const message = 'message' in error ? error.message : undefined;
-  return (
-    code === '55P03' ||
-    code === '40P01' ||
-    (typeof message === 'string' && /lock timeout|deadlock detected/i.test(message))
-  );
 }
 
 async function lookupDistributorId(

@@ -131,9 +131,10 @@ class CircuitBreaker {
   }
 
   recordSuccess(): void {
-    this.errors = [];
+    const closing = this.openedAt !== null;
     this.openedAt = null;
     this.probing = false;
+    if (closing) this.errors = [];
   }
 
   recordFailure(): void {
@@ -185,6 +186,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
   private readonly clock: CircuitBreakerClock;
   private readonly lookupTimeoutMs: number;
   private readonly denyAttempts: number;
+  private readonly denyTimeoutMs: number;
 
   constructor(
     private readonly redis: Redis,
@@ -193,12 +195,14 @@ export class RedisPgSessionAuthority implements SessionAuthority {
       clock?: CircuitBreakerClock;
       lookupTimeoutMs?: number;
       denyAttempts?: number;
+      denyTimeoutMs?: number;
     } = {},
   ) {
     this.clock = options.clock ?? { now: () => Date.now() };
     this.breaker = new CircuitBreaker(this.clock);
     this.lookupTimeoutMs = options.lookupTimeoutMs ?? PG_LOOKUP_TIMEOUT_MS;
     this.denyAttempts = options.denyAttempts ?? DENY_ATTEMPTS;
+    this.denyTimeoutMs = options.denyTimeoutMs ?? REDIS_DENY_TIMEOUT_MS;
   }
 
   breakerState(): CircuitState {
@@ -222,7 +226,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
         'EX',
         LIVE_TTL_SECONDS,
       ),
-      REDIS_DENY_TIMEOUT_MS,
+      this.denyTimeoutMs,
     );
     setBounded(this.liveWriteEpoch, row.sid, epoch);
   }
@@ -250,7 +254,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
     this.dropLocalLive(sids);
     const pipeline = this.redis.pipeline();
     for (const sid of sids) pipeline.del(liveKey(sid));
-    const results = await withTimeout(pipeline.exec(), REDIS_DENY_TIMEOUT_MS);
+    const results = await withTimeout(pipeline.exec(), this.denyTimeoutMs);
     assertPipelineOk(results);
   }
 
@@ -357,7 +361,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
       pipeline.set(denyKey(sid), '1', 'EX', DENY_TTL_SECONDS);
       pipeline.del(liveKey(sid));
     }
-    const results = await withTimeout(pipeline.exec(), REDIS_DENY_TIMEOUT_MS);
+    const results = await withTimeout(pipeline.exec(), this.denyTimeoutMs);
     assertPipelineOk(results);
   }
 
@@ -422,38 +426,6 @@ export const failClosedSessionAuthority: SessionAuthority = {
   pgFallbackTotal: () => 0,
   pgLookupsFor: () => 0,
 };
-
-export function allowAllSessionAuthority(
-  typ: SubjectType = 'shopkeeper',
-  accountId = 'user-1',
-): SessionAuthority {
-  return {
-    hasPgFallback: true,
-    check: (sid, claimedVersion) =>
-      Promise.resolve({
-        status: 'active',
-        row: {
-          sid,
-          accountId,
-          typ,
-          familyId: 'family-1',
-          sessionVersion: claimedVersion ?? 0,
-          accountStatus: 'active',
-          revokedAt: null,
-          distributorId: null,
-          staffRole: typ === 'staff' ? 'distributor_admin' : null,
-          permissions: [],
-          mustChangePassword: false,
-        },
-      }),
-    rememberLive: () => Promise.resolve(),
-    deny: () => Promise.resolve(),
-    invalidateLive: () => Promise.resolve(),
-    breakerState: () => 'closed',
-    pgFallbackTotal: () => 0,
-    pgLookupsFor: () => 0,
-  };
-}
 
 export function denyKey(sid: string): string {
   return `sess:deny:${sid}`;

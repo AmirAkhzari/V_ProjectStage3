@@ -8,6 +8,11 @@ import {
   SESSIONS_REVOKED_EVENT_VERSION,
   type SessionRevokeReason,
 } from '../../events.js';
+import {
+  applyLockTimeout,
+  lockSessionsThenTokensThenAccount,
+  withRetryableTx,
+} from './lockOrder.js';
 
 interface LookupRow {
   sid: string;
@@ -54,25 +59,49 @@ export class PgSessionStore implements SessionReader {
 
 export async function revokeAccountSessions(
   pool: pg.Pool,
-  input: { accountId: string; reason: SessionRevokeReason; now?: Date },
-): Promise<{ sids: string[]; familyIds: string[] }> {
-  return withRetryableTx(pool, (client) => revokeAccountSessionsInTx(client, input));
+  input: {
+    accountId: string;
+    reason: SessionRevokeReason;
+    now?: Date;
+    lockTimeout?: string;
+    onLockRetry?: () => void;
+  },
+): Promise<{ sids: string[]; familyIds: string[]; lockRetries: number }> {
+  const { value, lockRetries } = await withRetryableTx(
+    pool,
+    (client) => revokeAccountSessionsInTx(client, input),
+    input.onLockRetry,
+  );
+  return { ...value, lockRetries };
 }
 
 export async function deactivateAccountAtomic(
   pool: pg.Pool,
-  input: { accountId: string; now?: Date },
-): Promise<{ sids: string[]; familyIds: string[] }> {
-  return withRetryableTx(pool, async (client) => {
-    await client.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
-      input.accountId,
-    ]);
-    return revokeAccountSessionsInTx(client, {
-      accountId: input.accountId,
-      reason: 'deactivated',
-      ...(input.now ? { now: input.now } : {}),
-    });
-  });
+  input: { accountId: string; now?: Date; lockTimeout?: string; onLockRetry?: () => void },
+): Promise<{ sids: string[]; familyIds: string[]; lockRetries: number }> {
+  const { value, lockRetries } = await withRetryableTx(
+    pool,
+    async (client) => {
+      await applyLockTimeout(client, input.lockTimeout);
+      await lockSessionsThenTokensThenAccount(client, {
+        kind: 'account',
+        accountId: input.accountId,
+        lockAccount: true,
+      });
+      await client.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
+        input.accountId,
+      ]);
+      return revokeAccountSessionsInTx(client, {
+        accountId: input.accountId,
+        reason: 'deactivated',
+        alreadyLocked: true,
+        ...(input.now ? { now: input.now } : {}),
+        ...(input.lockTimeout ? { lockTimeout: input.lockTimeout } : {}),
+      });
+    },
+    input.onLockRetry,
+  );
+  return { ...value, lockRetries };
 }
 
 export async function lookupAccountStatus(
@@ -90,27 +119,30 @@ export async function lookupAccountStatus(
 
 async function revokeAccountSessionsInTx(
   client: pg.PoolClient,
-  input: { accountId: string; reason: SessionRevokeReason; now?: Date },
+  input: {
+    accountId: string;
+    reason: SessionRevokeReason;
+    now?: Date;
+    lockTimeout?: string;
+    alreadyLocked?: boolean;
+  },
 ): Promise<{ sids: string[]; familyIds: string[] }> {
   const now = input.now ?? new Date();
-  await client.query('SELECT set_config($1, $2, true)', ['lock_timeout', '2s']);
+  if (!input.alreadyLocked) {
+    await applyLockTimeout(client, input.lockTimeout);
+    await lockSessionsThenTokensThenAccount(client, {
+      kind: 'account',
+      accountId: input.accountId,
+      lockAccount: true,
+    });
+  }
   const sessions = await client.query<{ sid: string; family_id: string }>(
     `SELECT sid, family_id FROM identity.sessions
       WHERE account_id = $1 AND revoked_at IS NULL
-      ORDER BY sid
-      FOR UPDATE`,
+      ORDER BY sid`,
     [input.accountId],
   );
   const sids = sessions.rows.map((row) => row.sid);
-  if (sids.length > 0) {
-    await client.query(
-      `SELECT hash FROM identity.refresh_tokens
-        WHERE sid = ANY($1::uuid[])
-        ORDER BY hash
-        FOR UPDATE`,
-      [sids],
-    );
-  }
   await client.query(
     `UPDATE identity.sessions
         SET revoked_at = $2, revoke_reason = $3
@@ -176,35 +208,6 @@ async function revokeAccountSessionsInTx(
   return { sids, familyIds };
 }
 
-async function withRetryableTx<T>(
-  pool: pg.Pool,
-  fn: (client: pg.PoolClient) => Promise<T>,
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await fn(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
-      lastError = error;
-      if (!isRetryableLockError(error) || attempt === 1) throw error;
-    } finally {
-      client.release();
-    }
-  }
-  throw lastError;
-}
-
-function isRetryableLockError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const code = 'code' in error ? error.code : undefined;
-  return code === '55P03' || code === '40P01';
-}
-
 export async function enqueuePendingDenies(
   client: pg.PoolClient,
   sids: readonly string[],
@@ -259,18 +262,40 @@ export async function markPendingDenyAttempt(
   );
 }
 
-/** Drain the durable deny outbox with bounded retries (A-11-1). Never throws. */
+export interface DrainLog {
+  error(bindings: Record<string, unknown>, message: string): void;
+}
+
+function publicError(error: unknown): { name: string; code?: string } {
+  const name = error instanceof Error ? error.name : 'Error';
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : undefined;
+  return code === undefined ? { name } : { name, code };
+}
+
+/** Drain the durable deny outbox with bounded retries (A-11-1 / N12-2). Never throws. */
 export async function drainPendingDenies(
   pool: pg.Pool,
   deny: (sids: readonly string[]) => Promise<void>,
+  log?: DrainLog,
 ): Promise<void> {
-  const sids = await listOpenPendingDenies(pool);
-  if (sids.length === 0) return;
   try {
-    await deny(sids);
-    await markPendingDeniesDone(pool, sids);
+    const sids = await listOpenPendingDenies(pool);
+    if (sids.length === 0) return;
+    try {
+      await deny(sids);
+      await markPendingDeniesDone(pool, sids);
+    } catch (error) {
+      try {
+        await markPendingDenyAttempt(pool, sids, error);
+      } catch (markError) {
+        log?.error({ err: publicError(markError) }, 'pending deny mark failed');
+      }
+    }
   } catch (error) {
-    await markPendingDenyAttempt(pool, sids, error);
+    log?.error({ err: publicError(error) }, 'pending deny drain failed');
   }
 }
 

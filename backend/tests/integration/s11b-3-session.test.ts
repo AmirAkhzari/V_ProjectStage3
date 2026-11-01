@@ -6,14 +6,19 @@ import { buildApp, type App } from '../../src/app.js';
 import { createIdentityApi } from '../../src/modules/identity/api.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
 import {
+  deactivateAccountAtomic,
   drainPendingDenies,
   listOpenPendingDenies,
   PgSessionStore,
+  revokeAccountSessions,
 } from '../../src/modules/identity/infra/session/pgSessionStore.js';
+import { isRetryableLockError } from '../../src/modules/identity/infra/session/lockOrder.js';
 import { EddsaAccessTokenService, generateEd25519Key } from '../../src/platform/auth/eddsa.js';
 import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.js';
 import {
   fallbackPoolOptions,
+  liveKey,
+  LIVE_TTL_SECONDS,
   PG_FALLBACK_POOL_MAX,
   RedisPgSessionAuthority,
 } from '../../src/platform/auth/sessionAuthority.js';
@@ -499,6 +504,157 @@ describe('S11b-3 session SoT + auth plugin', () => {
     expect(response.json()).toMatchObject({
       error: { code: 'VALIDATION_FAILED', details: { field: 'distributorId' } },
     });
+  });
+
+  it('N12-1: deactivate, logout-all and rotate share lock order; retry is used; no 40P01', async () => {
+    const { accountId, refreshToken } = await issueDriverAt();
+    await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'driver',
+    });
+    const holder = await identityPool.connect();
+    let retries = 0;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(
+        `SELECT sid FROM identity.sessions WHERE account_id = $1 ORDER BY sid FOR UPDATE`,
+        [accountId],
+      );
+      const revokeP = revokeAccountSessions(identityPool, {
+        accountId,
+        reason: 'logout_all',
+        lockTimeout: '100ms',
+        onLockRetry: () => {
+          retries += 1;
+        },
+      });
+      const deactivateP = deactivateAccountAtomic(identityPool, {
+        accountId,
+        lockTimeout: '100ms',
+        onLockRetry: () => {
+          retries += 1;
+        },
+      });
+      const rotateP = store.rotate(refreshToken, 'driver');
+      await new Promise((resolve) => setTimeout(resolve, 160));
+      await holder.query('COMMIT');
+      const settled = await Promise.allSettled([revokeP, deactivateP, rotateP]);
+      for (const result of settled) {
+        if (result.status === 'rejected') {
+          expect(isRetryableLockError(result.reason) && result.reason).toBeTruthy();
+          expect(
+            typeof result.reason === 'object' &&
+              result.reason !== null &&
+              'code' in result.reason &&
+              result.reason.code === '40P01',
+          ).toBe(false);
+        }
+      }
+      expect(retries).toBeGreaterThan(0);
+    } finally {
+      await holder.query('ROLLBACK').catch(() => {});
+      holder.release();
+    }
+
+    const second = await issueDriverAt();
+    const parallel = await Promise.allSettled([
+      deactivateAccountAtomic(identityPool, { accountId: second.accountId }),
+      revokeAccountSessions(identityPool, {
+        accountId: second.accountId,
+        reason: 'logout_all',
+      }),
+      store.rotate(second.refreshToken, 'driver'),
+    ]);
+    for (const result of parallel) {
+      if (result.status === 'rejected') {
+        expect(
+          typeof result.reason === 'object' &&
+            result.reason !== null &&
+            'code' in result.reason &&
+            result.reason.code === '40P01',
+        ).toBe(false);
+        throw result.reason;
+      }
+    }
+  });
+
+  it('N12-5: seeded live row + lost deny is 401 via PG', async () => {
+    const { accountId, token, sid } = await issueDriverAt();
+    expect(await redis.get(liveKey(sid))).not.toBeNull();
+    const losing = new RedisPgSessionAuthority(
+      createRedis('redis://127.0.0.1:1'),
+      new PgSessionStore(identityPool),
+      { denyAttempts: 1 },
+    );
+    await createIdentityApi(identityPool, losing, redis).revokeSubjectSessions({
+      accountId,
+      reason: 'logout_all',
+    });
+    expect(await redis.get(liveKey(sid))).not.toBeNull();
+    const isolated = await buildApp({
+      config: testConfig(),
+      verifier: jwt,
+      sessionAuthority: losing,
+      healthChecks: [],
+    });
+    try {
+      const response = await isolated.inject({
+        method: 'GET',
+        url: '/v1/driver/anything',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(losing.pgLookupsFor(sid)).toBeGreaterThan(0);
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('R11-2: lost deny without drain is 401 within 5s via live TTL + PG', async () => {
+    const { accountId, token, sid } = await issueDriverAt();
+    expect(await redis.get(liveKey(sid))).not.toBeNull();
+    const down = new RedisPgSessionAuthority(
+      createRedis('redis://127.0.0.1:1'),
+      new PgSessionStore(identityPool),
+      { denyAttempts: 1 },
+    );
+    await createIdentityApi(identityPool, down, redis).revokeSubjectSessions({
+      accountId,
+      reason: 'logout_all',
+    });
+    expect(await redis.get(liveKey(sid))).not.toBeNull();
+    const pending = await listOpenPendingDenies(identityPool);
+    expect(pending).toContain(sid);
+    const ttlAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(identityPool));
+    const isolated = await buildApp({
+      config: testConfig(),
+      verifier: jwt,
+      sessionAuthority: ttlAuthority,
+      healthChecks: [],
+    });
+    try {
+      const deadline = Date.now() + LIVE_TTL_SECONDS * 1000 + 500;
+      let status = 0;
+      while (Date.now() <= deadline) {
+        const response = await isolated.inject({
+          method: 'GET',
+          url: '/v1/driver/anything',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        status = response.statusCode;
+        if (status === 401) {
+          expect(response.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      expect(status).toBe(401);
+      expect(ttlAuthority.pgLookupsFor(sid)).toBeGreaterThan(0);
+    } finally {
+      await isolated.close();
+    }
   });
 
   it('A-11-1: seed live, revoke while Redis is down, restore, 401 within 5s', async () => {

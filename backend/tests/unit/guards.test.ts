@@ -3,11 +3,9 @@ import Fastify from 'fastify';
 import { buildApp, type App } from '../../src/app.js';
 import { createRouteGroup } from '../../src/http/group.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
-import {
-  allowAllSessionAuthority,
-  type SessionAuthority,
-} from '../../src/platform/auth/sessionAuthority.js';
+import type { SessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
 import { testConfig } from '../helpers/config.js';
+import { allowAllSessionAuthority } from '../helpers/sessionAuthority.js';
 
 const claims = (typ: AccessClaims['typ']): AccessClaims => ({
   sub: 'user-1',
