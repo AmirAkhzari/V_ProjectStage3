@@ -11,6 +11,9 @@ declare module 'fastify' {
     tenant?: TenantContext;
     permissions?: readonly string[];
   }
+  interface FastifyContextConfig {
+    sensitive?: boolean;
+  }
 }
 
 function bearerToken(header: string | undefined): string | undefined {
@@ -20,14 +23,16 @@ function bearerToken(header: string | undefined): string | undefined {
 }
 
 export interface SubjectGuardOptions {
-  sessionAuthority?: SessionAuthority;
+  sessionAuthority: SessionAuthority;
+  /** Group-level fresh/PG-only check (A-11-2). Per-route `config.sensitive` also applies. */
+  fresh?: boolean;
 }
 
 /** Route-group guard: JWT bound to the group, then sid / session_version / deny-set. */
 export function subjectGuard(
   expected: SubjectType,
   verifier: AccessTokenVerifier,
-  options: SubjectGuardOptions = {},
+  options: SubjectGuardOptions,
 ): onRequestAsyncHookHandler {
   return async (request, reply) => {
     const token = bearerToken(request.headers.authorization);
@@ -43,29 +48,34 @@ export function subjectGuard(
       throw new AppError('TOKEN_TYPE_MISMATCH', 401, 'Token type not accepted on this route group');
     }
 
-    if (options.sessionAuthority) {
-      const decision = await options.sessionAuthority.check(claims.sid, claims.sv);
-      if (decision.status === 'unavailable') {
-        void reply.header('retry-after', '5');
-        throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
-          retryAfter: 5,
-        });
-      }
-      if (decision.status === 'inactive' && expected === 'driver') {
-        throw new AppError('driver_inactive', 403, 'Driver is inactive');
-      }
-      if (decision.status !== 'active') {
-        throw new AppError('SESSION_REVOKED', 401, 'Session revoked');
-      }
-      const resolved = principalToTenant(
-        claims,
-        decision.row,
-        request.headers['x-scope-distributor'],
-      );
-      request.tenant = resolved.tenant;
-      request.permissions = resolved.permissions;
+    const fresh = options.fresh === true || request.routeOptions.config.sensitive === true;
+    const decision = await options.sessionAuthority.check(
+      claims.sid,
+      claims.sv,
+      fresh ? { fresh: true } : undefined,
+    );
+    if (decision.status === 'unavailable') {
+      void reply.header('retry-after', '5');
+      throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+        retryAfter: 5,
+      });
     }
-
+    if (decision.status === 'inactive' && expected === 'driver') {
+      throw new AppError('driver_inactive', 403, 'Driver is inactive');
+    }
+    if (decision.status !== 'active') {
+      throw new AppError('SESSION_REVOKED', 401, 'Session revoked');
+    }
+    if (decision.row.accountId !== claims.sub || decision.row.typ !== claims.typ) {
+      throw new AppError('SESSION_REVOKED', 401, 'Session revoked');
+    }
+    const resolved = principalToTenant(
+      claims,
+      decision.row,
+      request.headers['x-scope-distributor'],
+    );
+    request.tenant = resolved.tenant;
+    request.permissions = resolved.permissions;
     request.subject = claims;
   };
 }

@@ -43,6 +43,13 @@
       "when": 1793542112000,
       "tag": "0005_s11b3_staff_login",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793542800000,
+      "tag": "0006_s11b3_pending_denies",
+      "breakpoints": true
     }
   ]
 }

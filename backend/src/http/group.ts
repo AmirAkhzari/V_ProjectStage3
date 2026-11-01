@@ -1,9 +1,9 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { subjectGuard } from '../platform/auth/guards.js';
 import type { SessionAuthority } from '../platform/auth/sessionAuthority.js';
 import type { AccessTokenVerifier, SubjectType } from '../platform/auth/jwt.js';
 import { AppError } from '../platform/http/errors.js';
-import { isListedPublicRoute } from '../platform/http/publicRoutes.js';
+import { isAuthIssuanceRoute, isListedPublicRoute } from '../platform/http/publicRoutes.js';
 import { rejectClientIdentity } from '../platform/http/rejectClientIdentity.js';
 import { rejectClientPrice } from '../platform/http/rejectClientPrice.js';
 import type { ModuleDefinition, RouteGroup } from '../platform/modules.js';
@@ -11,13 +11,20 @@ import type { ModuleDefinition, RouteGroup } from '../platform/modules.js';
 export interface RouteGroupOptions {
   modules: readonly ModuleDefinition[];
   verifier: AccessTokenVerifier;
-  sessionAuthority?: SessionAuthority;
+  sessionAuthority: SessionAuthority;
+  assertIssuance: () => Promise<void>;
 }
 
 export interface RouteGroupSpec {
   group: RouteGroup;
   prefix: `/v1/${RouteGroup}`;
   subject: SubjectType;
+  /** Always hit PG for this group (C11 / B83 / finance / logout-all). */
+  sensitive?: boolean;
+}
+
+function requestPathOf(request: FastifyRequest): string {
+  return request.url.split('?')[0] ?? '';
 }
 
 /**
@@ -25,18 +32,26 @@ export interface RouteGroupSpec {
  * The guard runs before every route in the group and fails closed with the deny-all verifier.
  */
 export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<RouteGroupOptions> {
-  return async (group, { modules, verifier, sessionAuthority }) => {
-    const guard = subjectGuard(
-      spec.subject,
-      verifier,
-      sessionAuthority ? { sessionAuthority } : {},
-    );
+  return async (group, { modules, verifier, sessionAuthority, assertIssuance }) => {
+    const guard = subjectGuard(spec.subject, verifier, {
+      sessionAuthority,
+      ...(spec.sensitive === true ? { fresh: true } : {}),
+    });
     group.addHook('onRequest', async function skipPublicThenGuard(request, reply) {
       const registered = request.routeOptions.url ?? '';
       const routePath = registered.startsWith(spec.prefix)
         ? registered
         : `${spec.prefix}${registered}`;
-      if (isListedPublicRoute(request.method, routePath)) return;
+      const requestPath = requestPathOf(request);
+      if (isAuthIssuanceRoute(request.method, requestPath)) {
+        await assertIssuance();
+      }
+      if (
+        isListedPublicRoute(request.method, requestPath) ||
+        isListedPublicRoute(request.method, routePath)
+      ) {
+        return;
+      }
       await guard.call(this, request, reply);
     });
     group.addHook('preValidation', rejectClientIdentity);

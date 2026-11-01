@@ -37,3 +37,17 @@ export const PUBLIC_OPERATION_IDS: ReadonlySet<string> = new Set(
 export function isListedPublicRoute(method: string, path: string): boolean {
   return PUBLIC_ROUTES.some((route) => route.method === method && route.path === path);
 }
+
+/** AUTH-AV-01 / SESS-05 issuance paths, including C11 which is not public. */
+export const AUTH_ISSUANCE_PATHS: readonly { method: HttpMethod; path: string }[] = [
+  { method: 'POST', path: '/v1/app/auth/otp/send' },
+  { method: 'POST', path: '/v1/app/auth/otp/verify' },
+  { method: 'POST', path: '/v1/admin/auth/otp/send' },
+  { method: 'POST', path: '/v1/admin/auth/otp/verify' },
+  { method: 'POST', path: '/v1/driver/auth/login' },
+  { method: 'POST', path: '/v1/driver/auth/password' },
+];
+
+export function isAuthIssuanceRoute(method: string, path: string): boolean {
+  return AUTH_ISSUANCE_PATHS.some((route) => route.method === method && route.path === path);
+}

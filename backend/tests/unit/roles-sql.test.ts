@@ -129,6 +129,24 @@ describe('0005_s11b3_staff_login.sql', () => {
     expect(sql).toMatch(/REVOKE ALL ON FUNCTION identity\.lookup_staff_login\(text\) FROM PUBLIC/);
     expect(sql).toMatch(/REVOKE ALL ON FUNCTION identity\.lookup_session\(uuid\) FROM PUBLIC/);
     expect(sql).toMatch(/CREATE POLICY staff_memberships_login_lookup/);
+    expect(sql).toMatch(/accounts_typ_check/);
+    expect(sql).toMatch(/accounts_status_check/);
+    expect(sql).toMatch(/staff_memberships_role_check/);
+    expect(sql).toMatch(/staff_memberships_sa_distributor_check/);
     expect(sql).not.toMatch(/GRANT EXECUTE .* TO vproject_app/);
+  });
+});
+
+describe('0006_s11b3_pending_denies.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0006_s11b3_pending_denies.sql'), 'utf8');
+
+  it('FORCE RLS and grants identity-only on pending_session_denies', () => {
+    expect(sql).toMatch(/ALTER TABLE identity\.pending_session_denies FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/CREATE POLICY pending_session_denies_identity/);
+    expect(sql).toMatch(
+      /GRANT SELECT, INSERT, UPDATE ON TABLE identity\.pending_session_denies TO vproject_identity/,
+    );
+    expect(sql).not.toMatch(/GRANT .* ON TABLE identity\.pending_session_denies TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
   });
 });

@@ -4,9 +4,10 @@ import type pg from 'pg';
 import { runMigrations } from '../../src/platform/db/migrate.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
 
-/** N10-1: register before container stop so 57P01 on closing clients is not an unhandled error. */
+/** N10-1: swallow only admin-terminate; every other pool error rethrows (A-11-11). */
 export function ignoreAdminTerminate(err: Error & { code?: string }): void {
   if (err.code === '57P01') return;
+  throw err;
 }
 
 export function attachPgTeardownGuard(pool: pg.Pool): void {

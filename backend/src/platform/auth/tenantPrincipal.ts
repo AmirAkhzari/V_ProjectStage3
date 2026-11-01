@@ -17,10 +17,14 @@ export function principalToTenant(
   snapshot: SessionSnapshot,
   scopeHeader: string | string[] | undefined,
 ): ResolvedPrincipal {
+  if (claims.sub !== snapshot.accountId || claims.typ !== snapshot.typ) {
+    throw new Error('claims/snapshot subject mismatch');
+  }
+
   const scoped =
     snapshot.staffRole === 'super_admin' ? parseScopeDistributorHeader(scopeHeader) : undefined;
 
-  if (claims.typ === 'staff' && snapshot.staffRole === 'super_admin') {
+  if (snapshot.typ === 'staff' && snapshot.staffRole === 'super_admin') {
     return {
       tenant: {
         subjectType: 'staff',
@@ -31,7 +35,7 @@ export function principalToTenant(
     };
   }
 
-  if (claims.typ === 'staff') {
+  if (snapshot.typ === 'staff') {
     return {
       tenant: {
         subjectType: 'staff',
@@ -42,13 +46,12 @@ export function principalToTenant(
     };
   }
 
-  if (claims.typ === 'driver') {
-    const distributorId = snapshot.distributorId ?? claims.did;
+  if (snapshot.typ === 'driver') {
     return {
       tenant: {
         subjectType: 'driver',
-        driverId: claims.sub,
-        ...(distributorId ? { distributorId } : {}),
+        driverId: snapshot.accountId,
+        ...(snapshot.distributorId ? { distributorId: snapshot.distributorId } : {}),
         isPlatform: false,
       },
       permissions: [],
@@ -58,7 +61,7 @@ export function principalToTenant(
   return {
     tenant: {
       subjectType: 'shopkeeper',
-      shopkeeperId: claims.sub,
+      shopkeeperId: snapshot.accountId,
       isPlatform: false,
     },
     permissions: [],

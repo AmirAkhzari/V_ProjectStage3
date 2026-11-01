@@ -9,6 +9,9 @@ describe('session TTL config', () => {
     expect(sessionTtlMs('driver').absoluteMs).toBe(10 * 60 * 60 * 1000);
     configureSessionTtl({ driverAbsoluteMs: 8 * 60 * 60 * 1000 });
     expect(sessionTtlMs('driver').absoluteMs).toBe(8 * 60 * 60 * 1000);
+    expect(() => configureSessionTtl({ driverAbsoluteMs: 11 * 60 * 60 * 1000 })).toThrow(
+      /only shorten/,
+    );
     configureSessionTtl({});
   });
 });

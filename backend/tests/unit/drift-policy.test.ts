@@ -31,9 +31,10 @@ describe('checkMigrationSql', () => {
   it('accepts the allow-listed platform and S-11b tables', () => {
     expect(checkMigrationSql(BASE)).toEqual([]);
     expect(ALLOWED_TABLES.has('identity.accounts')).toBe(true);
+    expect(ALLOWED_TABLES.has('identity.pending_session_denies')).toBe(true);
     expect(ALLOWED_TABLES.has('tenancy.distributors')).toBe(true);
     expect(ALLOWED_TABLES.has('customers.shopkeepers')).toBe(true);
-    expect(ALLOWED_TABLES.size).toBe(11);
+    expect(ALLOWED_TABLES.size).toBe(12);
   });
 
   it('rejects a domain CREATE TABLE', () => {

@@ -1,3 +1,23 @@
+ALTER TABLE identity.accounts
+  ADD CONSTRAINT accounts_typ_check
+  CHECK (typ IN ('shopkeeper', 'staff', 'driver'));
+--> statement-breakpoint
+ALTER TABLE identity.accounts
+  ADD CONSTRAINT accounts_status_check
+  CHECK (status IN ('active', 'inactive'));
+--> statement-breakpoint
+ALTER TABLE identity.sessions
+  ADD CONSTRAINT sessions_typ_check
+  CHECK (typ IN ('shopkeeper', 'staff', 'driver'));
+--> statement-breakpoint
+ALTER TABLE identity.staff_memberships
+  ADD CONSTRAINT staff_memberships_role_check
+  CHECK (role IN ('super_admin', 'distributor_admin'));
+--> statement-breakpoint
+ALTER TABLE identity.staff_memberships
+  ADD CONSTRAINT staff_memberships_sa_distributor_check
+  CHECK ((role = 'super_admin') = (distributor_id IS NULL));
+--> statement-breakpoint
 CREATE OR REPLACE FUNCTION identity.lookup_staff_login(p_phone text)
 RETURNS TABLE (
   account_id uuid,

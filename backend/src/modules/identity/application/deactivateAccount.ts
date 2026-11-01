@@ -1,6 +1,5 @@
 import type { SessionAuthority } from '../../../platform/auth/sessionAuthority.js';
-import { markAccountInactive } from '../infra/session/pgSessionStore.js';
-import { revokeSubjectSessions } from './revokeSessions.js';
+import { deactivateAccountAtomic, drainPendingDenies } from '../infra/session/pgSessionStore.js';
 import type pg from 'pg';
 
 export async function deactivateAccount(
@@ -8,6 +7,9 @@ export async function deactivateAccount(
   authority: SessionAuthority,
   accountId: string,
 ): Promise<{ sids: string[] }> {
-  await markAccountInactive(pool, accountId);
-  return revokeSubjectSessions(pool, authority, { accountId, reason: 'deactivated' });
+  const revoked = await deactivateAccountAtomic(pool, { accountId });
+  if (revoked.sids.length > 0) {
+    await drainPendingDenies(pool, (sids) => authority.deny(sids));
+  }
+  return { sids: revoked.sids };
 }

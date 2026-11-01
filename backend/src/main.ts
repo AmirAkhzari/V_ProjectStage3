@@ -4,7 +4,8 @@ import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
 import { assertStartupAdapters } from './platform/adapters.js';
 import { createJwtFromEnv } from './platform/auth/eddsa.js';
-import { PG_FALLBACK_POOL_MAX, RedisPgSessionAuthority } from './platform/auth/sessionAuthority.js';
+import { assertRedisForAuthIssuance } from './platform/auth/failClosed.js';
+import { fallbackPoolOptions, RedisPgSessionAuthority } from './platform/auth/sessionAuthority.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
 import { DB_ROLE_NAMES } from './platform/db/roles.js';
@@ -27,10 +28,7 @@ configureSessionTtl({
 const log = pino(pinoOptions(config));
 const db = createDb(config.DATABASE_URL_APP, { log });
 const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
-const sessionLookupPool = new pg.Pool({
-  connectionString: config.DATABASE_URL_IDENTITY,
-  max: PG_FALLBACK_POOL_MAX,
-});
+const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_IDENTITY));
 const redis = createRedis(config.REDIS_URL, log);
 const sessionAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(sessionLookupPool));
 const verifier = await createJwtFromEnv();
@@ -53,6 +51,7 @@ const app = await buildApp({
   config,
   verifier,
   sessionAuthority,
+  assertIssuance: () => assertRedisForAuthIssuance(redis),
   healthChecks: [
     postgresHealthCheck(db.pool),
     postgresHealthCheck(identityDb.pool, 'postgres_identity'),

@@ -11,7 +11,7 @@ Status:
 - **missing** — Foundation-level gap. After this slice: **0**.
 
 Totals (**17 exec**): **green 17 / partial 0 / missing 0**.  
-**exec-auth** this slice: **green 26** / **partial 8** / **pending 66**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
+**exec-auth** this slice: **green 25** / **partial 8** / **pending 67**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
 
 ## Exec mapping (17)
 
@@ -48,7 +48,7 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 
 ## exec-auth (100) — owner and slice (R-5)
 
-This slice: **green 26** / **partial 8** / **pending 66**. No login HTTP in S11b-3 (C1/A1/B1/C11 are S11b-4/5).
+This slice: **green 25** / **partial 8** / **pending 67**. No login HTTP in S11b-3 (C1/A1/B1/C11 are S11b-4/5). 25 = S11b-1 (2) + S11b-2 (7) + S11b-3 (15) + AUTH-RT-02-G3 (1).
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 

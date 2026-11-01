@@ -20,6 +20,7 @@ const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}
 /** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
 const IDENTITY_UNSCOPED = [
   'identity.accounts',
+  'identity.pending_session_denies',
   'identity.refresh_tokens',
   'identity.sessions',
 ] as const;
@@ -35,6 +36,7 @@ const S11B_TABLES = [
   'customers.shopkeepers',
   'identity.accounts',
   'identity.driver_credentials',
+  'identity.pending_session_denies',
   'identity.refresh_tokens',
   'identity.sessions',
   'identity.staff_memberships',

@@ -41,6 +41,18 @@ describe('loadApiConfig', () => {
     expect(config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS).toBe(10);
   });
 
+  it('11-13: rejects session TTL values above the policy caps', () => {
+    expect(() => loadApiConfig({ ...validApi, SESSION_TTL_SHOPKEEPER_SLIDING_DAYS: '31' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadApiConfig({ ...validApi, SESSION_TTL_STAFF_ABSOLUTE_DAYS: '8' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadApiConfig({ ...validApi, SESSION_TTL_DRIVER_ABSOLUTE_HOURS: '11' })).toThrow(
+      ConfigError,
+    );
+  });
+
   it('requires app and identity URLs, not worker or migrator', () => {
     expect(() => loadApiConfig(validApi)).not.toThrow();
     const issues = (() => {

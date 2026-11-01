@@ -40,4 +40,24 @@ describe('TEN-05-PLAT / SCOPE-SA-01 tenant mapping', () => {
     expect(da.tenant.isPlatform).toBe(false);
     expect(da.tenant.distributorId).toBe('d1');
   });
+
+  it('11-7: does not fall back to the token did and rejects a subject mismatch', () => {
+    const driver = principalToTenant(
+      { sub: 'drv-1', typ: 'driver', sid: 's3', sv: 0, did: 'from-token' },
+      {
+        ...sa,
+        sid: 's3',
+        accountId: 'drv-1',
+        typ: 'driver',
+        staffRole: null,
+        distributorId: null,
+      },
+      undefined,
+    );
+    expect(driver.tenant.distributorId).toBeUndefined();
+    expect(driver.tenant.driverId).toBe('drv-1');
+    expect(() =>
+      principalToTenant({ sub: 'other', typ: 'driver', sid: 's3', sv: 0 }, sa, undefined),
+    ).toThrow(/mismatch/);
+  });
 });

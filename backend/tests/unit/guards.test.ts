@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
 import { buildApp, type App } from '../../src/app.js';
+import { createRouteGroup } from '../../src/http/group.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
+import {
+  allowAllSessionAuthority,
+  type SessionAuthority,
+} from '../../src/platform/auth/sessionAuthority.js';
 import { testConfig } from '../helpers/config.js';
 
 const claims = (typ: AccessClaims['typ']): AccessClaims => ({
@@ -49,11 +55,70 @@ describe('route group guards', () => {
     expect(options.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
   });
 
+  it('A-11-3: a verifier without a session authority is rejected at boot', async () => {
+    await expect(
+      buildApp({
+        config: testConfig(),
+        healthChecks: [],
+        verifier: verifierOf('staff'),
+      }),
+    ).rejects.toThrow(/sessionAuthority is required/);
+  });
+
+  it('A-11-7: issuance inject path fail-closes through Fastify', async () => {
+    app = await buildApp({ config: testConfig(), healthChecks: [] });
+    const response = await app.inject({ method: 'POST', url: '/v1/driver/auth/login' });
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['retry-after']).toBeDefined();
+    expect(response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+  });
+
+  it('A-11-2: sensitive group option always hits PG', async () => {
+    let pgHits = 0;
+    const base = allowAllSessionAuthority('driver');
+    const authority: SessionAuthority = {
+      ...base,
+      check: async (sid, sv, opts) => {
+        if (opts?.fresh === true) {
+          pgHits += 1;
+          return { status: 'revoked', reason: 'fresh' };
+        }
+        return base.check(sid, sv);
+      },
+    };
+    const plugin = createRouteGroup({
+      group: 'driver',
+      prefix: '/v1/driver',
+      subject: 'driver',
+      sensitive: true,
+    });
+    const isolated = Fastify();
+    await isolated.register(plugin, {
+      prefix: '/v1/driver',
+      modules: [],
+      verifier: verifierOf('driver'),
+      sessionAuthority: authority,
+      assertIssuance: async () => undefined,
+    });
+    try {
+      const response = await isolated.inject({
+        method: 'GET',
+        url: '/v1/driver/payouts',
+        headers: { authorization: 'Bearer mock-token' },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(pgHits).toBe(1);
+    } finally {
+      await isolated.close();
+    }
+  });
+
   it('rejects a driver token on /v1/admin', async () => {
     app = await buildApp({
       config: testConfig(),
       healthChecks: [],
       verifier: verifierOf('driver'),
+      sessionAuthority: allowAllSessionAuthority('driver'),
     });
     const response = await app.inject({
       method: 'GET',
@@ -76,6 +141,7 @@ describe('route group guards', () => {
       config: testConfig(),
       healthChecks: [],
       verifier: verifierOf('shopkeeper'),
+      sessionAuthority: allowAllSessionAuthority('shopkeeper'),
     });
     const response =
       source === 'body'

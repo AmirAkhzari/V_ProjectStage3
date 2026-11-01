@@ -42,7 +42,7 @@ export class PgSessionStore implements SessionReader {
       typ: row.typ as SubjectType,
       familyId: row.family_id,
       sessionVersion: row.session_version,
-      accountStatus: row.account_status === 'inactive' ? 'inactive' : 'active',
+      accountStatus: row.account_status === 'active' ? 'active' : 'inactive',
       revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
       distributorId: row.distributor_id,
       staffRole,
@@ -56,89 +56,23 @@ export async function revokeAccountSessions(
   pool: pg.Pool,
   input: { accountId: string; reason: SessionRevokeReason; now?: Date },
 ): Promise<{ sids: string[]; familyIds: string[] }> {
-  const now = input.now ?? new Date();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const sessions = await client.query<{ sid: string; family_id: string }>(
-      `SELECT sid, family_id FROM identity.sessions
-        WHERE account_id = $1 AND revoked_at IS NULL
-        FOR UPDATE`,
-      [input.accountId],
-    );
-    await client.query(
-      `UPDATE identity.sessions
-          SET revoked_at = $2, revoke_reason = $3
-        WHERE account_id = $1 AND revoked_at IS NULL`,
-      [input.accountId, now, input.reason],
-    );
-    await client.query(
-      `UPDATE identity.refresh_tokens t
-          SET rotated_at = COALESCE(t.rotated_at, $2), used_at = COALESCE(t.used_at, $2)
-         FROM identity.sessions s
-        WHERE s.sid = t.sid AND s.account_id = $1`,
-      [input.accountId, now],
-    );
-    await client.query(
-      `UPDATE identity.accounts SET session_version = session_version + 1 WHERE id = $1`,
-      [input.accountId],
-    );
-    const distributor = await client.query<{ distributor_id: string | null }>(
-      `SELECT distributor_id FROM identity.lookup_account_scope($1)`,
-      [input.accountId],
-    );
-    const distributorId = distributor.rows[0]?.distributor_id ?? null;
-    const familyIds = [...new Set(sessions.rows.map((row) => row.family_id))];
-    for (const familyId of familyIds) {
-      const sid = sessions.rows.find((row) => row.family_id === familyId)?.sid ?? familyId;
-      await client.query(
-        `INSERT INTO platform.audit_log (
-           id, at, actor_type, actor_id, actor_name, distributor_id,
-           action, entity, entity_id, data, ip
-         ) VALUES ($1, $2, 'system', $3, 'identity', $4, $5, 'session', $6, $7, NULL)`,
-        [
-          randomUUID(),
-          now,
-          input.accountId,
-          distributorId,
-          input.reason,
-          familyId,
-          JSON.stringify({ sid, familyId, reason: input.reason }),
-        ],
-      );
-      await client.query(
-        `INSERT INTO platform.outbox_events (
-           id, event_type, event_version, aggregate_type, aggregate_id, distributor_id,
-           payload, occurred_at, attempts
-         ) VALUES ($1, $2, $3, 'session', $4, $5, $6, $7, 0)`,
-        [
-          randomUUID(),
-          SESSIONS_REVOKED_EVENT,
-          SESSIONS_REVOKED_EVENT_VERSION,
-          familyId,
-          distributorId,
-          JSON.stringify({
-            familyId,
-            sid,
-            accountId: input.accountId,
-            reason: input.reason,
-          }),
-          now,
-        ],
-      );
-    }
-    await client.query('COMMIT');
-    return { sids: sessions.rows.map((row) => row.sid), familyIds };
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  return withRetryableTx(pool, (client) => revokeAccountSessionsInTx(client, input));
 }
 
-export async function markAccountInactive(pool: pg.Pool, accountId: string): Promise<void> {
-  await pool.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [accountId]);
+export async function deactivateAccountAtomic(
+  pool: pg.Pool,
+  input: { accountId: string; now?: Date },
+): Promise<{ sids: string[]; familyIds: string[] }> {
+  return withRetryableTx(pool, async (client) => {
+    await client.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
+      input.accountId,
+    ]);
+    return revokeAccountSessionsInTx(client, {
+      accountId: input.accountId,
+      reason: 'deactivated',
+      ...(input.now ? { now: input.now } : {}),
+    });
+  });
 }
 
 export async function lookupAccountStatus(
@@ -151,7 +85,193 @@ export async function lookupAccountStatus(
   );
   const status = found.rows[0]?.status;
   if (status === undefined) return null;
-  return status === 'inactive' ? 'inactive' : 'active';
+  return status === 'active' ? 'active' : 'inactive';
+}
+
+async function revokeAccountSessionsInTx(
+  client: pg.PoolClient,
+  input: { accountId: string; reason: SessionRevokeReason; now?: Date },
+): Promise<{ sids: string[]; familyIds: string[] }> {
+  const now = input.now ?? new Date();
+  await client.query('SELECT set_config($1, $2, true)', ['lock_timeout', '2s']);
+  const sessions = await client.query<{ sid: string; family_id: string }>(
+    `SELECT sid, family_id FROM identity.sessions
+      WHERE account_id = $1 AND revoked_at IS NULL
+      ORDER BY sid
+      FOR UPDATE`,
+    [input.accountId],
+  );
+  const sids = sessions.rows.map((row) => row.sid);
+  if (sids.length > 0) {
+    await client.query(
+      `SELECT hash FROM identity.refresh_tokens
+        WHERE sid = ANY($1::uuid[])
+        ORDER BY hash
+        FOR UPDATE`,
+      [sids],
+    );
+  }
+  await client.query(
+    `UPDATE identity.sessions
+        SET revoked_at = $2, revoke_reason = $3
+      WHERE account_id = $1 AND revoked_at IS NULL`,
+    [input.accountId, now, input.reason],
+  );
+  await client.query(
+    `UPDATE identity.refresh_tokens t
+        SET rotated_at = COALESCE(t.rotated_at, $2), used_at = COALESCE(t.used_at, $2)
+       FROM identity.sessions s
+      WHERE s.sid = t.sid AND s.account_id = $1`,
+    [input.accountId, now],
+  );
+  await client.query(
+    `UPDATE identity.accounts SET session_version = session_version + 1 WHERE id = $1`,
+    [input.accountId],
+  );
+  const distributor = await client.query<{ distributor_id: string | null }>(
+    `SELECT distributor_id FROM identity.lookup_account_scope($1)`,
+    [input.accountId],
+  );
+  const distributorId = distributor.rows[0]?.distributor_id ?? null;
+  const familyIds = [...new Set(sessions.rows.map((row) => row.family_id))];
+  await enqueuePendingDenies(client, sids, now);
+  for (const familyId of familyIds) {
+    const sid = sessions.rows.find((row) => row.family_id === familyId)?.sid ?? familyId;
+    await client.query(
+      `INSERT INTO platform.audit_log (
+         id, at, actor_type, actor_id, actor_name, distributor_id,
+         action, entity, entity_id, data, ip
+       ) VALUES ($1, $2, 'system', $3, 'identity', $4, $5, 'session', $6, $7, NULL)`,
+      [
+        randomUUID(),
+        now,
+        input.accountId,
+        distributorId,
+        input.reason,
+        familyId,
+        JSON.stringify({ sid, familyId, reason: input.reason }),
+      ],
+    );
+    await client.query(
+      `INSERT INTO platform.outbox_events (
+         id, event_type, event_version, aggregate_type, aggregate_id, distributor_id,
+         payload, occurred_at, attempts
+       ) VALUES ($1, $2, $3, 'session', $4, $5, $6, $7, 0)`,
+      [
+        randomUUID(),
+        SESSIONS_REVOKED_EVENT,
+        SESSIONS_REVOKED_EVENT_VERSION,
+        familyId,
+        distributorId,
+        JSON.stringify({
+          familyId,
+          sid,
+          accountId: input.accountId,
+          reason: input.reason,
+        }),
+        now,
+      ],
+    );
+  }
+  return { sids, familyIds };
+}
+
+async function withRetryableTx<T>(
+  pool: pg.Pool,
+  fn: (client: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      lastError = error;
+      if (!isRetryableLockError(error) || attempt === 1) throw error;
+    } finally {
+      client.release();
+    }
+  }
+  throw lastError;
+}
+
+function isRetryableLockError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? error.code : undefined;
+  return code === '55P03' || code === '40P01';
+}
+
+export async function enqueuePendingDenies(
+  client: pg.PoolClient,
+  sids: readonly string[],
+  now: Date,
+): Promise<void> {
+  for (const sid of sids) {
+    await client.query(
+      `INSERT INTO identity.pending_session_denies (sid, enqueued_at, attempts)
+       VALUES ($1, $2, 0)
+       ON CONFLICT (sid) DO UPDATE
+         SET enqueued_at = EXCLUDED.enqueued_at,
+             attempts = 0,
+             last_error = NULL,
+             done_at = NULL`,
+      [sid, now],
+    );
+  }
+}
+
+export async function listOpenPendingDenies(pool: pg.Pool, maxAttempts = 3): Promise<string[]> {
+  const found = await pool.query<{ sid: string }>(
+    `SELECT sid FROM identity.pending_session_denies
+      WHERE done_at IS NULL AND attempts < $1
+      ORDER BY enqueued_at`,
+    [maxAttempts],
+  );
+  return found.rows.map((row) => row.sid);
+}
+
+export async function markPendingDeniesDone(pool: pg.Pool, sids: readonly string[]): Promise<void> {
+  if (sids.length === 0) return;
+  await pool.query(
+    `UPDATE identity.pending_session_denies
+        SET done_at = now()
+      WHERE sid = ANY($1::uuid[]) AND done_at IS NULL`,
+    [sids],
+  );
+}
+
+export async function markPendingDenyAttempt(
+  pool: pg.Pool,
+  sids: readonly string[],
+  error: unknown,
+): Promise<void> {
+  if (sids.length === 0) return;
+  const message = error instanceof Error ? error.message : 'deny failed';
+  await pool.query(
+    `UPDATE identity.pending_session_denies
+        SET attempts = attempts + 1, last_error = $2
+      WHERE sid = ANY($1::uuid[]) AND done_at IS NULL`,
+    [sids, message],
+  );
+}
+
+/** Drain the durable deny outbox with bounded retries (A-11-1). Never throws. */
+export async function drainPendingDenies(
+  pool: pg.Pool,
+  deny: (sids: readonly string[]) => Promise<void>,
+): Promise<void> {
+  const sids = await listOpenPendingDenies(pool);
+  if (sids.length === 0) return;
+  try {
+    await deny(sids);
+    await markPendingDeniesDone(pool, sids);
+  } catch (error) {
+    await markPendingDenyAttempt(pool, sids, error);
+  }
 }
 
 function asStaffRole(value: string | null): StaffRole | null {

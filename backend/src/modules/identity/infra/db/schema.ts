@@ -102,3 +102,17 @@ export const refreshTokens = identitySchema.table(
     ),
   ],
 );
+
+export const pendingSessionDenies = identitySchema.table(
+  'pending_session_denies',
+  {
+    sid: uuid('sid')
+      .primaryKey()
+      .references(() => sessions.sid),
+    enqueuedAt: timestamp('enqueued_at', { withTimezone: true, mode: 'date' }).notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    doneAt: timestamp('done_at', { withTimezone: true, mode: 'date' }),
+  },
+  (table) => [index('pending_session_denies_open_idx').on(table.enqueuedAt)],
+);

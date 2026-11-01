@@ -24,6 +24,7 @@ export const ALLOWED_TABLES = new Set([
   'identity.staff_memberships',
   'identity.sessions',
   'identity.refresh_tokens',
+  'identity.pending_session_denies',
   'tenancy.distributors',
   'customers.shopkeepers',
 ]);

@@ -21,10 +21,15 @@ import {
   REFRESH_REUSE_AUDIT_ACTION,
   sessionsRevokedEvent,
 } from '../../events.js';
+import { drainPendingDenies, enqueuePendingDenies } from '../session/pgSessionStore.js';
 import { generateRefreshToken, hashRefreshToken } from './refreshHash.js';
 
 export interface RefreshStoreHooks {
-  onSidsRevoked?(sids: readonly string[]): Promise<void>;
+  onSidsRevoked: (sids: readonly string[]) => Promise<void>;
+}
+
+function requiredOnSidsRevoked(): Promise<void> {
+  return Promise.reject(new Error('onSidsRevoked is required'));
 }
 
 interface LockedRefreshRow {
@@ -53,7 +58,7 @@ interface LockedRefreshRow {
 export class PgRefreshTokenStore implements RefreshTokenStore {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly hooks: RefreshStoreHooks = {},
+    private readonly hooks: RefreshStoreHooks = { onSidsRevoked: requiredOnSidsRevoked },
   ) {}
 
   async issue(input: RefreshIssueInput, clock: Clock = systemClock): Promise<RefreshIssueResult> {
@@ -102,10 +107,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         const found = await client.query<LockedRefreshRow>(
           `SELECT t.hash, t.family_id, t.sid, t.rotated_at, t.successor, t.used_at, t.grace_used_at,
                 s.typ, s.created_at, s.last_used_at, s.absolute_expires_at, s.revoked_at, s.account_id
-           FROM identity.refresh_tokens t
-           JOIN identity.sessions s ON s.sid = t.sid
+           FROM identity.sessions s
+           JOIN identity.refresh_tokens t ON t.sid = s.sid
           WHERE t.hash = $1
-          FOR UPDATE OF t, s`,
+          ORDER BY s.sid, t.hash
+          FOR UPDATE OF s, t`,
           [hash],
         );
         const row = found.rows[0];
@@ -131,7 +137,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         return { result: await this.claimRotation(client, row, now) };
       });
       if (outcome.revokedSids && outcome.revokedSids.length > 0) {
-        await this.hooks.onSidsRevoked?.(outcome.revokedSids);
+        await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids));
       }
       return outcome.result;
     } catch (error) {
@@ -253,8 +259,17 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     input: { familyId: string; sid: string; accountId: string; now: Date },
   ): Promise<string[]> {
     const sids = await client.query<{ sid: string }>(
-      `SELECT sid FROM identity.sessions WHERE family_id = $1`,
+      `SELECT sid FROM identity.sessions WHERE family_id = $1 ORDER BY sid FOR UPDATE`,
       [input.familyId],
+    );
+    await client.query(
+      `SELECT hash FROM identity.refresh_tokens WHERE family_id = $1 ORDER BY hash FOR UPDATE`,
+      [input.familyId],
+    );
+    await enqueuePendingDenies(
+      client,
+      sids.rows.map((row) => row.sid),
+      input.now,
     );
     await client.query(
       `UPDATE identity.sessions
@@ -267,10 +282,6 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           SET rotated_at = COALESCE(rotated_at, $2), used_at = COALESCE(used_at, $2)
         WHERE family_id = $1`,
       [input.familyId, input.now],
-    );
-    await client.query(
-      `UPDATE identity.accounts SET session_version = session_version + 1 WHERE id = $1`,
-      [input.accountId],
     );
     const distributorId = await lookupDistributorId(client, input.accountId);
     await insertAudit(client, {
@@ -330,7 +341,11 @@ function isPgLockTimeout(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const code = 'code' in error ? error.code : undefined;
   const message = 'message' in error ? error.message : undefined;
-  return code === '55P03' || (typeof message === 'string' && /lock timeout/i.test(message));
+  return (
+    code === '55P03' ||
+    code === '40P01' ||
+    (typeof message === 'string' && /lock timeout|deadlock detected/i.test(message))
+  );
 }
 
 async function lookupDistributorId(

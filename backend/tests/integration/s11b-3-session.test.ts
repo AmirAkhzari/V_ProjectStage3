@@ -5,10 +5,15 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { buildApp, type App } from '../../src/app.js';
 import { createIdentityApi } from '../../src/modules/identity/api.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
-import { PgSessionStore } from '../../src/modules/identity/infra/session/pgSessionStore.js';
+import {
+  drainPendingDenies,
+  listOpenPendingDenies,
+  PgSessionStore,
+} from '../../src/modules/identity/infra/session/pgSessionStore.js';
 import { EddsaAccessTokenService, generateEd25519Key } from '../../src/platform/auth/eddsa.js';
 import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.js';
 import {
+  fallbackPoolOptions,
   PG_FALLBACK_POOL_MAX,
   RedisPgSessionAuthority,
 } from '../../src/platform/auth/sessionAuthority.js';
@@ -45,10 +50,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
     redisBox = await new RedisContainer('redis:7-alpine').start();
-    identityPool = new pg.Pool({
-      connectionString: pgRoles.identityUrl,
-      max: PG_FALLBACK_POOL_MAX,
-    });
+    identityPool = new pg.Pool(fallbackPoolOptions(pgRoles.identityUrl));
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     appPool = new pg.Pool({ connectionString: pgRoles.appUrl });
     attachPgTeardownGuard(identityPool);
@@ -295,8 +297,30 @@ describe('S11b-3 session SoT + auth plugin', () => {
 
   it('AUTH-AV-02: 5 Redis errors open the breaker; half-open allows a single probe', async () => {
     let now = 1_000;
+    let gets = 0;
+    let redisDown = true;
     const failing = new RedisPgSessionAuthority(
-      createRedis('redis://127.0.0.1:1'),
+      {
+        status: 'ready',
+        get: async () => {
+          gets += 1;
+          if (redisDown) throw new Error('down');
+          return null;
+        },
+        set: async () => 'OK',
+        incr: async () => 0,
+        pipeline() {
+          return {
+            set() {
+              return this;
+            },
+            del() {
+              return this;
+            },
+            exec: async () => [[null, 'OK']],
+          };
+        },
+      } as never,
       { lookup: async () => null },
       { clock: { now: () => now } },
     );
@@ -305,10 +329,18 @@ describe('S11b-3 session SoT + auth plugin', () => {
     }
     expect(failing.breakerState()).toBe('open');
     const lookups = failing.pgFallbackTotal();
+    const getsWhileOpen = gets;
     await failing.check(randomUUID());
     expect(failing.pgFallbackTotal()).toBe(lookups + 1);
+    expect(gets).toBe(getsWhileOpen);
     now += 30_001;
     expect(failing.breakerState()).toBe('half_open');
+    redisDown = false;
+    const first = failing.check(randomUUID());
+    const second = failing.check(randomUUID());
+    await Promise.all([first, second]);
+    expect(gets).toBe(getsWhileOpen + 2);
+    expect(failing.breakerState()).toBe('closed');
   });
 
   it('AUTH-DI-01: inactive before revoke is 403; after revoke 401; issuance never driver_inactive', async () => {
@@ -467,6 +499,179 @@ describe('S11b-3 session SoT + auth plugin', () => {
     expect(response.json()).toMatchObject({
       error: { code: 'VALIDATION_FAILED', details: { field: 'distributorId' } },
     });
+  });
+
+  it('A-11-1: seed live, revoke while Redis is down, restore, 401 within 5s', async () => {
+    const { accountId, token, sid } = await issueDriverAt();
+    const box = await new RedisContainer('redis:7-alpine').start();
+    const liveRedis = createRedis(box.getConnectionUrl());
+    await liveRedis.connect();
+    const liveAuthority = new RedisPgSessionAuthority(liveRedis, new PgSessionStore(identityPool));
+    const snapshot = await new PgSessionStore(identityPool).lookup(sid);
+    if (!snapshot) throw new Error('missing snapshot');
+    await liveAuthority.rememberLive(snapshot);
+    const downAuthority = new RedisPgSessionAuthority(
+      createRedis('redis://127.0.0.1:1'),
+      new PgSessionStore(identityPool),
+      { denyAttempts: 1 },
+    );
+    const isolatedApi = createIdentityApi(identityPool, downAuthority, liveRedis);
+    await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
+    const pending = await listOpenPendingDenies(identityPool);
+    expect(pending).toContain(sid);
+    await drainPendingDenies(identityPool, (sids) => liveAuthority.deny(sids));
+    const isolated = await buildApp({
+      config: testConfig(),
+      verifier: jwt,
+      sessionAuthority: liveAuthority,
+      healthChecks: [],
+    });
+    try {
+      const deadline = Date.now() + 5_000;
+      let status = 0;
+      while (Date.now() <= deadline) {
+        const response = await isolated.inject({
+          method: 'GET',
+          url: '/v1/driver/anything',
+          headers: { authorization: `Bearer ${token}` },
+        });
+        status = response.statusCode;
+        if (status === 401) {
+          expect(response.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(status).toBe(401);
+    } finally {
+      await isolated.close();
+      await liveRedis.quit().catch(() => liveRedis.disconnect());
+      await box.stop();
+    }
+  });
+
+  it('11-1: deny write failure still revokes within 5s via the PG path', async () => {
+    const { accountId, token, sid } = await issueDriverAt();
+    const failing = new RedisPgSessionAuthority(
+      {
+        status: 'ready',
+        get: async () => null,
+        set: async () => 'OK',
+        pipeline() {
+          return {
+            set() {
+              return this;
+            },
+            del() {
+              return this;
+            },
+            exec: async () => {
+              throw new Error('deny down');
+            },
+          };
+        },
+      } as never,
+      new PgSessionStore(identityPool),
+      { denyAttempts: 2 },
+    );
+    const isolatedApi = createIdentityApi(identityPool, failing, redis);
+    await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
+    const isolated = await buildApp({
+      config: testConfig(),
+      verifier: jwt,
+      sessionAuthority: failing,
+      healthChecks: [],
+    });
+    try {
+      const response = await isolated.inject({
+        method: 'GET',
+        url: '/v1/driver/anything',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+      expect(failing.pgLookupsFor(sid)).toBeGreaterThan(0);
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('11-6: a token sv that differs from the row sv is SESSION_REVOKED', async () => {
+    const { accountId, sid } = await issueDriverAt();
+    const row = await new PgSessionStore(identityPool).lookup(sid);
+    const token = await jwt.sign({
+      sub: accountId,
+      typ: 'driver',
+      sid,
+      sv: (row?.sessionVersion ?? 0) + 1,
+      did: DIST_A,
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/driver/anything',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: { code: 'SESSION_REVOKED' } });
+  });
+
+  it('11-5: refresh-reuse revokes only that family; another family survives', async () => {
+    const { accountId, refreshToken, familyId, sid } = await issueDriverAt();
+    const otherSid = randomUUID();
+    const otherFamily = randomUUID();
+    await store.issue({ accountId, sid: otherSid, familyId: otherFamily, typ: 'driver' });
+    const otherRow = await new PgSessionStore(identityPool).lookup(otherSid);
+    if (!otherRow) throw new Error('missing other family');
+    await authority.rememberLive(otherRow);
+    const otherToken = await jwt.sign({
+      sub: accountId,
+      typ: 'driver',
+      sid: otherSid,
+      sv: otherRow.sessionVersion,
+      did: DIST_A,
+    });
+    await store.rotate(refreshToken, 'driver');
+    await store.rotate(refreshToken, 'driver');
+    await store.rotate(refreshToken, 'driver');
+    const reused = await identityPool.query<{ revoked_at: Date | null; session_version: number }>(
+      `SELECT s.revoked_at, a.session_version
+         FROM identity.sessions s
+         JOIN identity.accounts a ON a.id = s.account_id
+        WHERE s.sid = $1`,
+      [sid],
+    );
+    expect(reused.rows[0]?.revoked_at).not.toBeNull();
+    expect(reused.rows[0]?.session_version).toBe(0);
+    const survivor = await identityPool.query<{ revoked_at: Date | null }>(
+      `SELECT revoked_at FROM identity.sessions WHERE family_id = $1`,
+      [otherFamily],
+    );
+    expect(survivor.rows[0]?.revoked_at).toBeNull();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/driver/anything',
+      headers: { authorization: `Bearer ${otherToken}` },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(familyId).not.toBe(otherFamily);
+  });
+
+  it('11-3: accounts.status CHECK rejects unknown values; non-active is inactive', async () => {
+    const { accountId } = await seedDriver();
+    await expect(
+      ownerPool.query(`UPDATE identity.accounts SET status = 'suspended' WHERE id = $1`, [
+        accountId,
+      ]),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('11-12: app cannot EXECUTE SECURITY DEFINER login lookups', async () => {
+    await expect(
+      appPool.query(`SELECT * FROM identity.lookup_session($1)`, [randomUUID()]),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      appPool.query(`SELECT * FROM identity.lookup_staff_login($1)`, ['+98920000000']),
+    ).rejects.toMatchObject({ code: '42501' });
   });
 
   it('7-7: lookup_staff_login is SECURITY DEFINER for identity', async () => {

@@ -14,6 +14,10 @@ export class DegradedRateLimiter {
   take(key: string): 'ok' | 'limited' {
     const now = this.now();
     const cutoff = now - this.windowMs;
+    if (this.hits.size >= 4_096 && !this.hits.has(key)) {
+      const oldest = this.hits.keys().next().value;
+      if (oldest !== undefined) this.hits.delete(oldest);
+    }
     const previous = (this.hits.get(key) ?? []).filter((at) => at >= cutoff);
     if (previous.length >= this.limit) {
       this.hits.set(key, previous);

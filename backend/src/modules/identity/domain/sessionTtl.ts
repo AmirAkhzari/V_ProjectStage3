@@ -10,8 +10,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
- * AUTH-RT-03 / DECISION_LOG §I defaults. Driver ~10h is **not confirmed by Amir** —
- * expose via config (`SESSION_TTL_DRIVER_ABSOLUTE_HOURS`) and keep 10h as the default.
+ * AUTH-RT-03 / DECISION_LOG §I defaults. Driver 10h absolute confirmed by Amir
+ * 2026-11-01 (DL-13). Config may only shorten these caps.
  */
 export const SESSION_TTL = {
   shopkeeper: { absoluteMs: 90 * DAY_MS, idleMs: 30 * DAY_MS },
@@ -30,6 +30,33 @@ export interface SessionTtlOverrides {
 let ttlOverrides: SessionTtlOverrides = {};
 
 export function configureSessionTtl(overrides: SessionTtlOverrides): void {
+  if (
+    overrides.shopkeeperAbsoluteMs !== undefined &&
+    overrides.shopkeeperAbsoluteMs > SESSION_TTL.shopkeeper.absoluteMs
+  ) {
+    throw new Error('SESSION_TTL shopkeeper absolute may only shorten the 90d policy cap');
+  }
+  if (
+    overrides.shopkeeperIdleMs !== undefined &&
+    overrides.shopkeeperIdleMs > SESSION_TTL.shopkeeper.idleMs
+  ) {
+    throw new Error('SESSION_TTL shopkeeper sliding may only shorten the 30d policy cap');
+  }
+  if (
+    overrides.staffAbsoluteMs !== undefined &&
+    overrides.staffAbsoluteMs > SESSION_TTL.staff.absoluteMs
+  ) {
+    throw new Error('SESSION_TTL staff absolute may only shorten the 7d policy cap');
+  }
+  if (overrides.staffIdleMs !== undefined && overrides.staffIdleMs > SESSION_TTL.staff.idleMs) {
+    throw new Error('SESSION_TTL staff idle may only shorten the 12h policy cap');
+  }
+  if (
+    overrides.driverAbsoluteMs !== undefined &&
+    overrides.driverAbsoluteMs > SESSION_TTL.driver.absoluteMs
+  ) {
+    throw new Error('SESSION_TTL driver absolute may only shorten the 10h policy cap');
+  }
   ttlOverrides = overrides;
 }
 
