@@ -636,8 +636,14 @@ describe('S11b-3 session SoT + auth plugin', () => {
     });
     try {
       const deadline = Date.now() + LIVE_TTL_SECONDS * 1000 + 500;
-      let status = 0;
-      while (Date.now() <= deadline) {
+      const first = await isolated.inject({
+        method: 'GET',
+        url: '/v1/driver/anything',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(first.statusCode).not.toBe(401);
+      let status = first.statusCode;
+      while (Date.now() <= deadline && status !== 401) {
         const response = await isolated.inject({
           method: 'GET',
           url: '/v1/driver/anything',

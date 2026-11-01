@@ -26,3 +26,11 @@ export class Argon2idPasswordHasher implements PasswordHasher {
     }
   }
 }
+
+export function needsPasswordRehash(hash: string): boolean {
+  try {
+    return argon2.needsRehash(hash, ARGON2ID_OPTIONS);
+  } catch {
+    return false;
+  }
+}

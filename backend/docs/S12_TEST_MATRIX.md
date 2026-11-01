@@ -11,7 +11,7 @@ Status:
 - **missing** — Foundation-level gap. After this slice: **0**.
 
 Totals (**17 exec**): **green 17 / partial 0 / missing 0**.  
-**exec-auth** this slice: **green 25** / **partial 8** / **pending 67**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
+**exec-auth** this slice: **green 32** / **partial 8** / **pending 60**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
 
 ## Exec mapping (17)
 
@@ -48,24 +48,24 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 
 ## exec-auth (100) — owner and slice (R-5)
 
-This slice: **green 25** / **partial 8** / **pending 67**. No login HTTP in S11b-3 (C1/A1/B1/C11 are S11b-4/5). 25 = S11b-1 (2) + S11b-2 (7) + S11b-3 (15) + AUTH-RT-02-G3 (1).
+This slice: **green 32** / **partial 8** / **pending 60**. S11b-4a adds C1/C2 (AUTH-LG-01/02, AUTH-RT-02 HTTP, G6/G7/U1/L1, LIM-T-01..04). 32 = 25 + C1/C2/G6/G7/U1/L1/LIM-T (7).
 
-Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
+Carry to **S11b-6**: S3 `{provider}` vs Fastify `:provider`. **J-1** closed in S11b-4a (A5/B5 not registered in production).
 
-AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10 (dummy-hash), 9-16, plus Low N3-1, N3-2 (SQLSTATE 55P03 only). **N9-4 40P01** closed here (shared lock order + retry). **JWK kty/crv/use + fail-at-boot** closed here with AUTH-JW-03. **RC-3** closed here — 9-8, 9-17, 9-18, and G3. **RC-4** stays before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** remain closed.
+**RC-2** 9-3/9-4/9-5/9-10/9-16 closed in S11b-4a. **N9-4 40P01** closed in S11b-3. **RC-4** stays before S-14 — 9-6. Low N3-1/N3-2 still open.
 
-**RC-5 carry-overs binding on S11b-4/5** (M-1):
+**RC-5 / N12 / F13 carry-overs:**
 
-| ID    | Slice    | Item                                                                                                                           |
-| ----- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| R11-1 | S11b-4/5 | Drain worker (pending-deny drain is **inline-only** today and **abandons a row after 3 attempts**) plus a backlog metric/alert |
-| R11-4 | S11b-4/5 | Production live write-back plus a load test                                                                                    |
-| R11-5 | S11b-4/5 | Sensitive-route registry with default-deny plus an issuance-path completeness test against the contract                        |
-| R11-6 | S11b-4/5 | Broader deactivate vs logout-all concurrency coverage (N12-1 closes the deadlock / lock-order part)                            |
-| RC-2  | S11b-4   | 9-3, 9-4, 9-5, 9-10, 9-16                                                                                                      |
-| N12-3 | S11b-4   | Periodic drain, alert on abandoned rows, purge of `done` rows                                                                  |
-| N12-4 | S11b-4   | Simplify the fail-epoch (5s revocation bound is **live TTL 5s + PG on a miss**, not the per-process fail epoch)                |
-| N12-7 | S11b-4   | Prefix issuance-route matching; production live-cache writer                                                                   |
+| ID            | Slice   | Item                                                                                      |
+| ------------- | ------- | ----------------------------------------------------------------------------------------- |
+| R11-1 / N12-3 | S11b-4b | Drain worker + backlog metric/alert + purge of `done` rows (inline-only, abandon-3 today) |
+| R11-4         | S11b-4b | Production live write-back plus a load test                                               |
+| R11-5         | S11b-4b | Sensitive-route registry with default-deny + issuance completeness vs contract            |
+| R11-6         | S11b-4b | Broader deactivate vs logout-all concurrency (N12-1 closed deadlock)                      |
+| N12-4         | S11b-4b | Remove/simplify fail-epoch                                                                |
+| N12-7 writer  | S11b-4b | Production live-cache write-back on PG hit                                                |
+| F13-4         | S11b-4b | Lock only non-revoked rows                                                                |
+| 9-6 / RC-4    | S-14    | remains before S-14                                                                       |
 
 **RC-4** remains before S-14.
 
@@ -74,11 +74,12 @@ AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9
 | S11b-1    | platform | green   | TENANT-01-S11B, TEN-02-S11B (2) — harness per-table read/write + ENABLE+FORCE RLS                                                                                                  |
 | S11b-2    | identity | mixed   | green 7: AUTH-PW-01, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-03, AUTH-RT-04. partial 6: AUTH-PW-02, AUTH-PW-02-OFF, AUTH-PW-03, AUTH-PW-04, AUTH-RT-02, AUTH-RT-05 |
 | S11b-3    | identity | mixed   | green 15 / partial 2 of SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                          |
-| S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                                              |
+| S11b-4a   | identity | mixed   | green C1/C2, AUTH-LG-01/02, LIM-T-01..04, AUTH-RT-02 HTTP, G6/G7/U1/L1. C11/B83/AUTH-LO still pending                                                                              |
+| S11b-4b   | identity | pending | remainder of AUTH-LG-03..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR                                                    |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                                 |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                                      |
 | S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; contract frozen at v1.2.0)                                                                                                                     |
-| v1.13–15  | identity | pending | AUTH-RT-02-G1, G2, G4, G5 (store already), G6, G7, U1, L1 (8). **G3 green** in S11b-3. C1–C3 are `deferred:FE`, not S-14                                                           |
+| v1.13–15  | identity | mixed   | G3 green in S11b-3. **G6/G7/U1/L1 green** in S11b-4a. AUTH-RT-02-G1/G2/G4/G5 store already. C3 is S11b-4b                                                                          |
 
 **100** = 2+13+17+36+8+2+13+9 (v1.13 G1–G5 + v1.15 G6/G7/U1/L1).
 

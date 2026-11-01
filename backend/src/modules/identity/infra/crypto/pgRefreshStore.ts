@@ -26,11 +26,16 @@ import {
   isRetryableLockError,
   lockSessionsThenTokensThenAccount,
 } from '../session/lockOrder.js';
-import { drainPendingDenies, enqueuePendingDenies } from '../session/pgSessionStore.js';
+import {
+  drainPendingDenies,
+  enqueuePendingDenies,
+  type DrainLog,
+} from '../session/pgSessionStore.js';
 import { generateRefreshToken, hashRefreshToken } from './refreshHash.js';
 
 export interface RefreshStoreHooks {
   onSidsRevoked: (sids: readonly string[]) => Promise<void>;
+  log?: DrainLog;
 }
 
 function requiredOnSidsRevoked(): Promise<void> {
@@ -148,7 +153,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         return { result: await this.claimRotation(client, row, now) };
       });
       if (outcome.revokedSids && outcome.revokedSids.length > 0) {
-        await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids));
+        await drainPendingDenies(
+          this.pool,
+          (sids) => this.hooks.onSidsRevoked(sids),
+          this.hooks.log,
+        );
       }
       return outcome.result;
     } catch (error) {

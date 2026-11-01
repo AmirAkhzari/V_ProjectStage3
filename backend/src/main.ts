@@ -1,6 +1,8 @@
 import { buildApp } from './app.js';
 import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
+import { Argon2idPasswordHasher } from './modules/identity/infra/crypto/argon2Hasher.js';
+import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
 import { assertStartupAdapters } from './platform/adapters.js';
 import { createJwtFromEnv } from './platform/auth/eddsa.js';
@@ -32,6 +34,11 @@ const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_ID
 const redis = createRedis(config.REDIS_URL, log);
 const sessionAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(sessionLookupPool));
 const verifier = await createJwtFromEnv();
+const hasher = new Argon2idPasswordHasher();
+const refreshStore = new PgRefreshTokenStore(identityDb.pool, {
+  onSidsRevoked: (sids) => sessionAuthority.deny(sids),
+  log,
+});
 
 const closeInfra = async () => {
   await redis.quit().catch(() => redis.disconnect());
@@ -52,6 +59,16 @@ const app = await buildApp({
   verifier,
   sessionAuthority,
   assertIssuance: () => assertRedisForAuthIssuance(redis),
+  driverAuth: {
+    identityPool: identityDb.pool,
+    appPool: db.pool,
+    redis,
+    jwt: verifier,
+    authority: sessionAuthority,
+    store: refreshStore,
+    hasher,
+    log,
+  },
   healthChecks: [
     postgresHealthCheck(db.pool),
     postgresHealthCheck(identityDb.pool, 'postgres_identity'),

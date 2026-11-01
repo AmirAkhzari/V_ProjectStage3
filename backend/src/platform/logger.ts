@@ -23,6 +23,7 @@ const SENSITIVE_KEYS = new Set([
   'jwt_eddsa_jwks',
   'privatekey',
   'private_key',
+  'hash',
 ]);
 
 const HEADER_REDACT_PATHS = [
@@ -51,6 +52,7 @@ export const REDACT_PATHS = [
   '*.JWT_EDDSA_JWKS',
   '*.privateKey',
   '*.private_key',
+  '*.hash',
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

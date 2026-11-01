@@ -48,6 +48,20 @@ export const AUTH_ISSUANCE_PATHS: readonly { method: HttpMethod; path: string }[
   { method: 'POST', path: '/v1/driver/auth/password' },
 ];
 
-export function isAuthIssuanceRoute(method: string, path: string): boolean {
+export function isAuthIssuanceRoute(
+  method: string,
+  path: string,
+  group?: 'app' | 'admin' | 'driver',
+): boolean {
+  if (method !== 'POST') return false;
+  if (group === 'driver' || path.startsWith('/v1/driver/')) {
+    return path.endsWith('/auth/login') || path.endsWith('/auth/password');
+  }
+  if (group === 'app' || path.startsWith('/v1/app/')) {
+    return path.endsWith('/auth/otp/send') || path.endsWith('/auth/otp/verify');
+  }
+  if (group === 'admin' || path.startsWith('/v1/admin/')) {
+    return path.endsWith('/auth/otp/send') || path.endsWith('/auth/otp/verify');
+  }
   return AUTH_ISSUANCE_PATHS.some((route) => route.method === method && route.path === path);
 }

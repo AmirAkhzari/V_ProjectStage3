@@ -77,7 +77,7 @@ export function registerErrorHandling(app: FastifyInstance): void {
 
   app.setErrorHandler((error: FastifyError | AppError, request, reply) => {
     if (error instanceof AppError) {
-      if (error.statusCode === 503) {
+      if (error.statusCode === 503 || error.statusCode === 429) {
         const retryAfter =
           error.details &&
           typeof error.details === 'object' &&
