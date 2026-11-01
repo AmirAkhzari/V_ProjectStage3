@@ -13,7 +13,10 @@ import {
   loginDriver,
   type DriverAuthRuntime,
 } from '../../src/modules/identity/application/driverAuth.js';
-import { hashUsernameForAudit } from '../../src/modules/identity/domain/loginPolicy.js';
+import {
+  TEST_AUDIT_HASH_KEY,
+  hashUsernameForAudit,
+} from '../../src/modules/identity/domain/loginPolicy.js';
 import { Argon2idPasswordHasher } from '../../src/modules/identity/infra/crypto/argon2Hasher.js';
 import { hashRefreshToken } from '../../src/modules/identity/infra/crypto/refreshHash.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
@@ -106,6 +109,7 @@ describe('S11b-4a driver C1/C2', () => {
       }),
       hasher,
       log: silentDrainLog,
+      auditHashKey: TEST_AUDIT_HASH_KEY,
       limiter: { tarpitAfter: 100 },
     };
     app = await buildApp({
@@ -203,7 +207,9 @@ describe('S11b-4a driver C1/C2', () => {
     );
     expect(audits.rows.map((row) => row.action)).toContain('login_success');
     expect(JSON.stringify(audits.rows)).not.toMatch(/refreshToken|correct-horse|\+9891/);
-    expect(JSON.stringify(audits.rows)).toContain(hashUsernameForAudit(username));
+    expect(JSON.stringify(audits.rows)).toContain(
+      hashUsernameForAudit(username, TEST_AUDIT_HASH_KEY),
+    );
   });
 
   it('AUTH-LG-02: uniform 401 compares status, headers and body', async () => {
@@ -318,7 +324,9 @@ describe('S11b-4a driver C1/C2', () => {
     expect(audits.rows.map((row) => row.action)).toEqual(
       expect.arrayContaining(['login_failure', 'login_lockout']),
     );
-    expect(JSON.stringify(audits.rows)).toContain(hashUsernameForAudit(username));
+    expect(JSON.stringify(audits.rows)).toContain(
+      hashUsernameForAudit(username, TEST_AUDIT_HASH_KEY),
+    );
     expect(JSON.stringify(audits.rows)).not.toContain(username);
     const e3 = await ownerPool.query(
       `SELECT 1 FROM platform.outbox_events WHERE payload->>'reason' = 'lockout'`,
@@ -364,6 +372,71 @@ describe('S11b-4a driver C1/C2', () => {
       `SELECT ip FROM platform.audit_log WHERE action = 'login_failure' ORDER BY at DESC LIMIT 1`,
     );
     expect(row.rows[0]?.ip).toBe('203.0.113.50');
+  });
+
+  it('R13-3: multi-entry XFF spoof uses the configured hop, not the attacker', async () => {
+    const { username } = await seedDriver(`spoof-${randomUUID().slice(0, 8)}`);
+    const response = await login(username, 'bad-password-xx', {
+      'x-forwarded-for': '198.51.100.1, 203.0.113.50',
+    });
+    expect(response.statusCode).toBe(401);
+    const row = await ownerPool.query<{ ip: string }>(
+      `SELECT ip FROM platform.audit_log WHERE action = 'login_failure' ORDER BY at DESC LIMIT 1`,
+    );
+    expect(row.rows[0]?.ip).toBe('203.0.113.50');
+    expect(row.rows[0]?.ip).not.toBe('198.51.100.1');
+  });
+
+  it('R13-3: hops=0 ignores X-Forwarded-For', async () => {
+    const { username } = await seedDriver(`hop0-${randomUUID().slice(0, 8)}`);
+    const isolated = await buildApp({
+      config: testConfig({
+        REDIS_URL: redisBox.getConnectionUrl(),
+        TRUST_PROXY_HOPS: '0',
+      }),
+      verifier: jwt,
+      sessionAuthority: runtime.authority,
+      assertIssuance: () => assertRedisForAuthIssuance(redis),
+      driverAuth: runtime,
+      healthChecks: [],
+    });
+    try {
+      const response = await isolated.inject({
+        method: 'POST',
+        url: '/v1/driver/auth/login',
+        payload: { username, password: 'bad-password-xx' },
+        headers: { 'x-forwarded-for': '203.0.113.50' },
+      });
+      expect(response.statusCode).toBe(401);
+      const row = await ownerPool.query<{ ip: string }>(
+        `SELECT ip FROM platform.audit_log WHERE action = 'login_failure' ORDER BY at DESC LIMIT 1`,
+      );
+      expect(row.rows[0]?.ip).not.toBe('203.0.113.50');
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('R2-1 / R13-1: 50 parallel bad logins; at most 5 reach the hasher', async () => {
+    const { username } = await seedDriver(`par-${randomUUID().slice(0, 8)}`);
+    let verifies = 0;
+    const counting: DriverAuthRuntime = {
+      ...runtime,
+      hasher: {
+        hash: (plain) => hasher.hash(plain),
+        verify: async (hash, plain) => {
+          verifies += 1;
+          return hasher.verify(hash, plain);
+        },
+      },
+    };
+    const results = await Promise.allSettled(
+      Array.from({ length: 50 }, () =>
+        loginDriver(counting, { username, password: 'bad-password-xx', ip: '203.0.113.80' }),
+      ),
+    );
+    expect(verifies).toBeLessThanOrEqual(5);
+    expect(results.filter((row) => row.status === 'rejected').length).toBe(50);
   });
 
   it('N5 / AUTH-DM-01: A5/B5 are not registered in production', async () => {
@@ -473,6 +546,56 @@ describe('S11b-4a driver C1/C2', () => {
     expect(Number(unused.rows[0]?.c)).toBe(1);
   }, 20_000);
 
+  it('R2-4: default cap of 2 holds under parallel logins', async () => {
+    const { username, accountId } = await seedDriver(`pcap-${randomUUID().slice(0, 8)}`);
+    const settled = await Promise.allSettled(
+      Array.from({ length: 5 }, (_, i) =>
+        loginDriver(runtime, { username, password: PASSWORD, ip: `10.4.4.${i + 1}` }),
+      ),
+    );
+    expect(settled.some((row) => row.status === 'fulfilled')).toBe(true);
+    const open = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL`,
+      [accountId],
+    );
+    expect(Number(open.rows[0]?.c)).toBeLessThanOrEqual(2);
+  });
+
+  it('R2-4: login and issue paths return 503 with Retry-After on lock timeout', async () => {
+    const { username, accountId } = await seedDriver(`l503-${randomUUID().slice(0, 8)}`);
+    const throwingPool = {
+      query: (text: string, params?: unknown[]) => {
+        if (typeof text === 'string' && text.includes('lookup_driver_login')) {
+          return Promise.reject(Object.assign(new Error('lock timeout'), { code: '55P03' }));
+        }
+        return identityPool.query(text, params as never);
+      },
+    } as unknown as typeof identityPool;
+    await expect(
+      loginDriver(
+        { ...runtime, identityPool: throwingPool },
+        { username, password: PASSWORD, ip: '10.5.5.1' },
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      details: { retryAfter: expect.any(Number) },
+    });
+
+    const locker = await identityPool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query('SELECT set_config($1, $2, true)', ['lock_timeout', '15s']);
+      await locker.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      const issued = await login(username, PASSWORD);
+      expect(issued.statusCode).toBe(503);
+      expect(issued.headers['retry-after']).toBeDefined();
+    } finally {
+      await locker.query('ROLLBACK').catch(() => {});
+      locker.release();
+    }
+  }, 15_000);
+
   it('RT-05: default DRIVER_MAX_SESSIONS=2 revokes the oldest with session_limit audit+E3', async () => {
     const { username, accountId } = await seedDriver(`cap-${randomUUID().slice(0, 8)}`);
     await loginDriver(runtime, { username, password: PASSWORD, ip: '10.1.1.1' });
@@ -537,34 +660,43 @@ describe('S11b-4a driver C1/C2', () => {
     expect(Number(open.rows[0]?.c)).toBe(1);
   });
 
-  it('B5 / 9-5: concurrent reset is not overwritten by rehash CAS; deactivate is not issued over', async () => {
+  it('B5 / 9-5 / R13-4: reset between verify and issue aborts with no session', async () => {
     const weak = await argon2.hash(PASSWORD, {
       type: argon2.argon2id,
       memoryCost: 8,
       timeCost: 1,
       parallelism: 1,
     });
-    const { accountId } = await seedDriver(`cas-${randomUUID().slice(0, 8)}`, { hash: weak });
-    const resetHash = await hasher.hash('reset-horse-99');
-    const nextHash = await hasher.hash(PASSWORD);
-    await ownerPool.query(
-      `UPDATE identity.driver_credentials SET password_hash = $2 WHERE account_id = $1`,
-      [accountId, resetHash],
-    );
-    await runtime.store.issue({
-      accountId,
-      sid: randomUUID(),
-      familyId: randomUUID(),
-      typ: 'driver',
-      distributorId: DIST,
-      requireActive: true,
-      casPasswordHash: { oldHash: weak, nextHash },
+    const { username, accountId } = await seedDriver(`cas-${randomUUID().slice(0, 8)}`, {
+      hash: weak,
     });
+    const resetHash = await hasher.hash('reset-horse-99');
+    const racing: DriverAuthRuntime = {
+      ...runtime,
+      hasher: {
+        hash: (plain) => hasher.hash(plain),
+        verify: async (hash, plain) => {
+          const ok = await hasher.verify(hash, plain);
+          await ownerPool.query(
+            `UPDATE identity.driver_credentials SET password_hash = $2 WHERE account_id = $1`,
+            [accountId, resetHash],
+          );
+          return ok;
+        },
+      },
+    };
+    await expect(
+      loginDriver(racing, { username, password: PASSWORD, ip: '10.8.8.1' }),
+    ).rejects.toMatchObject({ statusCode: 401, code: 'invalid_credentials' });
     const stored = await ownerPool.query<{ password_hash: string }>(
       `SELECT password_hash FROM identity.driver_credentials WHERE account_id = $1`,
       [accountId],
     );
     expect(stored.rows[0]?.password_hash).toBe(resetHash);
+    const created = await ownerPool.query(`SELECT 1 FROM identity.sessions WHERE account_id = $1`, [
+      accountId,
+    ]);
+    expect(created.rowCount).toBe(0);
 
     const dead = await seedDriver(`casd-${randomUUID().slice(0, 8)}`, { hash: weak });
     await ownerPool.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
@@ -578,13 +710,14 @@ describe('S11b-4a driver C1/C2', () => {
         typ: 'driver',
         distributorId: DIST,
         requireActive: true,
-        casPasswordHash: { oldHash: weak, nextHash },
+        verifiedPasswordHash: weak,
       }),
     ).rejects.toMatchObject({ code: 'ISSUE_ABORTED' });
-    const created = await ownerPool.query(`SELECT 1 FROM identity.sessions WHERE account_id = $1`, [
-      dead.accountId,
-    ]);
-    expect(created.rowCount).toBe(0);
+    const deadSessions = await ownerPool.query(
+      `SELECT 1 FROM identity.sessions WHERE account_id = $1`,
+      [dead.accountId],
+    );
+    expect(deadSessions.rowCount).toBe(0);
   });
 
   it('G7: captured logs contain no token, hash, OTP or full phone', async () => {

@@ -19,9 +19,8 @@ import { needsPasswordRehash } from '../infra/crypto/argon2Hasher.js';
 import type { PasswordHasher } from './ports.js';
 import type { RefreshTokenStore } from './refreshStore.js';
 import {
-  clearLoginCounters,
-  peekLoginBlock,
-  recordLoginFailure,
+  reserveLoginAttempt,
+  settleLoginSuccess,
   type LoginLimiterLimits,
 } from './loginLimiter.js';
 import { isRetryableLockError } from '../infra/session/lockOrder.js';
@@ -40,6 +39,7 @@ export interface DriverAuthRuntime {
   store: RefreshTokenStore;
   hasher: PasswordHasher;
   log: DrainLog;
+  auditHashKey: string;
   maxSessions?: number;
   limiter?: LoginLimiterLimits;
 }
@@ -105,8 +105,8 @@ export async function loginDriver(
   if (usernameOverLong(username) || passwordOverLongBytes(input.password)) {
     throw invalidCredentials();
   }
-  const blocked = await peekLoginBlock(runtime.redis, username, input.ip, runtime.limiter);
-  if (blocked) throw tooManyAttempts(blocked.retryAfter);
+  const reservation = await reserveLoginAttempt(runtime.redis, username, input.ip, runtime.limiter);
+  if (reservation.status === 'blocked') throw tooManyAttempts(reservation.retryAfter);
 
   let row: DriverRow | undefined;
   try {
@@ -115,34 +115,33 @@ export async function loginDriver(
     mapLockOr401(error);
   }
   const ok = await runtime.hasher.verify(row?.password_hash ?? DUMMY_ARGON2ID_HASH, input.password);
+  const usernameHash = hashUsernameForAudit(username, runtime.auditHashKey);
   if (!row || !ok || row.status !== 'active') {
-    const outcome = await recordLoginFailure(runtime.redis, username, input.ip, runtime.limiter);
     try {
       await writeAudit(runtime.identityPool, {
         accountId: row?.account_id ?? 'unknown',
         distributorId: row?.distributor_id ?? null,
         action: 'login_failure',
-        entityId: hashUsernameForAudit(username),
+        entityId: usernameHash,
         ip: input.ip,
-        data: { usernameHash: hashUsernameForAudit(username) },
+        data: { usernameHash },
       });
-      if (outcome.locked) {
+      if (reservation.locked) {
         await writeAudit(runtime.identityPool, {
           accountId: row?.account_id ?? 'unknown',
           distributorId: row?.distributor_id ?? null,
           action: 'login_lockout',
-          entityId: hashUsernameForAudit(username),
+          entityId: usernameHash,
           ip: input.ip,
-          data: { usernameHash: hashUsernameForAudit(username) },
+          data: { usernameHash },
         });
       }
     } catch (error) {
       mapLockOr401(error);
     }
-    if (outcome.limited) throw tooManyAttempts(outcome.retryAfter || 1);
     throw invalidCredentials();
   }
-  await clearLoginCounters(runtime.redis, username, input.ip);
+  await settleLoginSuccess(runtime.redis, username, input.ip);
   return issueDriverSession(runtime, { ...row, username }, input.password, input.ip);
 }
 
@@ -211,6 +210,7 @@ async function issueDriverSession(
       maxSessions: runtime.maxSessions ?? DRIVER_MAX_SESSIONS,
       distributorId: row.distributor_id,
       requireActive: true,
+      verifiedPasswordHash: row.password_hash,
       ...(cas ? { casPasswordHash: cas } : {}),
     });
   } catch (error) {
@@ -240,7 +240,7 @@ async function issueDriverSession(
     action: 'login_success',
     entityId: sid,
     ip,
-    data: { usernameHash: hashUsernameForAudit(row.username) },
+    data: { usernameHash: hashUsernameForAudit(row.username, runtime.auditHashKey) },
     now,
   });
   const accessToken = await runtime.jwt.sign({

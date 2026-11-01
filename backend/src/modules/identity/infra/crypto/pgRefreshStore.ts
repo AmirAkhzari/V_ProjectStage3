@@ -87,7 +87,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         accountId: input.accountId,
         lockAccount: true,
       });
-      if (input.requireActive || input.casPasswordHash) {
+      if (input.requireActive || input.casPasswordHash || input.verifiedPasswordHash) {
         if (input.distributorId) {
           await client.query('SELECT set_config($1, $2, true)', [
             'app.distributor_id',
@@ -103,8 +103,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           [input.accountId],
         );
         const row = current.rows[0];
-        if (!row || row.status !== 'active') {
+        if (!row || (input.requireActive && row.status !== 'active')) {
           throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
+        }
+        if (input.verifiedPasswordHash && row.password_hash !== input.verifiedPasswordHash) {
+          throw Object.assign(new Error('hash changed'), { code: 'ISSUE_ABORTED' });
         }
         if (input.casPasswordHash && row.password_hash === input.casPasswordHash.oldHash) {
           await client.query(

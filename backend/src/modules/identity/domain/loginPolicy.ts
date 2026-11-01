@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 
 /** AUTH-LG-01 / V11-O2-01. Over-long values are rejected, never truncated. */
 export const USERNAME_MAX_CHARS = 64;
@@ -39,10 +39,13 @@ export function passwordOverLongBytes(raw: string): boolean {
   return Buffer.byteLength(raw, 'utf8') > PASSWORD_MAX_BYTES;
 }
 
-/** R12-11: audit stores the username capped and hashed, never raw. */
-export function hashUsernameForAudit(username: string): string {
+/** Fixed HMAC key for tests (R13-2). Production must set AUDIT_HASH_KEY. */
+export const TEST_AUDIT_HASH_KEY = 'test-audit-hash-key-32-bytes-min';
+
+/** R13-2: audit stores the username capped and HMAC-SHA256 hashed, never raw. */
+export function hashUsernameForAudit(username: string, key: string): string {
   const capped = username.slice(0, USERNAME_MAX_CHARS);
-  return createHash('sha256').update(capped, 'utf8').digest('hex');
+  return createHmac('sha256', key).update(capped, 'utf8').digest('hex');
 }
 
 export function nextBackoffSeconds(userFailCount: number): number | null {

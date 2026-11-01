@@ -21,6 +21,8 @@ export interface RefreshIssueInput {
   maxSessions?: number;
   distributorId?: string | null;
   requireActive?: boolean;
+  /** Hash that login verified. Under the issue lock a mismatch aborts (R2-2 / R13-4). */
+  verifiedPasswordHash?: string;
   casPasswordHash?: { oldHash: string; nextHash: string };
 }
 

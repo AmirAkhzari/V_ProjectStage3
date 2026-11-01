@@ -88,7 +88,10 @@ const processShared = {
   SESSION_TTL_STAFF_IDLE_HOURS: z.coerce.number().int().min(1).max(12).default(12),
   /** Driver 10h absolute: DL-13 / 2026-10-14 (Amir re-confirmed 2026-11-01). Config may only shorten. */
   SESSION_TTL_DRIVER_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(10).default(10),
-  /** R12-2 / N1: trust only this many configured LB hops. 0 = do not trust X-Forwarded-For. */
+  /**
+   * R13-3: trust only this many configured LB hops. 0 = ignore X-Forwarded-For.
+   * Production must set this explicitly. The API port is reachable only through the LB.
+   */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 };
 
@@ -130,11 +133,16 @@ function requireTls(ctx: z.RefinementCtx, path: string, url: string): void {
   }
 }
 
+/** HMAC-SHA256 key for username hashes in audit rows. Tests use this value. */
+export const TEST_AUDIT_HASH_KEY = 'test-audit-hash-key-32-bytes-min';
+
 export const apiConfigSchema = z
   .object({
     ...processShared,
     DATABASE_URL_APP: postgresUrl,
     DATABASE_URL_IDENTITY: postgresUrl,
+    /** R13-2: HMAC key for audit username hashes. Required in production. */
+    AUDIT_HASH_KEY: z.string().min(32).default(TEST_AUDIT_HASH_KEY),
   })
   .superRefine((value, ctx) => {
     applyProductionShared(value, ctx);
@@ -197,12 +205,31 @@ function productionExtras(env: NodeJS.ProcessEnv, forbiddenKeys: readonly string
   return [...productionEnvFlagIssues(env), ...forbiddenUrlIssues(env, forbiddenKeys)];
 }
 
+function requireProdKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): ConfigIssue[] {
+  if (env['NODE_ENV'] !== 'production') return [];
+  return keys
+    .filter((key) => !presentEnv(env, key))
+    .map((key) => ({
+      field: key,
+      message:
+        key === 'TRUST_PROXY_HOPS'
+          ? 'must be set explicitly in production; the API port is reachable only through the LB'
+          : `${key} must be set explicitly in production`,
+    }));
+}
+
 export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
-  return parseOrThrow(apiConfigSchema, env, productionExtras(env, API_FORBIDDEN_URLS));
+  return parseOrThrow(apiConfigSchema, env, [
+    ...productionExtras(env, API_FORBIDDEN_URLS),
+    ...requireProdKeys(env, ['TRUST_PROXY_HOPS', 'AUDIT_HASH_KEY']),
+  ]);
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
-  return parseOrThrow(workerConfigSchema, env, productionExtras(env, WORKER_FORBIDDEN_URLS));
+  return parseOrThrow(workerConfigSchema, env, [
+    ...productionExtras(env, WORKER_FORBIDDEN_URLS),
+    ...requireProdKeys(env, ['TRUST_PROXY_HOPS']),
+  ]);
 }
 
 /** API config. Prefer `loadApiConfig` / `loadWorkerConfig` at process entrypoints. */

@@ -48,6 +48,7 @@ export async function buildApp(options: BuildAppOptions) {
     genReqId: generateRequestId,
     // Do not let Fastify copy x-request-id before validation (AppSec L-3).
     requestIdHeader: false,
+    // API port is reachable only through the LB; trust only TRUST_PROXY_HOPS hops.
     trustProxy: hops > 0 ? (_address: string, hop: number) => hop < hops : false,
   });
 

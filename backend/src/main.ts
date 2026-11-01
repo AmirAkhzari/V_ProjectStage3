@@ -67,6 +67,7 @@ const app = await buildApp({
     store: refreshStore,
     hasher,
     log,
+    auditHashKey: config.AUDIT_HASH_KEY,
   },
   healthChecks: [
     postgresHealthCheck(db.pool),

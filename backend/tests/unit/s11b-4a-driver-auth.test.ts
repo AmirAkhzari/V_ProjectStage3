@@ -4,6 +4,7 @@ import {
   DRIVER_MAX_SESSIONS,
   DUMMY_ARGON2ID_HASH,
   LOGIN_IP_FAIL_LIMIT,
+  TEST_AUDIT_HASH_KEY,
   hashUsernameForAudit,
   nextBackoffSeconds,
   normalizeUsername,
@@ -50,7 +51,10 @@ describe('S11b-4a login policy / F13-1', () => {
     expect(tarpitDelaySeconds(20)).toBe(0);
     expect(tarpitDelaySeconds(21)).toBe(1);
     expect(tarpitDelaySeconds(40)).toBe(10);
-    expect(hashUsernameForAudit('ali')).toMatch(/^[0-9a-f]{64}$/);
-    expect(hashUsernameForAudit('ali')).not.toContain('ali');
+    expect(hashUsernameForAudit('ali', TEST_AUDIT_HASH_KEY)).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashUsernameForAudit('ali', TEST_AUDIT_HASH_KEY)).not.toContain('ali');
+    expect(hashUsernameForAudit('ali', TEST_AUDIT_HASH_KEY)).not.toBe(
+      hashUsernameForAudit('ali', `${TEST_AUDIT_HASH_KEY}x`),
+    );
   });
 });

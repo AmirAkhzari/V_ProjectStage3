@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadApiConfig, loadConfig, loadWorkerConfig } from './config.js';
+import {
+  ConfigError,
+  TEST_AUDIT_HASH_KEY,
+  loadApiConfig,
+  loadConfig,
+  loadWorkerConfig,
+} from './config.js';
 
 const validApi = {
   NODE_ENV: 'test',
@@ -16,6 +22,8 @@ const validApiProduction = {
   REDIS_URL: 'rediss://cache.example.ir:6379',
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
+  TRUST_PROXY_HOPS: '1',
+  AUDIT_HASH_KEY: TEST_AUDIT_HASH_KEY,
 };
 
 const validWorkerProduction = {
@@ -25,6 +33,7 @@ const validWorkerProduction = {
   REDIS_URL: 'rediss://cache.example.ir:6379',
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
+  TRUST_PROXY_HOPS: '1',
 };
 
 describe('loadApiConfig', () => {
@@ -40,7 +49,21 @@ describe('loadApiConfig', () => {
     expect(config.SESSION_TTL_STAFF_IDLE_HOURS).toBe(12);
     expect(config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS).toBe(10);
     expect(config.TRUST_PROXY_HOPS).toBe(0);
+    expect(config.AUDIT_HASH_KEY).toBe(TEST_AUDIT_HASH_KEY);
     expect(loadApiConfig({ ...validApi, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
+  });
+
+  it('R13-3: production requires TRUST_PROXY_HOPS to be set; hops=0 is valid when explicit', () => {
+    const { TRUST_PROXY_HOPS: _omit, ...withoutHops } = validApiProduction;
+    expect(() => loadApiConfig(withoutHops)).toThrow(ConfigError);
+    expect(loadApiConfig({ ...validApiProduction, TRUST_PROXY_HOPS: '0' }).TRUST_PROXY_HOPS).toBe(
+      0,
+    );
+  });
+
+  it('R13-2: production requires AUDIT_HASH_KEY', () => {
+    const { AUDIT_HASH_KEY: _omit, ...withoutKey } = validApiProduction;
+    expect(() => loadApiConfig(withoutKey)).toThrow(ConfigError);
   });
 
   it('11-13: rejects session TTL values above the policy caps', () => {
