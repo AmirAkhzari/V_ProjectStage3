@@ -1,7 +1,20 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
+import type pg from 'pg';
 import { runMigrations } from '../../src/platform/db/migrate.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
+
+/** N10-1: register before container stop so 57P01 on closing clients is not an unhandled error. */
+export function ignoreAdminTerminate(err: Error & { code?: string }): void {
+  if (err.code === '57P01') return;
+}
+
+export function attachPgTeardownGuard(pool: pg.Pool): void {
+  pool.on('error', ignoreAdminTerminate);
+  pool.on('connect', (client) => {
+    client.on('error', ignoreAdminTerminate);
+  });
+}
 
 export const TEST_ROLE_PASSWORD = 'vproject-test';
 

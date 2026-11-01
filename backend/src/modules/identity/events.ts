@@ -12,16 +12,25 @@ export const REFRESH_REUSE_AUDIT_ACTION = 'refresh_reuse';
 /** AppSec RC-1 / N9-2: not `refresh_grace`. */
 export const REFRESH_GRACE_AUDIT_ACTION = 'refresh_grace_replay';
 
+export type SessionRevokeReason =
+  | 'refresh_reuse'
+  | 'deactivated'
+  | 'password_reset'
+  | 'password_change'
+  | 'logout_all'
+  | 'session_limit';
+
 export interface SessionsRevokedPayload {
   familyId: string;
   sid: string;
   accountId: string;
-  reason: 'refresh_reuse';
+  reason: SessionRevokeReason;
 }
 
 export function sessionsRevokedEvent(
   input: SessionsRevokedPayload,
   occurredAt: Date,
+  distributorId: string | null = null,
 ): EventEnvelope<typeof SESSIONS_REVOKED_EVENT, SessionsRevokedPayload> {
   return {
     id: randomUUID(),
@@ -29,7 +38,7 @@ export function sessionsRevokedEvent(
     version: SESSIONS_REVOKED_EVENT_VERSION,
     aggregateType: 'session',
     aggregateId: input.familyId,
-    distributorId: null,
+    distributorId,
     occurredAt,
     payload: input,
   };

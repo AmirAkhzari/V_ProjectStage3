@@ -9,12 +9,48 @@ export const REFRESH_LOCK_TIMEOUT = '2s';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
-/** AUTH-RT-03 / DECISION_LOG §I. Driver absolute is 10h exactly; refresh never extends it. */
+/**
+ * AUTH-RT-03 / DECISION_LOG §I defaults. Driver ~10h is **not confirmed by Amir** —
+ * expose via config (`SESSION_TTL_DRIVER_ABSOLUTE_HOURS`) and keep 10h as the default.
+ */
 export const SESSION_TTL = {
   shopkeeper: { absoluteMs: 90 * DAY_MS, idleMs: 30 * DAY_MS },
   staff: { absoluteMs: 7 * DAY_MS, idleMs: 12 * HOUR_MS },
   driver: { absoluteMs: 10 * HOUR_MS, idleMs: null },
 } as const;
+
+export interface SessionTtlOverrides {
+  shopkeeperAbsoluteMs?: number;
+  shopkeeperIdleMs?: number;
+  staffAbsoluteMs?: number;
+  staffIdleMs?: number;
+  driverAbsoluteMs?: number;
+}
+
+let ttlOverrides: SessionTtlOverrides = {};
+
+export function configureSessionTtl(overrides: SessionTtlOverrides): void {
+  ttlOverrides = overrides;
+}
+
+export function sessionTtlMs(typ: SubjectType): { absoluteMs: number; idleMs: number | null } {
+  if (typ === 'shopkeeper') {
+    return {
+      absoluteMs: ttlOverrides.shopkeeperAbsoluteMs ?? SESSION_TTL.shopkeeper.absoluteMs,
+      idleMs: ttlOverrides.shopkeeperIdleMs ?? SESSION_TTL.shopkeeper.idleMs,
+    };
+  }
+  if (typ === 'staff') {
+    return {
+      absoluteMs: ttlOverrides.staffAbsoluteMs ?? SESSION_TTL.staff.absoluteMs,
+      idleMs: ttlOverrides.staffIdleMs ?? SESSION_TTL.staff.idleMs,
+    };
+  }
+  return {
+    absoluteMs: ttlOverrides.driverAbsoluteMs ?? SESSION_TTL.driver.absoluteMs,
+    idleMs: null,
+  };
+}
 
 export interface SessionWindows {
   absoluteExpiresAt: Date;
@@ -22,12 +58,12 @@ export interface SessionWindows {
 }
 
 export function absoluteExpiresAt(typ: SubjectType, createdAt: Date): Date {
-  return new Date(createdAt.getTime() + SESSION_TTL[typ].absoluteMs);
+  return new Date(createdAt.getTime() + sessionTtlMs(typ).absoluteMs);
 }
 
 export function refreshExpiresAt(typ: SubjectType, createdAt: Date, now: Date): Date {
   const absolute = absoluteExpiresAt(typ, createdAt);
-  const idleMs = SESSION_TTL[typ].idleMs;
+  const idleMs = sessionTtlMs(typ).idleMs;
   if (idleMs === null) return absolute;
   const sliding = new Date(now.getTime() + idleMs);
   return sliding.getTime() < absolute.getTime() ? sliding : absolute;
@@ -51,7 +87,7 @@ export function isIdleExpired(
   now: Date,
 ): boolean {
   if (isAbsoluteExpired(typ, createdAt, now)) return true;
-  const idleMs = SESSION_TTL[typ].idleMs;
+  const idleMs = sessionTtlMs(typ).idleMs;
   if (idleMs === null) return false;
   return now.getTime() >= lastUsedAt.getTime() + idleMs;
 }

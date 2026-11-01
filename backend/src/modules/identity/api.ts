@@ -1,10 +1,33 @@
-/**
- * Public synchronous API of the `identity` module (§9.3 rules 1 and 5). Together with `events.ts` this
- * is the only file other modules may import. Operations take an optional transaction so callers can
- * compose them atomically; none are defined until the module's phase is authorized.
- */
-export type IdentityApi = Readonly<Record<never, never>>;
+import type pg from 'pg';
+import type { Redis } from 'ioredis';
+import type { SessionAuthority } from '../../platform/auth/sessionAuthority.js';
+import { deactivateAccount } from './application/deactivateAccount.js';
+import { assertIssuanceAllowed } from './application/loginGate.js';
+import { revokeSubjectSessions } from './application/revokeSessions.js';
+import type { SessionRevokeReason } from './events.js';
 
-export function createIdentityApi(): IdentityApi {
-  return {};
+/**
+ * Public synchronous API of the `identity` module (§9.3 rules 1 and 5).
+ */
+export interface IdentityApi {
+  revokeSubjectSessions(input: {
+    accountId: string;
+    reason: SessionRevokeReason;
+  }): Promise<{ sids: string[] }>;
+  deactivateAccount(accountId: string): Promise<{ sids: string[] }>;
+  assertIssuanceAllowed(
+    accountId: string | null,
+  ): Promise<{ status: 'ok' } | { status: 'rejected'; reason: 'invalid_credentials' }>;
+}
+
+export function createIdentityApi(
+  pool: pg.Pool,
+  authority: SessionAuthority,
+  redis: Redis,
+): IdentityApi {
+  return {
+    revokeSubjectSessions: (input) => revokeSubjectSessions(pool, authority, input),
+    deactivateAccount: (accountId) => deactivateAccount(pool, authority, accountId),
+    assertIssuanceAllowed: (accountId) => assertIssuanceAllowed(redis, pool, accountId),
+  };
 }

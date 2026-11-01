@@ -34,6 +34,11 @@ describe('loadApiConfig', () => {
     expect(config.PORT).toBe(3000);
     expect(config.DATABASE_URL_APP).toMatch(/vproject_app/);
     expect(config.OPENAPI_DOCS_ENABLED).toBe(false);
+    expect(config.SESSION_TTL_SHOPKEEPER_SLIDING_DAYS).toBe(30);
+    expect(config.SESSION_TTL_SHOPKEEPER_ABSOLUTE_DAYS).toBe(90);
+    expect(config.SESSION_TTL_STAFF_ABSOLUTE_DAYS).toBe(7);
+    expect(config.SESSION_TTL_STAFF_IDLE_HOURS).toBe(12);
+    expect(config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS).toBe(10);
   });
 
   it('requires app and identity URLs, not worker or migrator', () => {

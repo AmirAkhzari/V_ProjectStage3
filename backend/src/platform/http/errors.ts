@@ -10,7 +10,14 @@ export const PLATFORM_ERROR_CODES = [
   'VALIDATION_FAILED',
   'UNAUTHENTICATED',
   'TOKEN_TYPE_MISMATCH',
+  'SESSION_REVOKED',
+  'FORBIDDEN',
   'NOT_FOUND',
+  'RATE_LIMITED',
+  'invalid_credentials',
+  'driver_inactive',
+  'PASSWORD_CHANGE_REQUIRED',
+  'session_expired',
   'INTERNAL',
   'SERVICE_UNAVAILABLE',
   'DEPENDENCY_UNAVAILABLE',
@@ -70,6 +77,16 @@ export function registerErrorHandling(app: FastifyInstance): void {
 
   app.setErrorHandler((error: FastifyError | AppError, request, reply) => {
     if (error instanceof AppError) {
+      if (error.statusCode === 503) {
+        const retryAfter =
+          error.details &&
+          typeof error.details === 'object' &&
+          'retryAfter' in error.details &&
+          typeof error.details.retryAfter === 'number'
+            ? error.details.retryAfter
+            : 5;
+        void reply.header('retry-after', String(retryAfter));
+      }
       return reply
         .code(error.statusCode)
         .send(errorEnvelope(error.code, error.message, error.details));

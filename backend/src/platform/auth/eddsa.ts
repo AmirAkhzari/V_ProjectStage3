@@ -15,6 +15,7 @@ import {
   JWT_ALG,
   JWT_AUDIENCE,
   JWT_CLOCK_SKEW_SECONDS,
+  JWT_TYP,
   TokenVerificationError,
   type AccessClaims,
   type AccessTokenVerifier,
@@ -84,6 +85,9 @@ export async function importKeysetFromJwks(jwksJson: string): Promise<Ed25519Key
     if (typeof kid !== 'string' || kid.length === 0) {
       throw new TokenVerificationError('JWKS kid must be a non-empty string');
     }
+    if (raw['kty'] !== 'OKP' || raw['crv'] !== 'Ed25519' || raw['use'] !== 'sig') {
+      throw new TokenVerificationError('JWKS key must have kty=OKP crv=Ed25519 use=sig');
+    }
     const { d, ...publicFields } = raw;
     const publicKey = asCryptoKey(
       await importJWK(publicFields as never, JWT_ALG),
@@ -105,7 +109,7 @@ export async function importKeysetFromJwks(jwksJson: string): Promise<Ed25519Key
   return keys;
 }
 
-/** Keys come from the secret manager / env only (AUTH-JW-03). Not read at API boot in S11b-2. */
+/** Keys come from the secret manager / env only (AUTH-JW-03). */
 export function readJwtEnv(env: NodeJS.ProcessEnv = process.env): {
   iss: string;
   activeKid: string;
@@ -120,6 +124,25 @@ export function readJwtEnv(env: NodeJS.ProcessEnv = process.env): {
     );
   }
   return { iss, activeKid, jwks };
+}
+
+/** Fail-at-boot when the active kid has no private part. */
+export async function createJwtFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  now?: Clock,
+): Promise<EddsaAccessTokenService> {
+  const { iss, activeKid, jwks } = readJwtEnv(env);
+  const keys = await importKeysetFromJwks(jwks);
+  const active = keys.find((key) => key.kid === activeKid);
+  if (!active?.privateKey) {
+    throw new TokenVerificationError(`active kid ${activeKid} has no private part`);
+  }
+  return new EddsaAccessTokenService({
+    iss,
+    activeKid,
+    keys,
+    ...(now ? { now } : {}),
+  });
 }
 
 export class EddsaAccessTokenService implements AccessTokenVerifier, AccessTokenSigner {
@@ -141,10 +164,14 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
       throw new TokenVerificationError('driver tokens require did');
     }
     const issuedAt = Math.floor(this.now().getTime() / 1000);
-    const payload: Record<string, string> = { typ: subject.typ, sid: subject.sid };
+    const payload: Record<string, string | number> = {
+      typ: subject.typ,
+      sid: subject.sid,
+      sv: subject.sv,
+    };
     if (subject.did !== undefined) payload['did'] = subject.did;
     return new SignJWT(payload)
-      .setProtectedHeader({ alg: JWT_ALG, kid: key.kid, typ: 'JWT' })
+      .setProtectedHeader({ alg: JWT_ALG, kid: key.kid, typ: JWT_TYP })
       .setSubject(subject.sub)
       .setIssuer(this.options.iss)
       .setAudience(JWT_AUDIENCE[subject.typ])
@@ -154,7 +181,7 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
       .sign(key.privateKey);
   }
 
-  async verify(token: string): Promise<AccessClaims> {
+  async verify(token: string, expectedGroup: SubjectType): Promise<AccessClaims> {
     let header: ReturnType<typeof decodeProtectedHeader>;
     try {
       header = decodeProtectedHeader(token);
@@ -164,17 +191,22 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
     if (header.alg !== JWT_ALG) {
       throw new TokenVerificationError('alg not allowed');
     }
+    if (header.typ !== JWT_TYP) {
+      throw new TokenVerificationError('typ header required');
+    }
     if (typeof header.kid !== 'string' || header.kid.length === 0) {
       throw new TokenVerificationError('kid required');
     }
     const key = this.keys.get(header.kid);
     if (!key) throw new TokenVerificationError('unknown kid');
 
+    const expectedAud = JWT_AUDIENCE[expectedGroup];
     let payload: JWTPayload;
     try {
       const verified = await jwtVerify(token, key.publicKey, {
         algorithms: [JWT_ALG],
         issuer: this.options.iss,
+        audience: expectedAud,
         clockTolerance: JWT_CLOCK_SKEW_SECONDS,
         currentDate: this.now(),
       });
@@ -190,9 +222,18 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
       throw new TokenVerificationError('typ invalid');
     }
     const subjectTyp = typ as SubjectType;
-    const expectedAud = JWT_AUDIENCE[subjectTyp];
+    if (subjectTyp !== expectedGroup) {
+      throw new TokenVerificationError('typ/group mismatch');
+    }
     if (payload.aud !== expectedAud) {
       throw new TokenVerificationError('aud mismatch');
+    }
+    if (typeof payload.iat !== 'number') {
+      throw new TokenVerificationError('iat required');
+    }
+    const nowSec = Math.floor(this.now().getTime() / 1000);
+    if (payload.iat > nowSec + JWT_CLOCK_SKEW_SECONDS) {
+      throw new TokenVerificationError('iat in the future');
     }
     if (
       typeof sid !== 'string' ||
@@ -202,23 +243,27 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
     ) {
       throw new TokenVerificationError('sub/sid required');
     }
-    if (payload.iat === undefined) {
-      throw new TokenVerificationError('iat required');
-    }
     if (payload.exp === undefined || payload.nbf === undefined) {
       throw new TokenVerificationError('exp/nbf required');
     }
     if (payload.exp - payload.iat > ACCESS_TOKEN_TTL_SECONDS) {
       throw new TokenVerificationError('lifetime exceeded');
     }
+    const sv = payload['sv'];
+    if (typeof sv !== 'number' || !Number.isInteger(sv) || sv < 0) {
+      throw new TokenVerificationError('sv required');
+    }
 
+    const did = payload['did'];
     if (subjectTyp === 'driver') {
-      const did = payload['did'];
       if (typeof did !== 'string' || did.length === 0) {
         throw new TokenVerificationError('driver did required');
       }
-      return { sub, typ: subjectTyp, sid, did };
+      return { sub, typ: subjectTyp, sid, sv, did };
     }
-    return { sub, typ: subjectTyp, sid };
+    if (typeof did === 'string' && did.length > 0) {
+      return { sub, typ: subjectTyp, sid, sv, did };
+    }
+    return { sub, typ: subjectTyp, sid, sv };
   }
 }

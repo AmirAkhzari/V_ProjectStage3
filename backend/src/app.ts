@@ -11,6 +11,7 @@ import { driverGroup, driverGroupSpec } from './http/driver.group.js';
 import { systemRoutes } from './http/system.routes.js';
 import { allModules } from './modules/register.js';
 import { denyAllVerifier, type AccessTokenVerifier } from './platform/auth/jwt.js';
+import type { SessionAuthority } from './platform/auth/sessionAuthority.js';
 import type { Config } from './platform/config.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { InMemoryInboxStore } from './platform/events/inbox.js';
@@ -23,6 +24,7 @@ export interface BuildAppOptions {
   config: Config;
   healthChecks: readonly HealthCheck[];
   verifier?: AccessTokenVerifier;
+  sessionAuthority?: SessionAuthority;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -63,6 +65,7 @@ export async function buildApp(options: BuildAppOptions) {
   const groupOpts = {
     modules: allModules,
     verifier: options.verifier ?? denyAllVerifier,
+    ...(options.sessionAuthority ? { sessionAuthority: options.sessionAuthority } : {}),
   };
   await app.register(appGroup, { prefix: appGroupSpec.prefix, ...groupOpts });
   await app.register(adminGroup, { prefix: adminGroupSpec.prefix, ...groupOpts });

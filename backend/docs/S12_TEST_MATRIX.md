@@ -1,17 +1,17 @@
-# S-12 / S11b-0 + S11b-1 P0 test matrix
+# S-12 / S11b-0 + S11b-1 + S11b-2 + S11b-3 P0 test matrix
 
-Catalogue: **TEST_CATALOG v1.12** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`, v1.2.0 `e3dc40d5…4601`).  
-S-14 gate = **17 exec** + **91 exec-auth**. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**). S11b-2 adds argon2id, the offline breached-password list, jose EdDSA JWT + rotation, and the refresh-token store.
+Catalogue: **TEST_CATALOG v1.15** (v1.10 labels: `exec` / `exec-auth` / `deferred:P2|P3`; frozen OpenAPI v1.0.0 `ef2a2fff…175a`, v1.1.0 `a62e4465…d0b1`, v1.2.0 `e3dc40d5…4601`).  
+S-14 gate = **17 exec** + **100 exec-auth** = **117** rows. S11b-0 covers the **17 exec** Foundation rows. S11b-1 adds identity/tenancy/customers tables + RLS harness (**TENANT-01-S11B**, **TEN-02-S11B**). S11b-2 adds argon2id, the offline breached-password list, jose EdDSA JWT + rotation, and the refresh-token store. S11b-3 adds session SoT, the auth plugin, deny-set / `session_version`, Redis 50 ms + breaker + PG fallback, and AppSec RC-3.
 
 Status:
 
 - **green** — coverage exists (file + `it(...)`, or the AUTH-XSS-02 SCA CI step).
-- **partial** — a Foundation slice exists; the ID is not fully met. After this slice: **0** among the 17 exec rows. S11b-2 AppSec RC-1: **7** exec-auth rows (AUTH-PW-02/03/04, AUTH-PW-02-OFF, AUTH-JW-03, AUTH-RT-02, AUTH-RT-05).
+- **partial** — a Foundation slice exists; the ID is not fully met.
 - **pending** — later S-11b slice (`exec-auth`) or an epic (`deferred:P2|P3`).
 - **missing** — Foundation-level gap. After this slice: **0**.
 
 Totals (**17 exec**): **green 17 / partial 0 / missing 0**.  
-**exec-auth** this slice: **green 8** (TENANT-01-S11B, TEN-02-S11B + S11b-2 **6**) / **partial 7** / **pending 76**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
+**exec-auth** this slice: **green 26** / **partial 8** / **pending 66**. Domain `deferred:P2|P3` rows are epic merge gates (DL-48 approved), not S-14.
 
 ## Exec mapping (17)
 
@@ -44,26 +44,28 @@ Totals (**17 exec**): **green 17 / partial 0 / missing 0**.
 | Contract sha        | green  | `tests/contract/frozen-openapi.test.ts`                                                     |
 | Idempotency / inbox | green  | `tests/outbox/pg.harness.test.ts`                                                           |
 | N-2 outbox SELECT   | green  | `tests/outbox/pg.harness.test.ts` — `N-2: does not let vproject_app SELECT outbox payloads` |
+| N10-1 57P01         | green  | `tests/helpers/containers.ts` — `attachPgTeardownGuard` registered before container stop    |
 
-## exec-auth (91) — owner and slice (R-5)
+## exec-auth (100) — owner and slice (R-5)
 
-This slice: **green 8** / **partial 7** / **pending 76**. No endpoints in S11b-2. S11b-2 matrix: **6 green / 7 partial**.
+This slice: **green 26** / **partial 8** / **pending 66**. No login HTTP in S11b-3 (C1/A1/B1/C11 are S11b-4/5).
 
 Carry to **S11b-6** (not this stack): J-1 — do not register A5/B5 in production; S3 `{provider}` vs Fastify `:provider` matcher + test.
 
-AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10, 9-16, and N9-4 (40P01 to retryable or a fixed lock order), plus Low N3-1, N3-2 (SQLSTATE 55P03 only) and the JWK kty/crv/use checks with fail-at-boot when the active key has no private part. **RC-3** before S11b-3 — 9-8, 9-17, 9-18, and G3. **RC-4** before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** are closed.
+AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9-4 (username/distributor-name check), 9-5, 9-10 (dummy-hash), 9-16, and N9-4 (40P01 to retryable or a fixed lock order), plus Low N3-1, N3-2 (SQLSTATE 55P03 only). **JWK kty/crv/use + fail-at-boot** closed here with AUTH-JW-03. **RC-3** closed here — 9-8, 9-17, 9-18, and G3. **RC-4** before S-14 — 9-6. **9-7** (JWKS public/private split) and **9-13** remain closed.
 
 | Slice     | Owner    | Status  | IDs (count)                                                                                                                                                                        |
 | --------- | -------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | S11b-1    | platform | green   | TENANT-01-S11B, TEN-02-S11B (2) — harness per-table read/write + ENABLE+FORCE RLS                                                                                                  |
-| S11b-2    | identity | mixed   | green 6: AUTH-PW-01, AUTH-JW-01, AUTH-JW-02, AUTH-RT-01, AUTH-RT-03, AUTH-RT-04. partial 7: AUTH-PW-02, AUTH-PW-02-OFF, AUTH-PW-03, AUTH-PW-04, AUTH-JW-03, AUTH-RT-02, AUTH-RT-05 |
-| S11b-3    | identity | pending | SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                                                  |
+| S11b-2    | identity | mixed   | green 7: AUTH-PW-01, AUTH-JW-01, AUTH-JW-02, AUTH-JW-03, AUTH-RT-01, AUTH-RT-03, AUTH-RT-04. partial 6: AUTH-PW-02, AUTH-PW-02-OFF, AUTH-PW-03, AUTH-PW-04, AUTH-RT-02, AUTH-RT-05 |
+| S11b-3    | identity | mixed   | green 15 / partial 2 of SESS-01..07, AUTH-AV-01..05, AUTH-RV-01, AUTH-DI-01, TEN-05-PLAT, SCOPE-SA-01, AUTH-JW-04-RA (17)                                                          |
 | S11b-4    | identity | pending | AUTH-LG-01..05, C11-01..05, B83-01..06, AUTH-C11-01..07, AUTH-B83-01..06, LIM-T-01..04, AUTH-LO-01, AUTH-PW-05-RA, AUTH-LG-02-PR (36)                                              |
 | S11b-5    | identity | pending | LIM-OTP-T-01, LIM-OTP-T-02, LIM-OTP-T-03, LIM-OTP-T-04, LIM-OTP-T-05, LIM-OTP-T-06, LIM-OTP-T-07, LIM-OTP-T-08 (8)                                                                 |
 | S11b-6    | platform | pending | TEN-404-01, AUTH-DM-01-RA (2)                                                                                                                                                      |
 | S11b-4..6 | identity | pending | V11-* §N of TEST_CATALOG v1.12 (13; contract frozen at v1.2.0)                                                                                                                     |
+| v1.13–15  | identity | pending | AUTH-RT-02-G1, G2, G4, G5 (store already), G6, G7, U1, L1 (8). **G3 green** in S11b-3. C1–C3 are `deferred:FE`, not S-14                                                           |
 
-**91** = 2+13+17+36+8+2+13.
+**100** = 2+13+17+36+8+2+13+9 (v1.13 G1–G5 + v1.15 G6/G7/U1/L1).
 
 ### S11b-2 exec-auth mapping (13)
 
@@ -76,12 +78,44 @@ AppSec PR #9 named carry-overs (not this run): **RC-2** before S11b-4 — 9-3, 9
 | AUTH-PW-04     | partial | `passwordPolicy.test.ts` — only C11 `/v1/driver/auth/password` while `must_change_password`. No request middleware yet                                                                                        |
 | AUTH-JW-01     | green   | `src/platform/auth/eddsa.test.ts` — EdDSA, `kid` required, 15 min `exp`, `iat` required                                                                                                                       |
 | AUTH-JW-02     | green   | same — alg allowlist (reject HS256 / missing kid), aud/typ/exp; `exp - iat` capped at 15 min                                                                                                                  |
-| AUTH-JW-03     | partial | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify. Secret-manager boot wiring is S11b-3                                                                        |
+| AUTH-JW-03     | green   | same — rotate signing `kid`; previous kid verifies until retired; JWKS import splits sign/verify; `createJwtFromEnv` secret-manager/env boot; kty/crv/use; fail-at-boot if active kid has no `d`              |
 | AUTH-RT-01     | green   | `src/modules/identity/infra/crypto/memoryRefreshStore.test.ts` — opaque ≥256-bit CSPRNG, single-use rotate                                                                                                    |
 | AUTH-RT-02     | partial | store: 20 s grace once, access-only; concurrent replay is reuse (G5 blocking FOR UPDATE, lock_timeout 2s, 0 new RT, revoke_reason=refresh_reuse). HTTP refresh + access mint is S11b-4                        |
 | AUTH-RT-03     | green   | same — shopkeeper 30d/90d, staff 7d+12h idle, driver 10h absolute                                                                                                                                             |
 | AUTH-RT-04     | green   | same — RT bound to route-group `typ`; reuse is checked before typ                                                                                                                                             |
 | AUTH-RT-05     | partial | same + `tests/integration/s11b-2-crypto.test.ts` — store hashes only; `successor` is a hash; PG persist; 10 parallel refreshes ⇒ 1 successor (AppSec 9-1). HTTP issue/refresh persist is S11b-4 (AppSec RC-1) |
+
+### S11b-3 exec-auth mapping (17)
+
+| ID            | Status  | Mapping                                                                                                                                                                                                                                 |
+| ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SESS-01       | green   | `tests/integration/s11b-3-session.test.ts` — `SESS-01: Redis hit does no PG lookup for the sid`                                                                                                                                         |
+| SESS-02       | green   | same — `SESS-02 / AUTH-RV-01: write-through revoke; next request is 401 via PG`                                                                                                                                                         |
+| SESS-03       | partial | same — `SESS-03 / AUTH-AV-02` proves ≤1 PG/sid/2s, never caches revoke, pool max 5, fallback counter, `/health=degraded`. Load is 8 parallel, not 200 rps/10s. `/ready` stays 503 `{status:'ok'}` (frozen contract; no `degraded` body) |
+| SESS-04       | green   | same — `SESS-04 / AUTH-AV-03: refresh always goes to PG while Redis is unused`                                                                                                                                                          |
+| SESS-05       | green   | same — `SESS-05 / AUTH-AV-01: Redis down fail-closes issuance with Retry-After`. HTTP C1/A1/B1/C11 wrappers are S11b-4/5                                                                                                                |
+| SESS-06       | partial | `src/platform/auth/degradedLimiter.test.ts` — `SESS-06 degraded rate limit` in-process half-limit bucket. HTTP 429 on real routes is S11b-4                                                                                             |
+| SESS-07       | green   | `tests/integration/s11b-3-session.test.ts` — `SESS-07 / AUTH-AV-04: both Redis and PG down ⇒ 503, never signature-only`                                                                                                                 |
+| AUTH-AV-01    | green   | same file as SESS-05 + `src/platform/auth/failClosed.ts` `assertRedisForAuthIssuance`                                                                                                                                                   |
+| AUTH-AV-02    | green   | same — breaker 5/10s → 30s open + SESS-03 fallback LRU. `AUTH-AV-02: 5 Redis errors open the breaker; half-open allows a single probe`                                                                                                  |
+| AUTH-AV-03    | green   | same as SESS-04                                                                                                                                                                                                                         |
+| AUTH-AV-04    | green   | same as SESS-07                                                                                                                                                                                                                         |
+| AUTH-AV-05    | green   | same — `AUTH-AV-05: implementation is not Redis-only` (`hasPgFallback`)                                                                                                                                                                 |
+| AUTH-RV-01    | green   | same as SESS-02                                                                                                                                                                                                                         |
+| AUTH-DI-01    | green   | same — `AUTH-DI-01: inactive before revoke is 403; after revoke 401; issuance never driver_inactive`. C1/C2 HTTP is S11b-4; the issuance gate never returns `driver_inactive`                                                           |
+| TEN-05-PLAT   | green   | same + `src/platform/auth/tenantPrincipal.test.ts` — SA without scope ⇒ `is_platform` true; SA with scope / DA / driver / shopkeeper ⇒ false                                                                                            |
+| SCOPE-SA-01   | green   | same + `src/modules/identity/domain/permissions.test.ts` — SA honours `X-Scope-Distributor`; DA stays in own tenant; SA perms from role (28), not the empty seed column                                                                 |
+| AUTH-JW-04-RA | green   | same — `AUTH-JW-04-RA: real DA token rejects client-supplied distributorId`                                                                                                                                                             |
+
+### AppSec RC-3 (closed this slice)
+
+| ID        | Status | Mapping                                                                                                                     |
+| --------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| 9-8       | green  | `src/platform/auth/eddsa.test.ts` — `AUTH-JW-02 / 9-8: binds aud to the route group, checks header typ, rejects future iat` |
+| 9-17      | green  | `tests/integration/s11b-3-session.test.ts` — `9-17: driver reuse audit and outbox carry distributor_id`                     |
+| 9-18 / G3 | green  | same — `9-18 / G3: family revoke rejects the grace-issued AT by sid`                                                        |
+
+Option 2 grace (20s, access-only, once) and blocking `SELECT FOR UPDATE` + `SET LOCAL lock_timeout=2s` are unchanged.
 
 ## deferred:P2\|P3 (DL-48 approved) — not this slice
 
@@ -97,7 +131,8 @@ ORD-SM-01/02, PAY-ORD-01/02, ADM-ORD-01, PAY-VER/REF/NC/CB, PAY-NTF-01, DEL-MAN-
 | TEN-03                  | green    | no GUC leak                                           |
 | TEN-04                  | green    | unset ⇒ 0 rows                                        |
 | TEN-05                  | green    | worker role part; is_platform = TEN-05-PLAT exec-auth |
-| AUTH-LG/RV/AV, C11/B83  | pending  | exec-auth; owner identity; slices S11b-3..4           |
+| AUTH-LG/C11/B83         | pending  | exec-auth; owner identity; slices S11b-4              |
+| AUTH-RV/AV              | green    | S11b-3 session SoT + plugin                           |
 | PAY-SEC-* / DEL-SEC-*   | deferred | P2/P3                                                 |
 
-**C-1 overall: pending** until exec-auth is green. Gate stays closed. S11b-0 finishes the Foundation exec set.
+**C-1 overall: pending** until remaining exec-auth is green. Gate stays closed.

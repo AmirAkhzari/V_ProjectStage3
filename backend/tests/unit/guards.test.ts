@@ -7,6 +7,7 @@ const claims = (typ: AccessClaims['typ']): AccessClaims => ({
   sub: 'user-1',
   typ,
   sid: 'sid-1',
+  sv: 0,
 });
 
 const verifierOf = (typ: AccessClaims['typ']): AccessTokenVerifier => ({

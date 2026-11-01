@@ -8,6 +8,7 @@ import { assertRuntimeDbRole } from '../../src/platform/db/runtimeRole.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
 import { SEED, seedDemoTenants } from '../../scripts/seed.js';
 import {
+  attachPgTeardownGuard,
   startPostgresWithRoles,
   TEST_ROLE_PASSWORD,
   type StartedPostgresRoles,
@@ -61,6 +62,9 @@ describe('RLS harness skeleton', () => {
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
     appPool = new pg.Pool({ connectionString: deps.appUrl });
     identityPool = new pg.Pool({ connectionString: deps.identityUrl });
+    attachPgTeardownGuard(ownerPool);
+    attachPgTeardownGuard(appPool);
+    attachPgTeardownGuard(identityPool);
     await ownerPool.query(`
       CREATE TABLE platform.rls_probe (
         id uuid PRIMARY KEY,
