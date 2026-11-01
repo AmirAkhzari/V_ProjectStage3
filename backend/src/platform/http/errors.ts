@@ -14,6 +14,7 @@ export const PLATFORM_ERROR_CODES = [
   'FORBIDDEN',
   'NOT_FOUND',
   'RATE_LIMITED',
+  'too_many_attempts',
   'invalid_credentials',
   'driver_inactive',
   'PASSWORD_CHANGE_REQUIRED',
@@ -77,7 +78,7 @@ export function registerErrorHandling(app: FastifyInstance): void {
 
   app.setErrorHandler((error: FastifyError | AppError, request, reply) => {
     if (error instanceof AppError) {
-      if (error.statusCode === 503) {
+      if (error.statusCode === 503 || error.statusCode === 429) {
         const retryAfter =
           error.details &&
           typeof error.details === 'object' &&

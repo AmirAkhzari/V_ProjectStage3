@@ -218,6 +218,32 @@ describe('session authority Architect 11-1 / 11-4 / 11-11', () => {
     expect(authority.breakerState()).toBe('open');
   });
 
+  it('F13-5: errors older than the 10s window do not open the breaker', async () => {
+    let now = 1_000;
+    const authority = new RedisPgSessionAuthority(
+      fakeRedis({
+        get: async () => {
+          throw new Error('down');
+        },
+      }),
+      { lookup: async () => null },
+      { clock: { now: () => now } },
+    );
+    await authority.check('a');
+    await authority.check('b');
+    await authority.check('c');
+    await authority.check('d');
+    expect(authority.breakerState()).toBe('closed');
+    now += 10_001;
+    await authority.check('e');
+    expect(authority.breakerState()).toBe('closed');
+    await authority.check('f');
+    await authority.check('g');
+    await authority.check('h');
+    await authority.check('i');
+    expect(authority.breakerState()).toBe('open');
+  });
+
   it('N12-5: a hung deny pipeline times out', async () => {
     const authority = new RedisPgSessionAuthority(
       fakeRedis({ hangExec: true }),

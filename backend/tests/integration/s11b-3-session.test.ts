@@ -68,6 +68,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
     jwt = new EddsaAccessTokenService({ iss: 'vproject', activeKid: 'k1', keys: [key] });
     store = new PgRefreshTokenStore(identityPool, {
       onSidsRevoked: async (sids) => authority.deny(sids),
+      log: { error() {} },
     });
     api = createIdentityApi(identityPool, authority, redis);
     app = await buildApp({
@@ -636,8 +637,14 @@ describe('S11b-3 session SoT + auth plugin', () => {
     });
     try {
       const deadline = Date.now() + LIVE_TTL_SECONDS * 1000 + 500;
-      let status = 0;
-      while (Date.now() <= deadline) {
+      const first = await isolated.inject({
+        method: 'GET',
+        url: '/v1/driver/anything',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(first.statusCode).not.toBe(401);
+      let status = first.statusCode;
+      while (Date.now() <= deadline && status !== 401) {
         const response = await isolated.inject({
           method: 'GET',
           url: '/v1/driver/anything',
@@ -675,7 +682,9 @@ describe('S11b-3 session SoT + auth plugin', () => {
     await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
     const pending = await listOpenPendingDenies(identityPool);
     expect(pending).toContain(sid);
-    await drainPendingDenies(identityPool, (sids) => liveAuthority.deny(sids));
+    await drainPendingDenies(identityPool, (sids) => liveAuthority.deny(sids), {
+      error() {},
+    });
     const isolated = await buildApp({
       config: testConfig(),
       verifier: jwt,

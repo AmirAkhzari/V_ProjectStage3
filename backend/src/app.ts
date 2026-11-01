@@ -16,6 +16,7 @@ import {
   type SessionAuthority,
 } from './platform/auth/sessionAuthority.js';
 import { AppError } from './platform/http/errors.js';
+import type { DriverAuthRuntime } from './modules/identity/application/driverAuth.js';
 import type { Config } from './platform/config.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { InMemoryInboxStore } from './platform/events/inbox.js';
@@ -24,20 +25,31 @@ import { registerErrorHandling } from './platform/http/errors.js';
 import { generateRequestId, registerRequestContext } from './platform/http/requestContext.js';
 import { pinoOptions } from './platform/logger.js';
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    nodeEnv: Config['NODE_ENV'];
+    driverAuth?: DriverAuthRuntime;
+  }
+}
+
 export interface BuildAppOptions {
   config: Config;
   healthChecks: readonly HealthCheck[];
   verifier?: AccessTokenVerifier;
   sessionAuthority?: SessionAuthority;
   assertIssuance?: () => Promise<void>;
+  driverAuth?: DriverAuthRuntime;
 }
 
 export async function buildApp(options: BuildAppOptions) {
+  const hops = options.config.TRUST_PROXY_HOPS;
   const app = Fastify({
     logger: pinoOptions(options.config),
     genReqId: generateRequestId,
     // Do not let Fastify copy x-request-id before validation (AppSec L-3).
     requestIdHeader: false,
+    // API port is reachable only through the LB; trust only TRUST_PROXY_HOPS hops.
+    trustProxy: hops > 0 ? (_address: string, hop: number) => hop < hops : false,
   });
 
   app.setValidatorCompiler(validatorCompiler);
@@ -45,6 +57,8 @@ export async function buildApp(options: BuildAppOptions) {
 
   registerRequestContext(app);
   registerErrorHandling(app);
+  app.decorate('nodeEnv', options.config.NODE_ENV);
+  if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
 
   if (options.config.OPENAPI_DOCS_ENABLED) {
     await app.register(swagger, {

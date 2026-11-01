@@ -80,4 +80,26 @@ describe('password policy', () => {
     }
     expect(() => assertDriverRouteAllowed(true, DRIVER_PASSWORD_CHANGE_PATH)).not.toThrow();
   });
+
+  it('R12-7 / 9-4: password-set rejects username=distributor and password containing either', () => {
+    expect(evaluateNewPassword('ali-secret1', () => false, { username: 'ali' })).toEqual({
+      ok: false,
+      code: 'PASSWORD_CONTAINS_IDENTITY',
+    });
+    expect(
+      evaluateNewPassword('northwind99', () => false, { distributorName: 'NorthWind' }),
+    ).toEqual({ ok: false, code: 'PASSWORD_CONTAINS_IDENTITY' });
+    expect(
+      evaluateNewPassword('correct-horse-12', () => false, {
+        username: 'northwind',
+        distributorName: 'NorthWind',
+      }),
+    ).toEqual({ ok: false, code: 'USERNAME_TAKEN' });
+    expect(
+      evaluateNewPassword('correct-horse-12', () => false, {
+        username: 'drv1',
+        distributorName: 'NorthWind',
+      }).ok,
+    ).toBe(true);
+  });
 });

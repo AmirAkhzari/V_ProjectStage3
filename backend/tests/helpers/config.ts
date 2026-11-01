@@ -21,6 +21,8 @@ export function productionApiConfig(overrides: Record<string, string | undefined
       'postgres://vproject_identity:vproject@db.example.ir:5432/vproject?sslmode=require',
     REDIS_URL: 'rediss://cache.example.ir:6379',
     OPENAPI_DOCS_ENABLED: 'false',
+    TRUST_PROXY_HOPS: '1',
+    AUDIT_HASH_KEY: 'test-audit-hash-key-32-bytes-min',
     ...overrides,
   });
 }

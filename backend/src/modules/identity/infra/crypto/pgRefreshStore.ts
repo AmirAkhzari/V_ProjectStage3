@@ -26,11 +26,17 @@ import {
   isRetryableLockError,
   lockSessionsThenTokensThenAccount,
 } from '../session/lockOrder.js';
-import { drainPendingDenies, enqueuePendingDenies } from '../session/pgSessionStore.js';
+import {
+  drainPendingDenies,
+  enqueuePendingDenies,
+  silentDrainLog,
+  type DrainLog,
+} from '../session/pgSessionStore.js';
 import { generateRefreshToken, hashRefreshToken } from './refreshHash.js';
 
 export interface RefreshStoreHooks {
   onSidsRevoked: (sids: readonly string[]) => Promise<void>;
+  log: DrainLog;
 }
 
 function requiredOnSidsRevoked(): Promise<void> {
@@ -63,7 +69,10 @@ interface LockedRefreshRow {
 export class PgRefreshTokenStore implements RefreshTokenStore {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly hooks: RefreshStoreHooks = { onSidsRevoked: requiredOnSidsRevoked },
+    private readonly hooks: RefreshStoreHooks = {
+      onSidsRevoked: requiredOnSidsRevoked,
+      log: silentDrainLog,
+    },
   ) {}
 
   async issue(input: RefreshIssueInput, clock: Clock = systemClock): Promise<RefreshIssueResult> {
@@ -71,7 +80,43 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     const windows = sessionWindows(input.typ, now, now);
     const refreshToken = generateRefreshToken();
     const hash = hashRefreshToken(refreshToken);
-    await this.withTx(async (client) => {
+    const extraSids = await this.withTx(async (client) => {
+      await applyLockTimeout(client);
+      await lockSessionsThenTokensThenAccount(client, {
+        kind: 'account',
+        accountId: input.accountId,
+        lockAccount: true,
+      });
+      if (input.requireActive || input.casPasswordHash || input.verifiedPasswordHash) {
+        if (input.distributorId) {
+          await client.query('SELECT set_config($1, $2, true)', [
+            'app.distributor_id',
+            input.distributorId,
+          ]);
+        }
+        await client.query('SELECT set_config($1, $2, true)', ['app.subject_type', 'driver']);
+        const current = await client.query<{ status: string; password_hash: string }>(
+          `SELECT a.status, c.password_hash
+             FROM identity.accounts a
+             JOIN identity.driver_credentials c ON c.account_id = a.id
+            WHERE a.id = $1`,
+          [input.accountId],
+        );
+        const row = current.rows[0];
+        if (!row || (input.requireActive && row.status !== 'active')) {
+          throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
+        }
+        if (input.verifiedPasswordHash && row.password_hash !== input.verifiedPasswordHash) {
+          throw Object.assign(new Error('hash changed'), { code: 'ISSUE_ABORTED' });
+        }
+        if (input.casPasswordHash && row.password_hash === input.casPasswordHash.oldHash) {
+          await client.query(
+            `UPDATE identity.driver_credentials SET password_hash = $2
+              WHERE account_id = $1 AND password_hash = $3`,
+            [input.accountId, input.casPasswordHash.nextHash, input.casPasswordHash.oldHash],
+          );
+        }
+      }
       await client.query(
         `INSERT INTO identity.sessions
            (sid, account_id, typ, family_id, created_at, last_used_at, absolute_expires_at)
@@ -84,7 +129,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
          VALUES ($1, $2, $3, NULL, NULL, NULL, NULL)`,
         [hash, input.familyId, input.sid],
       );
+      return this.revokeOverflowInTx(client, input, now);
     });
+    if (extraSids.length > 0) {
+      await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids), this.hooks.log);
+    }
     return {
       refreshToken,
       hash,
@@ -128,15 +177,15 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         const row = found.rows[0];
         if (!row) return { result: { status: 'rejected' as const, reason: 'unknown' as const } };
 
+        if (row.typ !== expectedTyp) {
+          return { result: { status: 'rejected' as const, reason: 'typ_mismatch' as const } };
+        }
         if (row.rotated_at !== null) {
           return this.replayRotated(client, row, expectedTyp, now);
         }
 
         if (row.revoked_at !== null) {
           return { result: { status: 'rejected' as const, reason: 'family_revoked' as const } };
-        }
-        if (row.typ !== expectedTyp) {
-          return { result: { status: 'rejected' as const, reason: 'typ_mismatch' as const } };
         }
         if (isAbsoluteExpired(row.typ as SubjectType, row.created_at, now)) {
           return { result: { status: 'rejected' as const, reason: 'absolute_expired' as const } };
@@ -148,7 +197,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         return { result: await this.claimRotation(client, row, now) };
       });
       if (outcome.revokedSids && outcome.revokedSids.length > 0) {
-        await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids));
+        await drainPendingDenies(
+          this.pool,
+          (sids) => this.hooks.onSidsRevoked(sids),
+          this.hooks.log,
+        );
       }
       return outcome.result;
     } catch (error) {
@@ -202,6 +255,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
             familyId: row.family_id,
             typ,
             accountId: row.account_id,
+            absoluteExpiresAt: row.absolute_expires_at,
           },
         };
       }
@@ -253,6 +307,75 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       refreshExpiresAt: windows.refreshExpiresAt,
       absoluteExpiresAt: windows.absoluteExpiresAt,
     };
+  }
+
+  private async revokeOverflowInTx(
+    client: pg.PoolClient,
+    input: RefreshIssueInput,
+    now: Date,
+  ): Promise<string[]> {
+    const cap = input.maxSessions;
+    if (cap === undefined || cap < 1) return [];
+    const open = await client.query<{ sid: string; family_id: string }>(
+      `SELECT sid, family_id FROM identity.sessions
+        WHERE account_id = $1 AND revoked_at IS NULL
+        ORDER BY created_at, sid`,
+      [input.accountId],
+    );
+    const overflow = Math.max(0, open.rows.length - cap);
+    const victims = open.rows.filter((row) => row.sid !== input.sid).slice(0, overflow);
+    if (victims.length === 0) return [];
+    const sids = victims.map((row) => row.sid);
+    await enqueuePendingDenies(client, sids, now);
+    await client.query(
+      `UPDATE identity.sessions SET revoked_at = $2, revoke_reason = 'session_limit'
+        WHERE sid = ANY($1::uuid[])`,
+      [sids, now],
+    );
+    await client.query(
+      `UPDATE identity.refresh_tokens SET rotated_at = COALESCE(rotated_at, $2), used_at = COALESCE(used_at, $2)
+        WHERE sid = ANY($1::uuid[])`,
+      [sids, now],
+    );
+    const distributorId =
+      input.distributorId ?? (await lookupDistributorId(client, input.accountId));
+    for (const victim of victims) {
+      await insertAudit(client, {
+        accountId: input.accountId,
+        action: 'session_limit',
+        familyId: victim.family_id,
+        sid: victim.sid,
+        now,
+        distributorId,
+      });
+      const event = sessionsRevokedEvent(
+        {
+          familyId: victim.family_id,
+          sid: victim.sid,
+          accountId: input.accountId,
+          reason: 'session_limit',
+        },
+        now,
+        distributorId,
+      );
+      await client.query(
+        `INSERT INTO platform.outbox_events (
+           id, event_type, event_version, aggregate_type, aggregate_id, distributor_id,
+           payload, occurred_at, attempts
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)`,
+        [
+          event.id,
+          event.type,
+          event.version,
+          event.aggregateType,
+          event.aggregateId,
+          event.distributorId,
+          JSON.stringify(event.payload),
+          event.occurredAt,
+        ],
+      );
+    }
+    return sids;
   }
 
   private async successorUnused(client: pg.PoolClient, successor: string | null): Promise<boolean> {

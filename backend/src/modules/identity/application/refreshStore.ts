@@ -18,6 +18,12 @@ export interface RefreshIssueInput {
   sid: string;
   familyId: string;
   typ: SubjectType;
+  maxSessions?: number;
+  distributorId?: string | null;
+  requireActive?: boolean;
+  /** Hash that login verified. Under the issue lock a mismatch aborts (R2-2 / R13-4). */
+  verifiedPasswordHash?: string;
+  casPasswordHash?: { oldHash: string; nextHash: string };
 }
 
 export interface RefreshIssueResult {
@@ -49,6 +55,7 @@ export interface RefreshRotateGrace {
   familyId: string;
   typ: SubjectType;
   accountId: string;
+  absoluteExpiresAt: Date;
 }
 
 export interface RefreshRotateFail {
