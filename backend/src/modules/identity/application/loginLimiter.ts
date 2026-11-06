@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import {
   LOGIN_BACKOFF_SECONDS,
@@ -9,6 +10,14 @@ import {
   LOGIN_TARPIT_MAX_CONCURRENT,
   tarpitDelaySeconds,
 } from '../domain/loginPolicy.js';
+
+/**
+ * N14-2: limiter + session deny Lua uses standalone GET/INCR/SET NX/DEL on
+ * distinct keys. Deploy a single-node Redis (no Cluster hash-slot split).
+ * Cluster would need `{login}` hash tags on every key.
+ *
+ * IPv6: username/IP are hashed; keys never join raw host:port with extra colons.
+ */
 
 /**
  * Atomically: if a lock/cap is already hit, return blocked without incrementing
@@ -29,7 +38,7 @@ end
 local uip_lock = ttl(KEYS[2])
 local user_lock = ttl(KEYS[4])
 if uip_lock > 0 or user_lock > 0 then
-  return {0, math.max(uip_lock, user_lock, 1)}
+  return {0, math.max(uip_lock, user_lock, 1), 0, 0}
 end
 
 local user_ip_limit = tonumber(ARGV[1])
@@ -37,32 +46,65 @@ local ip_limit = tonumber(ARGV[2])
 local uip = tonumber(redis.call('GET', KEYS[1]) or '0')
 local ip = tonumber(redis.call('GET', KEYS[5]) or '0')
 if uip >= user_ip_limit then
-  return {0, math.max(ttl(KEYS[1]), 1)}
+  return {0, math.max(ttl(KEYS[1]), 1), 0, 0}
 end
 if ip >= ip_limit then
-  return {0, math.max(ttl(KEYS[5]), tonumber(ARGV[5]), 1)}
+  return {0, math.max(ttl(KEYS[5]), tonumber(ARGV[5]), 1), 0, 0}
 end
 
 uip = incr_expire(KEYS[1], tonumber(ARGV[3]))
 local user = incr_expire(KEYS[3], tonumber(ARGV[4]))
 ip = incr_expire(KEYS[5], tonumber(ARGV[5]))
 
-local locked = 0
+local locked_uip = 0
+local locked_user = 0
 if uip == user_ip_limit then
-  if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[6])) then locked = 1 end
+  if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[6])) then locked_uip = 1 end
 end
 if user >= user_ip_limit then
   local stage = math.min(math.floor(user / user_ip_limit) - 1, 3)
   local backoff = tonumber(ARGV[7 + stage])
-  if redis.call('SET', KEYS[4], '1', 'NX', 'EX', backoff) then locked = 1 end
+  if redis.call('SET', KEYS[4], '1', 'NX', 'EX', backoff) then locked_user = 1 end
 end
-return {1, locked, uip, user, ip}
+return {1, locked_uip, locked_user, uip, user, ip}
 `;
 
-const REFUND_IP = `
+const DECR_FLOOR = `
 local n = redis.call('DECR', KEYS[1])
 if n <= 0 then redis.call('DEL', KEYS[1]) end
 return n
+`;
+
+const SETTLE_SUCCESS = `
+local function decr_floor(key)
+  local v = redis.call('GET', key)
+  if not v then return end
+  local n = tonumber(v) - 1
+  if n <= 0 then redis.call('DEL', key) else redis.call('SET', key, n, 'KEEPTTL') end
+end
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
+redis.call('DEL', KEYS[3])
+redis.call('DEL', KEYS[4])
+decr_floor(KEYS[5])
+if ARGV[1] == '1' then decr_floor(KEYS[6]) end
+return 1
+`;
+
+const REFUND_ATTEMPT = `
+local function decr_floor(key)
+  local v = redis.call('GET', key)
+  if not v then return end
+  local n = tonumber(v) - 1
+  if n <= 0 then redis.call('DEL', key) else redis.call('SET', key, n, 'KEEPTTL') end
+end
+decr_floor(KEYS[1])
+if ARGV[1] == '1' then redis.call('DEL', KEYS[2]) end
+decr_floor(KEYS[3])
+if ARGV[2] == '1' then redis.call('DEL', KEYS[4]) end
+decr_floor(KEYS[5])
+if ARGV[3] == '1' then decr_floor(KEYS[6]) end
+return 1
 `;
 
 const INCR_EXPIRE = `
@@ -85,28 +127,38 @@ export type LoginReservation =
   | {
       status: 'reserved';
       locked: boolean;
+      lockedUip: boolean;
+      lockedUser: boolean;
+      inflightHeld: boolean;
+      delayMs: number;
       uipFails: number;
       userFails: number;
       ipFails: number;
+      username: string;
+      ip: string;
     };
 
-function userIpFailKey(username: string, ip: string): string {
-  return `login:fail:uip:${username}:${ip}`;
+export function limiterKeyPart(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32);
 }
-function userIpLockKey(username: string, ip: string): string {
-  return `login:lock:uip:${username}:${ip}`;
+
+export function userIpFailKey(username: string, ip: string): string {
+  return `login:fail:uip:${limiterKeyPart(username)}:${limiterKeyPart(ip)}`;
 }
-function userFailKey(username: string): string {
-  return `login:fail:user:${username}`;
+export function userIpLockKey(username: string, ip: string): string {
+  return `login:lock:uip:${limiterKeyPart(username)}:${limiterKeyPart(ip)}`;
 }
-function userLockKey(username: string): string {
-  return `login:lock:user:${username}`;
+export function userFailKey(username: string): string {
+  return `login:fail:user:${limiterKeyPart(username)}`;
 }
-function ipFailKey(ip: string): string {
-  return `login:fail:ip:${ip}`;
+export function userLockKey(username: string): string {
+  return `login:lock:user:${limiterKeyPart(username)}`;
 }
-function tarpitKey(ip: string): string {
-  return `login:tarpit:${ip}`;
+export function ipFailKey(ip: string): string {
+  return `login:fail:ip:${limiterKeyPart(ip)}`;
+}
+export function tarpitKey(ip: string): string {
+  return `login:tarpit:${limiterKeyPart(ip)}`;
 }
 
 function asNumber(value: unknown): number {
@@ -142,37 +194,82 @@ export async function reserveLoginAttempt(
   }
   const reserved = {
     status: 'reserved' as const,
-    locked: asNumber(raw[1]) === 1,
-    uipFails: asNumber(raw[2]),
-    userFails: asNumber(raw[3]),
-    ipFails: asNumber(raw[4]),
+    lockedUip: asNumber(raw[1]) === 1,
+    lockedUser: asNumber(raw[2]) === 1,
+    locked: asNumber(raw[1]) === 1 || asNumber(raw[2]) === 1,
+    uipFails: asNumber(raw[3]),
+    userFails: asNumber(raw[4]),
+    ipFails: asNumber(raw[5]),
+    delayMs: 0,
+    inflightHeld: false,
+    username,
+    ip,
   };
   const delay = tarpitDelaySeconds(reserved.ipFails, limits.tarpitAfter);
-  if (delay > 0) {
-    const inflight = asNumber(
-      await redis.eval(INCR_EXPIRE, 1, tarpitKey(ip), String(LOGIN_TARPIT_CAP_SECONDS)),
-    );
-    if (inflight > LOGIN_TARPIT_MAX_CONCURRENT) {
-      return { status: 'blocked', retryAfter: delay };
-    }
-    await (limits.sleep ?? defaultSleep)(delay * 1000);
+  if (delay <= 0) return reserved;
+  const inflight = asNumber(
+    await redis.eval(INCR_EXPIRE, 1, tarpitKey(ip), String(LOGIN_TARPIT_CAP_SECONDS)),
+  );
+  if (inflight > LOGIN_TARPIT_MAX_CONCURRENT) {
+    await redis.eval(DECR_FLOOR, 1, tarpitKey(ip));
+    return { status: 'blocked', retryAfter: delay };
   }
-  return reserved;
+  return { ...reserved, delayMs: delay * 1000, inflightHeld: true };
 }
 
 /** AUTH-LG-04: success clears username counters and refunds the reserved IP increment. */
 export async function settleLoginSuccess(
   redis: Redis,
-  username: string,
-  ip: string,
+  reservation: Extract<LoginReservation, { status: 'reserved' }>,
 ): Promise<void> {
-  await redis.del(
-    userIpFailKey(username, ip),
-    userIpLockKey(username, ip),
-    userFailKey(username),
-    userLockKey(username),
+  await redis.eval(
+    SETTLE_SUCCESS,
+    6,
+    userIpFailKey(reservation.username, reservation.ip),
+    userIpLockKey(reservation.username, reservation.ip),
+    userFailKey(reservation.username),
+    userLockKey(reservation.username),
+    ipFailKey(reservation.ip),
+    tarpitKey(reservation.ip),
+    reservation.inflightHeld ? '1' : '0',
   );
-  await redis.eval(REFUND_IP, 1, ipFailKey(ip));
+}
+
+/** Refund a reserved attempt that never ran verify (lookup/issue 503). */
+export async function refundLoginAttempt(
+  redis: Redis,
+  reservation: Extract<LoginReservation, { status: 'reserved' }>,
+): Promise<void> {
+  await redis.eval(
+    REFUND_ATTEMPT,
+    6,
+    userIpFailKey(reservation.username, reservation.ip),
+    userIpLockKey(reservation.username, reservation.ip),
+    userFailKey(reservation.username),
+    userLockKey(reservation.username),
+    ipFailKey(reservation.ip),
+    tarpitKey(reservation.ip),
+    reservation.lockedUip ? '1' : '0',
+    reservation.lockedUser ? '1' : '0',
+    reservation.inflightHeld ? '1' : '0',
+  );
+}
+
+/** Drop tarpit inflight after a real verify failure (counts stay). */
+export async function releaseLoginInflight(
+  redis: Redis,
+  reservation: Extract<LoginReservation, { status: 'reserved' }>,
+): Promise<void> {
+  if (!reservation.inflightHeld) return;
+  await redis.eval(DECR_FLOOR, 1, tarpitKey(reservation.ip));
+}
+
+export async function applyLoginTarpit(
+  reservation: Extract<LoginReservation, { status: 'reserved' }>,
+  limits: LoginLimiterLimits = {},
+): Promise<void> {
+  if (reservation.delayMs <= 0) return;
+  await (limits.sleep ?? defaultSleep)(reservation.delayMs);
 }
 
 function defaultSleep(ms: number): Promise<void> {

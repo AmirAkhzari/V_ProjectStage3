@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { buildApp, type App } from '../../src/app.js';
 import { createRouteGroup } from '../../src/http/group.js';
+import { subjectGuard } from '../../src/platform/auth/guards.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import type { SessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
 import { testConfig } from '../helpers/config.js';
@@ -69,6 +70,43 @@ describe('route group guards', () => {
     expect(response.statusCode).toBe(503);
     expect(response.headers['retry-after']).toBeDefined();
     expect(response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+  });
+
+  it('R11-5: registry operationId C11 is fresh without a sensitive group', async () => {
+    let pgHits = 0;
+    const base = allowAllSessionAuthority('driver');
+    const authority: SessionAuthority = {
+      ...base,
+      check: async (sid, sv, opts) => {
+        if (opts?.fresh === true) {
+          pgHits += 1;
+          return { status: 'revoked', reason: 'fresh' };
+        }
+        return base.check(sid, sv);
+      },
+    };
+    const isolated = Fastify();
+    isolated.addHook('onRequest', async function guard(request, reply) {
+      return subjectGuard('driver', verifierOf('driver'), { sessionAuthority: authority }).call(
+        this,
+        request,
+        reply,
+      );
+    });
+    isolated.post('/v1/driver/auth/password', { schema: { operationId: 'C11' } }, async () => ({
+      ok: true,
+    }));
+    try {
+      const response = await isolated.inject({
+        method: 'POST',
+        url: '/v1/driver/auth/password',
+        headers: { authorization: 'Bearer mock-token' },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(pgHits).toBe(1);
+    } finally {
+      await isolated.close();
+    }
   });
 
   it('A-11-2: sensitive group option always hits PG', async () => {

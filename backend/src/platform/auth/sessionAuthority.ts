@@ -181,7 +181,6 @@ export class RedisPgSessionAuthority implements SessionAuthority {
   private readonly forcePg = new Set<string>();
   private readonly liveWriteEpoch = new Map<string, number>();
   private failureEpoch = 0;
-  private pendingEpochBump = false;
   private fallbacks = 0;
   private readonly clock: CircuitBreakerClock;
   private readonly lookupTimeoutMs: number;
@@ -218,7 +217,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
   }
 
   async rememberLive(row: SessionSnapshot): Promise<void> {
-    const epoch = await this.ensureFailEpoch();
+    const epoch = this.failureEpoch;
     await withTimeout(
       this.redis.set(
         liveKey(row.sid),
@@ -226,7 +225,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
         'EX',
         LIVE_TTL_SECONDS,
       ),
-      this.denyTimeoutMs,
+      REDIS_SID_BUDGET_MS,
     );
     setBounded(this.liveWriteEpoch, row.sid, epoch);
   }
@@ -284,6 +283,11 @@ export class RedisPgSessionAuthority implements SessionAuthority {
       }
       this.forcePg.delete(sid);
       setBounded(this.liveLru, sid, { at: now, row });
+      if (!fresh) {
+        void this.rememberLive(row).catch(() => {
+          this.markRedisFailure();
+        });
+      }
       return this.decide({ status: 'active', row }, claimedVersion);
     } catch {
       return { status: 'unavailable' };
@@ -333,7 +337,6 @@ export class RedisPgSessionAuthority implements SessionAuthority {
     if (state === 'half_open' && !this.breaker.allowProbe()) return undefined;
 
     try {
-      const epoch = await this.ensureFailEpoch();
       const [denied, raw] = await withTimeout(
         Promise.all([this.redis.get(denyKey(sid)), this.redis.get(liveKey(sid))]),
         REDIS_SID_BUDGET_MS,
@@ -345,7 +348,7 @@ export class RedisPgSessionAuthority implements SessionAuthority {
       if (parsed === null) return undefined;
       const written = this.liveWriteEpoch.get(sid);
       if (written !== undefined && written < this.failureEpoch) return undefined;
-      if (parsed.epoch < epoch) return undefined;
+      if (parsed.epoch < this.failureEpoch) return undefined;
       return { status: 'active', row: parsed.row };
     } catch {
       this.breaker.recordFailure();
@@ -355,7 +358,6 @@ export class RedisPgSessionAuthority implements SessionAuthority {
   }
 
   private async writeDeny(sids: readonly string[]): Promise<void> {
-    await this.ensureFailEpoch();
     const pipeline = this.redis.pipeline();
     for (const sid of sids) {
       pipeline.set(denyKey(sid), '1', 'EX', DENY_TTL_SECONDS);
@@ -367,19 +369,6 @@ export class RedisPgSessionAuthority implements SessionAuthority {
 
   private markRedisFailure(): void {
     this.failureEpoch += 1;
-    this.pendingEpochBump = true;
-  }
-
-  private async ensureFailEpoch(): Promise<number> {
-    if (!this.pendingEpochBump) return this.failureEpoch;
-    try {
-      const next = await withTimeout(this.redis.incr(failEpochKey()), REDIS_DENY_TIMEOUT_MS);
-      this.failureEpoch = Math.max(this.failureEpoch, Number(next));
-      this.pendingEpochBump = false;
-      return this.failureEpoch;
-    } catch {
-      return this.failureEpoch;
-    }
   }
 
   private dropLocalLive(sids: readonly string[]): void {
@@ -433,8 +422,4 @@ export function denyKey(sid: string): string {
 
 export function liveKey(sid: string): string {
   return `sess:live:${sid}`;
-}
-
-export function failEpochKey(): string {
-  return 'sess:fail_epoch';
 }

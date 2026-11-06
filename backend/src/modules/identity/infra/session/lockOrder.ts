@@ -1,6 +1,7 @@
 import type pg from 'pg';
 
-/** N12-1: every path locks sessions (sid ASC), then tokens (hash ASC), then the account. */
+/** N12-1: every path locks sessions (sid ASC), then tokens (hash ASC), then the account.
+ * F13-4: account-scope locks only non-revoked rows; family/sid scopes still lock all. */
 export const IDENTITY_LOCK_TIMEOUT = '2s';
 
 export interface LockedSessionRow {
@@ -55,7 +56,7 @@ async function lockSessions(
   if (scope.kind === 'account') {
     const found = await client.query<LockedSessionRow>(
       `SELECT sid, family_id, account_id FROM identity.sessions
-        WHERE account_id = $1
+        WHERE account_id = $1 AND revoked_at IS NULL
         ORDER BY sid
         FOR UPDATE`,
       [scope.accountId],

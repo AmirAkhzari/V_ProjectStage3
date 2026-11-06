@@ -7,6 +7,7 @@ import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.
 import { assertStartupAdapters } from './platform/adapters.js';
 import { createJwtFromEnv } from './platform/auth/eddsa.js';
 import { assertRedisForAuthIssuance } from './platform/auth/failClosed.js';
+import { startPendingDenyWorker } from './modules/identity/application/pendingDenyWorker.js';
 import { fallbackPoolOptions, RedisPgSessionAuthority } from './platform/auth/sessionAuthority.js';
 import { loadConfigOrExit } from './platform/config.js';
 import { createDb } from './platform/db/pool.js';
@@ -40,7 +41,15 @@ const refreshStore = new PgRefreshTokenStore(identityDb.pool, {
   log,
 });
 
+const stopPendingDenyWorker = startPendingDenyWorker({
+  pool: identityDb.pool,
+  deny: (sids) => sessionAuthority.deny(sids),
+  log,
+  intervalMs: config.WORKER_POLL_INTERVAL_MS,
+});
+
 const closeInfra = async () => {
+  stopPendingDenyWorker();
   await redis.quit().catch(() => redis.disconnect());
   await Promise.all([sessionLookupPool.end(), identityDb.close(), db.close()]);
 };

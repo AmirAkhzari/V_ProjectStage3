@@ -2,6 +2,7 @@ import type { onRequestAsyncHookHandler } from 'fastify';
 import { AppError } from '../http/errors.js';
 import type { TenantContext } from '../db/tenant.js';
 import type { AccessClaims, AccessTokenVerifier, SubjectType } from './jwt.js';
+import { requiresFreshSession } from './sensitiveRoutes.js';
 import type { SessionAuthority } from './sessionAuthority.js';
 import { principalToTenant } from './tenantPrincipal.js';
 
@@ -57,7 +58,7 @@ export function subjectGuard(
     }
     assertRouteGroupTyp(claims.typ, expected);
 
-    const fresh = options.fresh === true || request.routeOptions.config.sensitive === true;
+    const fresh = requiresFreshSession(request, options.fresh);
     const decision = await options.sessionAuthority.check(
       claims.sid,
       claims.sv,

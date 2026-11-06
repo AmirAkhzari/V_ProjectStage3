@@ -264,10 +264,12 @@ export async function markPendingDenyAttempt(
 
 export interface DrainLog {
   error(bindings: Record<string, unknown>, message: string): void;
+  warn?(bindings: Record<string, unknown>, message: string): void;
 }
 
 export const silentDrainLog: DrainLog = {
   error() {},
+  warn() {},
 };
 
 /** R12-10: revoke one session with no session_version bump. */

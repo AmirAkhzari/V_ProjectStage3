@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import argon2 from 'argon2';
 import { parse } from 'yaml';
@@ -13,6 +13,7 @@ import {
   loginDriver,
   type DriverAuthRuntime,
 } from '../../src/modules/identity/application/driverAuth.js';
+import { userLockKey } from '../../src/modules/identity/application/loginLimiter.js';
 import {
   TEST_AUDIT_HASH_KEY,
   hashUsernameForAudit,
@@ -40,6 +41,12 @@ import {
 const DIST = '11111111-1111-1111-1111-111111111111';
 const PASSWORD = 'correct-horse-12';
 const yamlPath = join(dirname(fileURLToPath(import.meta.url)), '../../openapi/openapi-v1.2.0.yaml');
+let loginIpSeq = 1;
+
+function nextLoginIp(): string {
+  const n = loginIpSeq++;
+  return `198.51.${(n >> 8) & 0xff}.${n & 0xff}`;
+}
 
 function headerNames(response: { headers: Record<string, unknown> }): string[] {
   return Object.keys(response.headers)
@@ -135,6 +142,11 @@ describe('S11b-4a driver C1/C2', () => {
     await pgRoles.postgres.stop();
   });
 
+  beforeEach(async () => {
+    const keys = await redis.keys('login:*');
+    if (keys.length > 0) await redis.del(...keys);
+  });
+
   async function seedDriver(
     username: string,
     opts: { status?: 'active' | 'inactive'; hash?: string } = {},
@@ -168,7 +180,7 @@ describe('S11b-4a driver C1/C2', () => {
       method: 'POST',
       url: '/v1/driver/auth/login',
       payload: { username, password },
-      headers,
+      headers: { 'x-forwarded-for': nextLoginIp(), ...headers },
     });
   }
 
@@ -233,7 +245,7 @@ describe('S11b-4a driver C1/C2', () => {
   it('AUTH-LG-02-PR: unknown vs wrong vs inactive p95 timing overlap', async () => {
     const wrongUsers: string[] = [];
     const deadUsers: string[] = [];
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       wrongUsers.push((await seedDriver(`tw-${randomUUID().slice(0, 8)}`)).username);
       deadUsers.push(
         (await seedDriver(`td-${randomUUID().slice(0, 8)}`, { status: 'inactive' })).username,
@@ -251,14 +263,14 @@ describe('S11b-4a driver C1/C2', () => {
       return times[Math.ceil(0.95 * times.length) - 1] ?? 0;
     };
     const unknown = await p95(
-      Array.from({ length: 8 }, () => `gone-${randomUUID().slice(0, 8)}`),
+      Array.from({ length: 30 }, () => `gone-${randomUUID().slice(0, 8)}`),
       PASSWORD,
     );
     const wrong = await p95(wrongUsers, 'wrong-password-99');
     const dead = await p95(deadUsers, PASSWORD);
     expect(Math.abs(unknown - wrong)).toBeLessThan(50);
     expect(Math.abs(unknown - dead)).toBeLessThan(50);
-  }, 60_000);
+  }, 180_000);
 
   it('V11-O2-01: over-long username or password is invalid_credentials before lookup', async () => {
     const response = await login('x'.repeat(65), PASSWORD);
@@ -298,9 +310,10 @@ describe('S11b-4a driver C1/C2', () => {
     }
   });
 
-  it('LIM-T-01: 6th failure from IP1 is 429 + Retry-After; lockout audit has hashed username', async () => {
+  it('LIM-T-01: lockout does not revoke a prior open session; 6th fail is 429', async () => {
     const { username, accountId } = await seedDriver(`lok-${randomUUID().slice(0, 8)}`);
     const ip = '203.0.113.10';
+    await loginDriver(runtime, { username, password: PASSWORD, ip: '203.0.113.11' });
     for (let i = 0; i < 5; i += 1) {
       await expect(
         loginDriver(runtime, { username, password: 'bad-password-xx', ip }),
@@ -333,10 +346,10 @@ describe('S11b-4a driver C1/C2', () => {
     );
     expect(e3.rowCount).toBe(0);
     const sessions = await ownerPool.query(
-      `SELECT 1 FROM identity.sessions WHERE account_id = $1`,
+      `SELECT 1 FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL`,
       [accountId],
     );
-    expect(sessions.rowCount).toBe(0);
+    expect(sessions.rowCount).toBe(1);
   });
 
   it('LIM-T-02: per-IP failures-only cap is 429; successes never count', async () => {
@@ -435,8 +448,19 @@ describe('S11b-4a driver C1/C2', () => {
         loginDriver(counting, { username, password: 'bad-password-xx', ip: '203.0.113.80' }),
       ),
     );
-    expect(verifies).toBeLessThanOrEqual(5);
-    expect(results.filter((row) => row.status === 'rejected').length).toBe(50);
+    expect(verifies).toBe(5);
+    const rejected = results.filter((row) => row.status === 'rejected');
+    expect(rejected.length).toBe(50);
+    const codes = rejected.map((row) =>
+      row.status === 'rejected' &&
+      typeof row.reason === 'object' &&
+      row.reason !== null &&
+      'code' in row.reason
+        ? row.reason.code
+        : undefined,
+    );
+    expect(codes.filter((code) => code === 'too_many_attempts')).toHaveLength(45);
+    expect(codes.filter((code) => code === 'invalid_credentials')).toHaveLength(5);
   });
 
   it('N5 / AUTH-DM-01: A5/B5 are not registered in production', async () => {
@@ -746,5 +770,129 @@ describe('S11b-4a driver C1/C2', () => {
     expect(JSON.stringify(audits.rows)).not.toMatch(
       /correct-horse|refreshToken|\$argon2id\$|\+9891[0-9]{8}|otp/i,
     );
+  });
+
+  it('R2-3: unknown username locks; success clears; SET NX does not re-arm; cross-IP backoff', async () => {
+    const unknown = `gone-${randomUUID().slice(0, 8)}`;
+    const ip = '198.51.100.20';
+    for (let i = 0; i < 5; i += 1) {
+      await expect(
+        loginDriver(runtime, { username: unknown, password: PASSWORD, ip }),
+      ).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await expect(
+      loginDriver(runtime, { username: unknown, password: PASSWORD, ip }),
+    ).rejects.toMatchObject({ statusCode: 429, code: 'too_many_attempts' });
+
+    const { username } = await seedDriver(`clr-${randomUUID().slice(0, 8)}`);
+    const ipA = '198.51.100.21';
+    for (let i = 0; i < 2; i += 1) {
+      await expect(
+        loginDriver(runtime, { username, password: 'bad-password-xx', ip: ipA }),
+      ).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await loginDriver(runtime, { username, password: PASSWORD, ip: ipA });
+    for (let i = 0; i < 5; i += 1) {
+      await expect(
+        loginDriver(runtime, { username, password: 'bad-password-xx', ip: ipA }),
+      ).rejects.toMatchObject({ statusCode: 401 });
+    }
+    await expect(
+      loginDriver(runtime, { username, password: 'bad-password-xx', ip: '198.51.100.22' }),
+    ).rejects.toMatchObject({ statusCode: 429, code: 'too_many_attempts' });
+    const ttl = await redis.ttl(userLockKey(username));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(60);
+    await expect(
+      loginDriver(runtime, { username, password: 'bad-password-xx', ip: ipA }),
+    ).rejects.toMatchObject({ statusCode: 429 });
+    const ttlAfter = await redis.ttl(userLockKey(username));
+    expect(ttlAfter).toBeLessThanOrEqual(ttl);
+  });
+
+  it('N14-3: limiter Redis eval failure is 503', async () => {
+    const { username } = await seedDriver(`lim-${randomUUID().slice(0, 8)}`);
+    const broken = new Proxy(runtime.redis, {
+      get(target, prop, receiver) {
+        if (prop === 'eval') {
+          return async () => {
+            throw new Error('limiter redis down');
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    await expect(
+      loginDriver({ ...runtime, redis: broken }, { username, password: PASSWORD, ip: '10.20.0.2' }),
+    ).rejects.toMatchObject({ statusCode: 503, code: 'SERVICE_UNAVAILABLE' });
+  });
+
+  it('N13-2: lookup 503 refunds the reserved attempt so verify can run later', async () => {
+    const { username } = await seedDriver(`rf-${randomUUID().slice(0, 8)}`);
+    const throwingPool = {
+      query: (text: string, params?: unknown[]) => {
+        if (typeof text === 'string' && text.includes('lookup_driver_login')) {
+          return Promise.reject(Object.assign(new Error('lock timeout'), { code: '55P03' }));
+        }
+        return identityPool.query(text, params as never);
+      },
+    } as unknown as typeof identityPool;
+    await expect(
+      loginDriver(
+        { ...runtime, identityPool: throwingPool },
+        { username, password: PASSWORD, ip: '10.20.0.3' },
+      ),
+    ).rejects.toMatchObject({ statusCode: 503 });
+    await expect(
+      loginDriver(runtime, { username, password: PASSWORD, ip: '10.20.0.3' }),
+    ).resolves.toMatchObject({ tokenType: 'Bearer' });
+  });
+
+  it('R13-5: tarpit sleeps only on failures', async () => {
+    let slept = 0;
+    const { username } = await seedDriver(`tp-${randomUUID().slice(0, 8)}`);
+    const limited: DriverAuthRuntime = {
+      ...runtime,
+      limiter: {
+        tarpitAfter: 0,
+        sleep: async () => {
+          slept += 1;
+        },
+      },
+    };
+    await loginDriver(limited, { username, password: PASSWORD, ip: '10.20.0.4' });
+    expect(slept).toBe(0);
+    await expect(
+      loginDriver(limited, { username, password: 'bad-password-xx', ip: '10.20.0.5' }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+    expect(slept).toBe(1);
+  });
+
+  it('N13-4: current-params hash is not rehashed on login', async () => {
+    const { username } = await seedDriver(`rh-${randomUUID().slice(0, 8)}`);
+    let hashes = 0;
+    const counting: DriverAuthRuntime = {
+      ...runtime,
+      hasher: {
+        hash: async (plain) => {
+          hashes += 1;
+          return hasher.hash(plain);
+        },
+        verify: (hash, plain) => hasher.verify(hash, plain),
+      },
+    };
+    await loginDriver(counting, { username, password: PASSWORD, ip: '10.20.0.6' });
+    expect(hashes).toBe(0);
+  });
+
+  it('R2-5: IPv6 login keys do not embed the raw address', async () => {
+    const { username } = await seedDriver(`v6-${randomUUID().slice(0, 8)}`);
+    const ip = '2001:db8::53';
+    await expect(
+      loginDriver(runtime, { username, password: 'bad-password-xx', ip }),
+    ).rejects.toMatchObject({ statusCode: 401 });
+    const keys = await redis.keys('login:*');
+    expect(keys.join(' ')).not.toContain(ip);
+    expect(keys.join(' ')).not.toContain('2001:db8');
   });
 });

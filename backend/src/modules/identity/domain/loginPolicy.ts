@@ -39,8 +39,8 @@ export function passwordOverLongBytes(raw: string): boolean {
   return Buffer.byteLength(raw, 'utf8') > PASSWORD_MAX_BYTES;
 }
 
-/** Fixed HMAC key for tests (R13-2). Production must set AUDIT_HASH_KEY. */
-export const TEST_AUDIT_HASH_KEY = 'test-audit-hash-key-32-bytes-min';
+/** Fixed HMAC key for tests (R13-2). Single source: `platform/config`. */
+export { TEST_AUDIT_HASH_KEY } from '../../../platform/config.js';
 
 /** R13-2: audit stores the username capped and HMAC-SHA256 hashed, never raw. */
 export function hashUsernameForAudit(username: string, key: string): string {

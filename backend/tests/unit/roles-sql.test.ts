@@ -150,3 +150,15 @@ describe('0006_s11b3_pending_denies.sql', () => {
     expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
   });
 });
+
+describe('0007_s11b4b_pending_denies_purge.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0007_s11b4b_pending_denies_purge.sql'), 'utf8');
+
+  it('grants DELETE on pending_session_denies to identity only', () => {
+    expect(sql).toMatch(
+      /GRANT DELETE ON TABLE identity\.pending_session_denies TO vproject_identity/,
+    );
+    expect(sql).not.toMatch(/GRANT .*pending_session_denies TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
+  });
+});

@@ -5,9 +5,11 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import { buildApp, type App } from '../../src/app.js';
 import { createIdentityApi } from '../../src/modules/identity/api.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
+import { runPendingDenyTick } from '../../src/modules/identity/application/pendingDenyWorker.js';
 import {
   deactivateAccountAtomic,
   drainPendingDenies,
+  enqueuePendingDenies,
   listOpenPendingDenies,
   PgSessionStore,
   revokeAccountSessions,
@@ -70,7 +72,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
       onSidsRevoked: async (sids) => authority.deny(sids),
       log: { error() {} },
     });
-    api = createIdentityApi(identityPool, authority, redis);
+    api = createIdentityApi(identityPool, authority, redis, { error() {} });
     app = await buildApp({
       config: testConfig({
         DATABASE_URL_APP: pgRoles.appUrl,
@@ -589,7 +591,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
       new PgSessionStore(identityPool),
       { denyAttempts: 1 },
     );
-    await createIdentityApi(identityPool, losing, redis).revokeSubjectSessions({
+    await createIdentityApi(identityPool, losing, redis, { error() {} }).revokeSubjectSessions({
       accountId,
       reason: 'logout_all',
     });
@@ -621,7 +623,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
       new PgSessionStore(identityPool),
       { denyAttempts: 1 },
     );
-    await createIdentityApi(identityPool, down, redis).revokeSubjectSessions({
+    await createIdentityApi(identityPool, down, redis, { error() {} }).revokeSubjectSessions({
       accountId,
       reason: 'logout_all',
     });
@@ -678,7 +680,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
       new PgSessionStore(identityPool),
       { denyAttempts: 1 },
     );
-    const isolatedApi = createIdentityApi(identityPool, downAuthority, liveRedis);
+    const isolatedApi = createIdentityApi(identityPool, downAuthority, liveRedis, { error() {} });
     await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
     const pending = await listOpenPendingDenies(identityPool);
     expect(pending).toContain(sid);
@@ -739,7 +741,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
       new PgSessionStore(identityPool),
       { denyAttempts: 2 },
     );
-    const isolatedApi = createIdentityApi(identityPool, failing, redis);
+    const isolatedApi = createIdentityApi(identityPool, failing, redis, { error() {} });
     await isolatedApi.revokeSubjectSessions({ accountId, reason: 'logout_all' });
     const isolated = await buildApp({
       config: testConfig(),
@@ -837,6 +839,112 @@ describe('S11b-3 session SoT + auth plugin', () => {
     await expect(
       appPool.query(`SELECT * FROM identity.lookup_staff_login($1)`, ['+98920000000']),
     ).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('F13-4: logout-all does not wait on a lock held only on a revoked row', async () => {
+    const { accountId } = await issueDriverAt();
+    const extra = await store.issue({
+      accountId,
+      sid: randomUUID(),
+      familyId: randomUUID(),
+      typ: 'driver',
+    });
+    await ownerPool.query(`UPDATE identity.sessions SET revoked_at = now() WHERE sid = $1`, [
+      extra.sid,
+    ]);
+    const holder = await identityPool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT sid FROM identity.sessions WHERE sid = $1 FOR UPDATE`, [
+        extra.sid,
+      ]);
+      const revoked = await revokeAccountSessions(identityPool, {
+        accountId,
+        reason: 'logout_all',
+        lockTimeout: '100ms',
+      });
+      expect(revoked.sids).not.toContain(extra.sid);
+      expect(revoked.sids.length).toBeGreaterThan(0);
+      await holder.query('ROLLBACK');
+    } finally {
+      holder.release();
+    }
+  });
+
+  it('N12-3: drain worker alerts abandoned rows and purges done denies', async () => {
+    const { sid } = await issueDriverAt();
+    const client = await identityPool.connect();
+    try {
+      await client.query('BEGIN');
+      await enqueuePendingDenies(client, [sid], new Date());
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+    await identityPool.query(
+      `UPDATE identity.pending_session_denies
+          SET done_at = now() - interval '8 days', attempts = 0
+        WHERE sid = $1`,
+      [sid],
+    );
+    const warnings: string[] = [];
+    const tick = await runPendingDenyTick(identityPool, async () => undefined, {
+      error() {},
+      warn(_bindings, message) {
+        warnings.push(message);
+      },
+    });
+    expect(tick.purged).toBeGreaterThan(0);
+    const leftover = await identityPool.query(
+      `SELECT 1 FROM identity.pending_session_denies WHERE sid = $1`,
+      [sid],
+    );
+    expect(leftover.rowCount).toBe(0);
+
+    const stuck = await issueDriverAt();
+    const stuckClient = await identityPool.connect();
+    try {
+      await stuckClient.query('BEGIN');
+      await enqueuePendingDenies(stuckClient, [stuck.sid], new Date(Date.now() - 120_000));
+      await stuckClient.query('COMMIT');
+    } finally {
+      stuckClient.release();
+    }
+    await identityPool.query(
+      `UPDATE identity.pending_session_denies SET attempts = 3 WHERE sid = $1`,
+      [stuck.sid],
+    );
+    const abandoned = await runPendingDenyTick(
+      identityPool,
+      async () => {
+        throw new Error('still down');
+      },
+      {
+        error() {},
+        warn(_bindings, message) {
+          warnings.push(message);
+        },
+      },
+    );
+    expect(abandoned.abandoned).toBeGreaterThan(0);
+    expect(warnings).toContain('pending deny backlog');
+  });
+
+  it('R11-4: live Redis GET p95 stays under 50 ms', async () => {
+    const issued = await issueDriverAt();
+    const snap = await new PgSessionStore(identityPool).lookup(issued.sid);
+    expect(snap).not.toBeNull();
+    await authority.rememberLive(snap!);
+    const times: number[] = [];
+    await Promise.all(
+      Array.from({ length: 40 }, async () => {
+        const started = performance.now();
+        await authority.check(issued.sid, snap!.sessionVersion);
+        times.push(performance.now() - started);
+      }),
+    );
+    times.sort((a, b) => a - b);
+    expect(times[Math.ceil(0.95 * times.length) - 1]).toBeLessThan(50);
   });
 
   it('7-7: lookup_staff_login is SECURITY DEFINER for identity', async () => {

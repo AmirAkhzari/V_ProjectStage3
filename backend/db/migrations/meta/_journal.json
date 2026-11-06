@@ -50,6 +50,13 @@
       "when": 1793542800000,
       "tag": "0006_s11b3_pending_denies",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793600000000,
+      "tag": "0007_s11b4b_pending_denies_purge",
+      "breakpoints": true
     }
   ]
 }

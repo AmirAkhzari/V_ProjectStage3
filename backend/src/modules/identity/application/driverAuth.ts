@@ -19,9 +19,13 @@ import { needsPasswordRehash } from '../infra/crypto/argon2Hasher.js';
 import type { PasswordHasher } from './ports.js';
 import type { RefreshTokenStore } from './refreshStore.js';
 import {
+  applyLoginTarpit,
+  refundLoginAttempt,
+  releaseLoginInflight,
   reserveLoginAttempt,
   settleLoginSuccess,
   type LoginLimiterLimits,
+  type LoginReservation,
 } from './loginLimiter.js';
 import { isRetryableLockError } from '../infra/session/lockOrder.js';
 import {
@@ -96,6 +100,11 @@ function mapLockOr401(error: unknown): never {
   throw error;
 }
 
+function mapLimiterOr503(error: unknown): never {
+  if (error instanceof AppError) throw error;
+  throw serviceUnavailable(2);
+}
+
 export async function loginDriver(
   runtime: DriverAuthRuntime,
   input: { username: string; password: string; ip: string },
@@ -105,44 +114,89 @@ export async function loginDriver(
   if (usernameOverLong(username) || passwordOverLongBytes(input.password)) {
     throw invalidCredentials();
   }
-  const reservation = await reserveLoginAttempt(runtime.redis, username, input.ip, runtime.limiter);
-  if (reservation.status === 'blocked') throw tooManyAttempts(reservation.retryAfter);
-
-  let row: DriverRow | undefined;
+  let reservation: LoginReservation;
   try {
-    row = await lookupDriver(runtime.identityPool, username);
+    reservation = await reserveLoginAttempt(runtime.redis, username, input.ip, runtime.limiter);
   } catch (error) {
-    mapLockOr401(error);
+    mapLimiterOr503(error);
   }
-  const ok = await runtime.hasher.verify(row?.password_hash ?? DUMMY_ARGON2ID_HASH, input.password);
-  const usernameHash = hashUsernameForAudit(username, runtime.auditHashKey);
-  if (!row || !ok || row.status !== 'active') {
+  if (reservation.status === 'blocked') throw tooManyAttempts(reservation.retryAfter);
+  const reserved = reservation;
+
+  let settled = false;
+  let refunded = false;
+  const refund = async () => {
+    if (refunded || settled) return;
+    refunded = true;
     try {
-      await writeAudit(runtime.identityPool, {
-        accountId: row?.account_id ?? 'unknown',
-        distributorId: row?.distributor_id ?? null,
-        action: 'login_failure',
-        entityId: usernameHash,
-        ip: input.ip,
-        data: { usernameHash },
-      });
-      if (reservation.locked) {
+      await refundLoginAttempt(runtime.redis, reserved);
+    } catch {
+      /* counters expire */
+    }
+  };
+  try {
+    let row: DriverRow | undefined;
+    try {
+      row = await lookupDriver(runtime.identityPool, username);
+    } catch (error) {
+      await refund();
+      mapLockOr401(error);
+    }
+    const ok = await runtime.hasher.verify(
+      row?.password_hash ?? DUMMY_ARGON2ID_HASH,
+      input.password,
+    );
+    const usernameHash = hashUsernameForAudit(username, runtime.auditHashKey);
+    if (!row || !ok || row.status !== 'active') {
+      try {
         await writeAudit(runtime.identityPool, {
           accountId: row?.account_id ?? 'unknown',
           distributorId: row?.distributor_id ?? null,
-          action: 'login_lockout',
+          action: 'login_failure',
           entityId: usernameHash,
           ip: input.ip,
           data: { usernameHash },
         });
+        if (reserved.locked) {
+          await writeAudit(runtime.identityPool, {
+            accountId: row?.account_id ?? 'unknown',
+            distributorId: row?.distributor_id ?? null,
+            action: 'login_lockout',
+            entityId: usernameHash,
+            ip: input.ip,
+            data: { usernameHash },
+          });
+        }
+      } catch (error) {
+        mapLockOr401(error);
       }
+      await applyLoginTarpit(reserved, runtime.limiter);
+      throw invalidCredentials();
+    }
+    try {
+      const issued = await issueDriverSession(
+        runtime,
+        { ...row, username },
+        input.password,
+        input.ip,
+      );
+      try {
+        await settleLoginSuccess(runtime.redis, reserved);
+        settled = true;
+      } catch {
+        /* session already issued */
+      }
+      return issued;
     } catch (error) {
+      await refund();
       mapLockOr401(error);
     }
-    throw invalidCredentials();
+  } finally {
+    if (!settled && !refunded) {
+      await releaseLoginInflight(runtime.redis, reserved).catch(() => {});
+    }
   }
-  await settleLoginSuccess(runtime.redis, username, input.ip);
-  return issueDriverSession(runtime, { ...row, username }, input.password, input.ip);
+  throw serviceUnavailable(2);
 }
 
 export async function refreshDriver(
@@ -221,7 +275,11 @@ async function issueDriverSession(
   try {
     await runtime.authority.rememberLive(snap);
   } catch {
-    await revokeSessionsBySid(runtime.identityPool, { sids: [sid], reason: 'logout_all' });
+    try {
+      await revokeSessionsBySid(runtime.identityPool, { sids: [sid], reason: 'logout_all' });
+    } catch (error) {
+      mapLockOr401(error);
+    }
     await drainPendingDenies(
       runtime.identityPool,
       (sids) => runtime.authority.deny(sids),

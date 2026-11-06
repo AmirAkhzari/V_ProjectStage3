@@ -113,6 +113,42 @@ describe('session authority Architect 11-1 / 11-4 / 11-11', () => {
     expect(LIVE_TTL_SECONDS).toBeLessThanOrEqual(5);
   });
 
+  it('N12-4: Redis GET path does not INCR a fail-epoch', async () => {
+    let incrs = 0;
+    const sid = 'sid-no-epoch';
+    const authority = new RedisPgSessionAuthority(
+      fakeRedis({
+        get: async () => null,
+        incr: async () => {
+          incrs += 1;
+          return 1;
+        },
+      }),
+      { lookup: async () => row(sid) },
+    );
+    await authority.check(sid, 1);
+    await authority.rememberLive(row(sid));
+    expect(incrs).toBe(0);
+  });
+
+  it('N12-7: PG hit write-backs live cache', async () => {
+    const sid = 'sid-wb';
+    const sets: string[] = [];
+    const authority = new RedisPgSessionAuthority(
+      fakeRedis({
+        get: async () => null,
+        set: async (...args: unknown[]) => {
+          sets.push(String(args[0]));
+          return 'OK';
+        },
+      }),
+      { lookup: async () => row(sid) },
+    );
+    await expect(authority.check(sid, 1)).resolves.toMatchObject({ status: 'active' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sets.some((key) => key.includes(sid))).toBe(true);
+  });
+
   it('A-11-1: live rows written before the last Redis failure are misses', async () => {
     const sid = 'sid-epoch';
     let failGets = 0;

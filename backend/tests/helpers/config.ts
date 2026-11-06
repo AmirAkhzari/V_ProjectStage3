@@ -1,4 +1,8 @@
-import { loadApiConfig, type ApiConfig } from '../../src/platform/config.js';
+import {
+  loadApiConfig,
+  PROD_FIXTURE_AUDIT_HASH_KEY,
+  type ApiConfig,
+} from '../../src/platform/config.js';
 
 export function testConfig(overrides: Record<string, string | undefined> = {}): ApiConfig {
   return loadApiConfig({
@@ -22,7 +26,7 @@ export function productionApiConfig(overrides: Record<string, string | undefined
     REDIS_URL: 'rediss://cache.example.ir:6379',
     OPENAPI_DOCS_ENABLED: 'false',
     TRUST_PROXY_HOPS: '1',
-    AUDIT_HASH_KEY: 'test-audit-hash-key-32-bytes-min',
+    AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
     ...overrides,
   });
 }

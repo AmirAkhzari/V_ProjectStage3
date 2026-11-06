@@ -19,7 +19,7 @@ export interface RouteGroupSpec {
   group: RouteGroup;
   prefix: `/v1/${RouteGroup}`;
   subject: SubjectType;
-  /** Always hit PG for this group (C11 / B83 / finance / logout-all). */
+  /** Group-level fresh/PG check. Per-route default-deny is `SENSITIVE_OPERATION_IDS`. */
   sensitive?: boolean;
 }
 

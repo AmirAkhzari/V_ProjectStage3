@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  EXAMPLE_AUDIT_HASH_KEY,
+  PROD_FIXTURE_AUDIT_HASH_KEY,
   TEST_AUDIT_HASH_KEY,
   loadApiConfig,
   loadConfig,
@@ -23,7 +25,7 @@ const validApiProduction = {
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
   TRUST_PROXY_HOPS: '1',
-  AUDIT_HASH_KEY: TEST_AUDIT_HASH_KEY,
+  AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
 };
 
 const validWorkerProduction = {
@@ -64,6 +66,19 @@ describe('loadApiConfig', () => {
   it('R13-2: production requires AUDIT_HASH_KEY', () => {
     const { AUDIT_HASH_KEY: _omit, ...withoutKey } = validApiProduction;
     expect(() => loadApiConfig(withoutKey)).toThrow(ConfigError);
+  });
+
+  it('N14-1 / N13-1: production rejects known and short AUDIT_HASH_KEY', () => {
+    expect(() =>
+      loadApiConfig({ ...validApiProduction, AUDIT_HASH_KEY: TEST_AUDIT_HASH_KEY }),
+    ).toThrow(/AUDIT_HASH_KEY/);
+    expect(() =>
+      loadApiConfig({ ...validApiProduction, AUDIT_HASH_KEY: EXAMPLE_AUDIT_HASH_KEY }),
+    ).toThrow(/AUDIT_HASH_KEY/);
+    expect(() => loadApiConfig({ ...validApiProduction, AUDIT_HASH_KEY: 'too-short' })).toThrow(
+      ConfigError,
+    );
+    expect(loadApiConfig(validApiProduction).AUDIT_HASH_KEY).toBe(PROD_FIXTURE_AUDIT_HASH_KEY);
   });
 
   it('11-13: rejects session TTL values above the policy caps', () => {
@@ -222,5 +237,10 @@ describe('loadWorkerConfig', () => {
           'postgres://vproject_app:vproject@db.example.ir:5432/vproject?sslmode=require',
       }),
     ).toThrow(/DATABASE_URL_APP/);
+  });
+
+  it('R2-5: worker production does not require TRUST_PROXY_HOPS', () => {
+    const { TRUST_PROXY_HOPS: _omit, ...withoutHops } = validWorkerProduction;
+    expect(loadWorkerConfig(withoutHops).TRUST_PROXY_HOPS).toBe(0);
   });
 });

@@ -12,7 +12,15 @@ import {
   tarpitDelaySeconds,
   usernameOverLong,
 } from '../../src/modules/identity/domain/loginPolicy.js';
-import { isRetryableLockError } from '../../src/modules/identity/infra/session/lockOrder.js';
+import {
+  isRetryableLockError,
+  withRetryableTx,
+} from '../../src/modules/identity/infra/session/lockOrder.js';
+import {
+  ipFailKey,
+  limiterKeyPart,
+  userIpFailKey,
+} from '../../src/modules/identity/application/loginLimiter.js';
 
 describe('S11b-4a login policy / F13-1', () => {
   it('normalises usernames: trim, NFKC, lower; does not truncate', () => {
@@ -56,5 +64,48 @@ describe('S11b-4a login policy / F13-1', () => {
     expect(hashUsernameForAudit('ali', TEST_AUDIT_HASH_KEY)).not.toBe(
       hashUsernameForAudit('ali', `${TEST_AUDIT_HASH_KEY}x`),
     );
+  });
+
+  it('F13-1: withRetryableTx retries 40P01 then succeeds; two 55P03 throw', async () => {
+    let attempts = 0;
+    const pool = {
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return;
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(new Error('deadlock detected'), { code: '40P01' });
+          }
+          return { rows: [{ n: 1 }] };
+        },
+        release() {},
+      }),
+    };
+    const result = await withRetryableTx(pool as never, async (client) => {
+      await client.query('SELECT 1');
+      return 7;
+    });
+    expect(result.value).toBe(7);
+    expect(result.lockRetries).toBe(1);
+
+    const always = {
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql === 'BEGIN' || sql === 'ROLLBACK') return;
+          throw Object.assign(new Error('lock timeout'), { code: '55P03' });
+        },
+        release() {},
+      }),
+    };
+    await expect(
+      withRetryableTx(always as never, async (client) => client.query('SELECT 1')),
+    ).rejects.toMatchObject({ code: '55P03' });
+  });
+
+  it('R2-5: limiter keys hash IPv6 instead of joining host:port', () => {
+    const ip = '2001:db8::1';
+    expect(userIpFailKey('ali', ip)).not.toContain(ip);
+    expect(ipFailKey(ip)).not.toContain(ip);
+    expect(ipFailKey(ip)).toContain(limiterKeyPart(ip));
   });
 });

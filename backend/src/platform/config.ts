@@ -135,14 +135,25 @@ function requireTls(ctx: z.RefinementCtx, path: string, url: string): void {
 
 /** HMAC-SHA256 key for username hashes in audit rows. Tests use this value. */
 export const TEST_AUDIT_HASH_KEY = 'test-audit-hash-key-32-bytes-min';
+/** Must match `.env.example`. Production must not use this value. */
+export const EXAMPLE_AUDIT_HASH_KEY = 'change-me-to-a-32-byte-or-longer-secret';
+/** Production-shaped fixture for config tests (not TEST / example). */
+export const PROD_FIXTURE_AUDIT_HASH_KEY = 'prod-fixture-audit-hash-key-32b!!';
+
+const KNOWN_AUDIT_HASH_KEYS = new Set([TEST_AUDIT_HASH_KEY, EXAMPLE_AUDIT_HASH_KEY]);
 
 export const apiConfigSchema = z
   .object({
     ...processShared,
     DATABASE_URL_APP: postgresUrl,
     DATABASE_URL_IDENTITY: postgresUrl,
-    /** R13-2: HMAC key for audit username hashes. Required in production. */
-    AUDIT_HASH_KEY: z.string().min(32).default(TEST_AUDIT_HASH_KEY),
+    /** R13-2 / N14-1: HMAC key, ≥32 bytes. Required in production. */
+    AUDIT_HASH_KEY: z
+      .string()
+      .refine((value) => Buffer.byteLength(value, 'utf8') >= 32, {
+        message: 'AUDIT_HASH_KEY must be at least 32 bytes',
+      })
+      .default(TEST_AUDIT_HASH_KEY),
   })
   .superRefine((value, ctx) => {
     applyProductionShared(value, ctx);
@@ -200,9 +211,32 @@ function parseOrThrow<T>(schema: z.ZodType<T>, env: NodeJS.ProcessEnv, extra: Co
   return result.data;
 }
 
+function auditHashKeyIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
+  if (env['NODE_ENV'] !== 'production') return [];
+  const key = env['AUDIT_HASH_KEY'] ?? '';
+  const issues: ConfigIssue[] = [];
+  if (KNOWN_AUDIT_HASH_KEYS.has(key)) {
+    issues.push({
+      field: 'AUDIT_HASH_KEY',
+      message: 'must not use a known test or example secret in production',
+    });
+  }
+  if (key !== '' && Buffer.byteLength(key, 'utf8') < 32) {
+    issues.push({
+      field: 'AUDIT_HASH_KEY',
+      message: 'must be at least 32 bytes',
+    });
+  }
+  return issues;
+}
+
 function productionExtras(env: NodeJS.ProcessEnv, forbiddenKeys: readonly string[]): ConfigIssue[] {
   if (env['NODE_ENV'] !== 'production') return [];
-  return [...productionEnvFlagIssues(env), ...forbiddenUrlIssues(env, forbiddenKeys)];
+  return [
+    ...productionEnvFlagIssues(env),
+    ...forbiddenUrlIssues(env, forbiddenKeys),
+    ...auditHashKeyIssues(env),
+  ];
 }
 
 function requireProdKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): ConfigIssue[] {
@@ -226,10 +260,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 }
 
 export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
-  return parseOrThrow(workerConfigSchema, env, [
-    ...productionExtras(env, WORKER_FORBIDDEN_URLS),
-    ...requireProdKeys(env, ['TRUST_PROXY_HOPS']),
-  ]);
+  return parseOrThrow(workerConfigSchema, env, [...productionExtras(env, WORKER_FORBIDDEN_URLS)]);
 }
 
 /** API config. Prefer `loadApiConfig` / `loadWorkerConfig` at process entrypoints. */
