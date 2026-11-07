@@ -107,6 +107,10 @@ BEGIN
     CREATE POLICY distributors_otp_lookup ON tenancy.distributors
       FOR SELECT TO vproject_migrator
       USING (true);
+    CREATE POLICY staff_memberships_otp_lock ON identity.staff_memberships
+      FOR UPDATE TO vproject_migrator
+      USING (true)
+      WITH CHECK (true);
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
