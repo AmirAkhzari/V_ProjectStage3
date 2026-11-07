@@ -87,7 +87,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         accountId: input.accountId,
         lockAccount: true,
       });
-      if (input.requireActive || input.casPasswordHash || input.verifiedPasswordHash) {
+      if (input.verifiedPasswordHash || input.casPasswordHash) {
         if (input.distributorId) {
           await client.query('SELECT set_config($1, $2, true)', [
             'app.distributor_id',
@@ -116,6 +116,15 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
             [input.accountId, input.casPasswordHash.nextHash, input.casPasswordHash.oldHash],
           );
         }
+      } else if (input.requireActive) {
+        const current = await client.query<{ status: string }>(
+          `SELECT status FROM identity.accounts WHERE id = $1`,
+          [input.accountId],
+        );
+        const row = current.rows[0];
+        if (!row || row.status !== 'active') {
+          throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
+        }
       }
       await client.query(
         `INSERT INTO identity.sessions
@@ -129,6 +138,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
          VALUES ($1, $2, $3, NULL, NULL, NULL, NULL)`,
         [hash, input.familyId, input.sid],
       );
+      if (input.beforeCommit) await input.beforeCommit(client);
       return this.revokeOverflowInTx(client, input, now);
     });
     if (extraSids.length > 0) {
