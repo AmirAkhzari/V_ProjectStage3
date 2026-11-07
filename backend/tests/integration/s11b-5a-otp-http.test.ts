@@ -136,7 +136,7 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     expect(b1a.statusCode).toBe(200);
     expect(fake.outbox).toHaveLength(1);
     expect(fake.outbox[0]?.code).toMatch(/^[0-9]{6}$/);
-    expect(await redis.exists(`otp:staff:${otpPhoneHash(unknown, TEST_OTP_HMAC_KEY)}`)).toBe(0);
+    expect(await redis.exists(`otp:staff:${otpPhoneHash(unknown, TEST_OTP_HMAC_KEY)}`)).toBe(1);
   });
 
   it('N18-1: B1 unknown/inactive does not SMS; bytes match active staff', async () => {
@@ -165,6 +165,8 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     expect(dead.body).toBe(ok.body);
     expect(miss.body).toBe(ok.body);
     expect(fake.outbox).toHaveLength(0);
+    expect(await redis.exists(`otp:staff:${otpPhoneHash(inactive, TEST_OTP_HMAC_KEY)}`)).toBe(1);
+    expect(await redis.exists(`otp:staff:${otpPhoneHash(unknown, TEST_OTP_HMAC_KEY)}`)).toBe(1);
   });
 
   it('LIM-OTP-T-02: IP slowdown sleeps before respond', async () => {
@@ -190,7 +192,7 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     const second = await post('/v1/app/auth/otp/send', { phone }, ip);
     expect(second.statusCode).toBe(429);
     expect(second.headers['retry-after']).toBeTruthy();
-    expect(second.json()).toMatchObject({ error: { code: 'too_many_attempts' } });
+    expect(second.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
     const dead = createRedis('redis://127.0.0.1:1');
     const down = await buildApp({
       config: testConfig({ TRUST_PROXY_HOPS: '1' }),

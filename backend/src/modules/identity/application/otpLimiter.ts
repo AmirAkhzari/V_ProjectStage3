@@ -117,6 +117,39 @@ maybe_decr(KEYS[6], KEYS[12], parts[6], parts[11])
 return 1
 `;
 
+/** N19-1: suppression refunds global SMS budget only; phone/IP counters stay. */
+const REFUND_BUDGET = `
+local function decr_floor(key)
+  local v = redis.call('GET', key)
+  if not v then return end
+  local n = tonumber(v) - 1
+  if n <= 0 then redis.call('DEL', key) else redis.call('SET', key, n, 'KEEPTTL') end
+end
+local function maybe_decr(key, winKey, expected, expectedWin)
+  expected = tonumber(expected)
+  if expected == nil or expected < 1 then return end
+  if expectedWin == nil or expectedWin == '' then return end
+  if redis.call('GET', winKey) ~= expectedWin then return end
+  decr_floor(key)
+end
+local payload = redis.call('GET', KEYS[7])
+if not payload then return 0 end
+local parts = {}
+local start = 1
+for i = 1, 10 do
+  local p = string.find(payload, '|', start, true)
+  if not p then return 0 end
+  parts[i] = string.sub(payload, start, p - 1)
+  start = p + 1
+end
+parts[11] = string.sub(payload, start)
+if parts[1] ~= ARGV[2] then return 0 end
+redis.call('DEL', KEYS[7])
+maybe_decr(KEYS[5], KEYS[11], parts[5], parts[10])
+maybe_decr(KEYS[6], KEYS[12], parts[6], parts[11])
+return 1
+`;
+
 export interface OtpBudgetLimits {
   hour: number;
   day: number;
@@ -247,4 +280,18 @@ export async function refundOtpSend(
 ): Promise<number> {
   const keys = otpLimitKeys(phone, ip, pepper, token);
   return asNumber(await redis.eval(REFUND, 12, ...evalKeys(keys), token, limiterKeyPart(ip)));
+}
+
+/** N19-1: refund otp:budget:* only; leave phone/IP reservation counters. */
+export async function refundOtpBudgetOnly(
+  redis: Redis,
+  phone: string,
+  ip: string,
+  pepper: string,
+  token: string,
+): Promise<number> {
+  const keys = otpLimitKeys(phone, ip, pepper, token);
+  return asNumber(
+    await redis.eval(REFUND_BUDGET, 12, ...evalKeys(keys), token, limiterKeyPart(ip)),
+  );
 }

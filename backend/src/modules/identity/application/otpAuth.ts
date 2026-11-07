@@ -11,7 +11,12 @@ import {
   OTP_TTL_SECONDS,
   smsHourSpike,
 } from '../domain/otpPolicy.js';
-import { refundOtpSend, reserveOtpSend, type OtpBudgetLimits } from './otpLimiter.js';
+import {
+  refundOtpBudgetOnly,
+  refundOtpSend,
+  reserveOtpSend,
+  type OtpBudgetLimits,
+} from './otpLimiter.js';
 import {
   deleteOtpChallengeIfIssuance,
   generateOtpCode,
@@ -62,8 +67,8 @@ const una = (retry = 5) =>
   new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
     retryAfter: retry,
   });
-const tooMany = (retryAfter: number) =>
-  new AppError('too_many_attempts', 429, 'Too many attempts', { retryAfter });
+const rateLimited = (retryAfter: number) =>
+  new AppError('RATE_LIMITED', 429, 'Too many requests', { retryAfter });
 
 function mapRedis(error: unknown): never {
   if (error instanceof AppError) throw error;
@@ -139,7 +144,7 @@ export async function sendOtp(
   } catch (error) {
     mapRedis(error);
   }
-  if (reservation.status === 'blocked') throw tooMany(reservation.retryAfter);
+  if (reservation.status === 'blocked') throw rateLimited(reservation.retryAfter);
   const reserved = reservation;
   const code = generateOtpCode();
   const issuanceId = newOtpIssuanceId();
@@ -219,7 +224,13 @@ async function dispatchSend(
     if (input.purpose === 'staff') {
       const staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
       if (!staff) {
-        await dropIssuance(runtime, input);
+        await refundOtpBudgetOnly(
+          runtime.redis,
+          input.phone,
+          input.ip,
+          runtime.pepper,
+          input.token,
+        ).catch(() => {});
         logOtpSendOutcome(runtime, 'suppressed', { purpose: input.purpose, phoneMasked });
         return;
       }
@@ -246,6 +257,5 @@ async function dispatchSend(
     logOtpSendOutcome(runtime, 'sent', { purpose: input.purpose, phoneMasked });
   } catch (error) {
     logOtpSendOutcome(runtime, 'error', { purpose: input.purpose, phoneMasked, err: error });
-    if (input.purpose === 'staff') await dropIssuance(runtime, input);
   }
 }
