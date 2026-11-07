@@ -699,7 +699,9 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     try {
       try {
         await holder.query('BEGIN');
-        await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+        await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [
+          accountId,
+        ]);
         const pending = post('/v1/admin/auth/otp/verify', { phone, code });
         await new Promise((resolve) => {
           setTimeout(resolve, 150);
