@@ -4,12 +4,15 @@ import type {
   SmsProvider,
   SmsProviderLog,
 } from '../../../application/ports.js';
+import { classifyKavenegarCode } from './classify.js';
 import { IRAN_MOBILE_RE, OTP_CODE_RE } from './iranMobile.js';
 import { redactSmsSecrets } from './redact.js';
 
 export const KAVENEGAR_HOST = 'https://api.kavenegar.com';
 export const SMS_MAX_RESPONSE_BYTES = 8192;
 export const SMS_DEFAULT_TIMEOUT_MS = 4000;
+/** Documented template name: letter then alphanumerics/underscore/hyphen (Kavenegar lookup). */
+export const KAVENEGAR_TEMPLATE_RE = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
 export type SmsFetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -46,9 +49,9 @@ export class KavenegarSmsProvider implements SmsProvider {
     if (
       !IRAN_MOBILE_RE.test(phone) ||
       !OTP_CODE_RE.test(code) ||
-      this.config.template.length === 0
+      !KAVENEGAR_TEMPLATE_RE.test(this.config.template)
     ) {
-      return { status: 'rejected' };
+      return { status: 'rejected', failureClass: 'receptor', reason: 'invalid_input' };
     }
     const url = `${KAVENEGAR_HOST}/v1/${encodeURIComponent(this.config.apiKey)}/verify/lookup.json`;
     const body = new URLSearchParams({
@@ -66,33 +69,65 @@ export class KavenegarSmsProvider implements SmsProvider {
         signal: controller.signal,
         redirect: 'error',
       });
-      if (response.status >= 400 && response.status < 500) return { status: 'rejected' };
-      if (response.status >= 500) return { status: 'ambiguous' };
+      const httpClass = classifyHttp(response.status);
+      if (httpClass) {
+        this.alertOps(httpClass, response.status, 0);
+        return httpClass;
+      }
       const raw = Buffer.from(await response.arrayBuffer());
-      if (raw.byteLength > SMS_MAX_RESPONSE_BYTES) return { status: 'ambiguous' };
+      if (raw.byteLength > SMS_MAX_RESPONSE_BYTES) {
+        return { status: 'ambiguous', failureClass: 'ambiguous', reason: 'malformed' };
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw.toString('utf8'));
       } catch {
-        return { status: 'ambiguous' };
+        return { status: 'ambiguous', failureClass: 'ambiguous', reason: 'malformed' };
       }
-      const status = kavenegarReturnStatus(parsed);
-      if (status === 200) {
+      const providerStatus = kavenegarReturnStatus(parsed);
+      if (providerStatus === 200) {
         const messageId = kavenegarMessageId(parsed);
         return messageId === undefined ? { status: 'sent' } : { status: 'sent', messageId };
       }
-      if (status >= 400 && status < 500) return { status: 'rejected' };
-      return { status: 'ambiguous' };
+      const mapped = mapClassified(classifyKavenegarCode(providerStatus));
+      this.alertOps(mapped, response.status, providerStatus);
+      return mapped;
     } catch (error) {
       this.log.error(
         { err: publicSmsError(error, this.config.apiKey, phone, code) },
         'kavenegar verify/lookup failed',
       );
-      return { status: 'ambiguous' };
+      return { status: 'ambiguous', failureClass: 'ambiguous', reason: 'timeout' };
     } finally {
       clearTimeout(timer);
     }
   }
+
+  private alertOps(result: SmsOtpResult, httpStatus: number, providerStatus: number): void {
+    if (result.failureClass !== 'ops') return;
+    this.log.error(
+      { smsReason: result.reason, httpStatus, providerStatus },
+      'kavenegar ops failure',
+    );
+  }
+}
+
+function classifyHttp(httpStatus: number): SmsOtpResult | undefined {
+  if (httpStatus < 400) return undefined;
+  return mapClassified(classifyKavenegarCode(httpStatus));
+}
+
+function mapClassified(mapped: {
+  failureClass: SmsOtpResult['failureClass'];
+  reason: NonNullable<SmsOtpResult['reason']>;
+}): SmsOtpResult {
+  if (mapped.failureClass === 'receptor') {
+    return { status: 'rejected', failureClass: 'receptor', reason: mapped.reason };
+  }
+  if (mapped.failureClass === 'ops') {
+    return { status: 'ops', failureClass: 'ops', reason: mapped.reason };
+  }
+  return { status: 'ambiguous', failureClass: 'ambiguous', reason: mapped.reason };
 }
 
 function kavenegarReturnStatus(parsed: unknown): number {

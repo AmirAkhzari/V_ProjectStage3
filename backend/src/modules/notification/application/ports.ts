@@ -1,12 +1,33 @@
 /** OTP purpose is bound at send time so app and staff challenges stay separate. */
 export type OtpPurpose = 'app' | 'staff';
 
-/** `rejected` is definite (refundable). `ambiguous` is timeout/5xx — never refund. */
-export type SmsSendStatus = 'sent' | 'rejected' | 'ambiguous';
+/** `rejected` is refundable only when `failureClass` is `receptor`. */
+export type SmsSendStatus = 'sent' | 'rejected' | 'ambiguous' | 'ops';
+
+export type SmsFailureClass = 'receptor' | 'ops' | 'ambiguous';
+export type SmsFailureReason =
+  | 'invalid_input'
+  | 'invalid_receptor'
+  | 'api_key'
+  | 'credit'
+  | 'template'
+  | 'account'
+  | 'ip_allowlist'
+  | 'rate_limited'
+  | 'timeout'
+  | 'server'
+  | 'malformed'
+  | 'unknown';
 
 export interface SmsOtpResult {
   status: SmsSendStatus;
+  failureClass?: SmsFailureClass;
+  reason?: SmsFailureReason;
   messageId?: string;
+}
+
+export function smsRefundable(result: SmsOtpResult): boolean {
+  return result.status === 'rejected' && result.failureClass === 'receptor';
 }
 
 /**

@@ -145,6 +145,12 @@ export const PROD_FIXTURE_AUDIT_HASH_KEY = 'prod-fixture-audit-hash-key-32b!!';
 /** Production-shaped Kavenegar fixture (not a live credential). */
 export const PROD_FIXTURE_KAVENEGAR_API_KEY = 'prod-fixture-kavenegar-api-key-32b';
 export const PROD_FIXTURE_KAVENEGAR_TEMPLATE = 'vproject-otp';
+export const TEST_OTP_HMAC_KEY = 'test-otp-hmac-key-32-bytes-min!!';
+export const EXAMPLE_OTP_HMAC_KEY = 'change-me-to-a-32-byte-otp-pepper';
+export const PROD_FIXTURE_OTP_HMAC_KEY = 'prod-fixture-otp-hmac-key-32b!!!!';
+const KNOWN_OTP_HMAC_KEYS = new Set([TEST_OTP_HMAC_KEY, EXAMPLE_OTP_HMAC_KEY]);
+/** Kavenegar template: letter, then 1–63 letters/digits/_/- (docs + P14-1). */
+export const KAVENEGAR_TEMPLATE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
 const KNOWN_AUDIT_HASH_KEYS = new Set([TEST_AUDIT_HASH_KEY, EXAMPLE_AUDIT_HASH_KEY]);
 
@@ -162,9 +168,23 @@ export const apiConfigSchema = z
       .default(TEST_AUDIT_HASH_KEY),
     /** Local/CI default is fake. Production extras refuse fake and require key+template. */
     SMS_PROVIDER: z.enum(['fake', 'kavenegar']).default('fake'),
+    SMS_LIVE_SEND: booleanString,
     KAVENEGAR_API_KEY: z.string().min(1).optional(),
-    KAVENEGAR_TEMPLATE: z.string().min(1).optional(),
+    KAVENEGAR_TEMPLATE: z
+      .string()
+      .regex(KAVENEGAR_TEMPLATE_PATTERN, 'KAVENEGAR_TEMPLATE failed documented validation')
+      .optional(),
     SMS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(5000).default(4000),
+    /** No default: missing budget fails closed at reserve (do not invent unlimited). */
+    SMS_BUDGET_HOUR: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    SMS_BUDGET_DAY: z.coerce.number().int().min(1).max(10_000_000).optional(),
+    SMS_SPIKE_BASELINE_HOUR: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    OTP_HMAC_KEY: z
+      .string()
+      .refine((value) => Buffer.byteLength(value, 'utf8') >= 32, {
+        message: 'OTP_HMAC_KEY must be at least 32 bytes',
+      })
+      .default(TEST_OTP_HMAC_KEY),
   })
   .superRefine((value, ctx) => {
     applyProductionShared(value, ctx);
@@ -242,18 +262,33 @@ function auditHashKeyIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
 }
 
 function smsProviderIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
-  if (env['NODE_ENV'] !== 'production') return [];
+  const issues: ConfigIssue[] = [];
+  const live = env['SMS_LIVE_SEND'] === 'true';
+  if (live) {
+    if (!presentEnv(env, 'SMS_BUDGET_HOUR')) {
+      issues.push({ field: 'SMS_BUDGET_HOUR', message: 'must be set when SMS_LIVE_SEND=true' });
+    }
+    if (!presentEnv(env, 'SMS_BUDGET_DAY')) {
+      issues.push({ field: 'SMS_BUDGET_DAY', message: 'must be set when SMS_LIVE_SEND=true' });
+    }
+    const key = env['KAVENEGAR_API_KEY'] ?? '';
+    if (
+      (env['SMS_PROVIDER'] ?? 'fake') === 'kavenegar' &&
+      (key === PROD_FIXTURE_KAVENEGAR_API_KEY || key === 'kavenegar-test-api-key-do-not-leak')
+    ) {
+      issues.push({ field: 'KAVENEGAR_API_KEY', message: 'placeholder keys cannot live-send' });
+    }
+  }
+  if (env['NODE_ENV'] !== 'production') return issues;
   const provider = env['SMS_PROVIDER'] ?? 'fake';
   if (provider === 'fake' || provider === 'mock') {
-    return [
-      {
-        field: 'SMS_PROVIDER',
-        message: 'fake/mock SMS providers are forbidden in production',
-      },
-    ];
+    issues.push({
+      field: 'SMS_PROVIDER',
+      message: 'fake/mock SMS providers are forbidden in production',
+    });
+    return issues;
   }
-  if (provider !== 'kavenegar') return [];
-  const issues: ConfigIssue[] = [];
+  if (provider !== 'kavenegar') return issues;
   if (!presentEnv(env, 'KAVENEGAR_API_KEY')) {
     issues.push({
       field: 'KAVENEGAR_API_KEY',
@@ -264,6 +299,13 @@ function smsProviderIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
     issues.push({
       field: 'KAVENEGAR_TEMPLATE',
       message: 'must be set when SMS_PROVIDER=kavenegar',
+    });
+  }
+  const otpKey = env['OTP_HMAC_KEY'] ?? '';
+  if (KNOWN_OTP_HMAC_KEYS.has(otpKey)) {
+    issues.push({
+      field: 'OTP_HMAC_KEY',
+      message: 'must not use a known test or example secret in production',
     });
   }
   return issues;
@@ -294,7 +336,7 @@ function requireProdKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): Confi
 export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   return parseOrThrow(apiConfigSchema, env, [
     ...productionExtras(env, API_FORBIDDEN_URLS),
-    ...requireProdKeys(env, ['TRUST_PROXY_HOPS', 'AUDIT_HASH_KEY']),
+    ...requireProdKeys(env, ['TRUST_PROXY_HOPS', 'AUDIT_HASH_KEY', 'OTP_HMAC_KEY']),
     ...smsProviderIssues(env),
   ]);
 }

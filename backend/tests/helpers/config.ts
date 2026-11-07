@@ -3,6 +3,7 @@ import {
   PROD_FIXTURE_AUDIT_HASH_KEY,
   PROD_FIXTURE_KAVENEGAR_API_KEY,
   PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+  PROD_FIXTURE_OTP_HMAC_KEY,
   type ApiConfig,
 } from '../../src/platform/config.js';
 
@@ -32,6 +33,7 @@ export function productionApiConfig(overrides: Record<string, string | undefined
     SMS_PROVIDER: 'kavenegar',
     KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY,
     KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+    OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
     ...overrides,
   });
 }
