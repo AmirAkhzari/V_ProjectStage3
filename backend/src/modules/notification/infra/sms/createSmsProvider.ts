@@ -1,3 +1,4 @@
+import { KAVENEGAR_PLACEHOLDER_KEYS } from '../../../../platform/config.js';
 import type { SmsProvider, SmsProviderLog } from '../../application/ports.js';
 import { FakeSmsProvider } from './fakeSmsProvider.js';
 import {
@@ -7,11 +8,7 @@ import {
 } from './kavenegar/kavenegarSmsProvider.js';
 import { SilentSmsProvider } from './silentSmsProvider.js';
 
-export const KAVENEGAR_PLACEHOLDER_KEYS = new Set([
-  'prod-fixture-kavenegar-api-key-32b',
-  'change-me',
-  'kavenegar-test-api-key-do-not-leak',
-]);
+export { KAVENEGAR_PLACEHOLDER_KEYS };
 
 export interface SmsProviderConfig {
   SMS_PROVIDER: 'fake' | 'kavenegar';
@@ -29,6 +26,7 @@ export function createSmsProvider(
     return deps.fake ?? new FakeSmsProvider();
   }
   if (config.SMS_LIVE_SEND !== true) {
+    deps.log?.warn?.({ smsReason: 'disabled' }, 'sms live send disabled; silent provider');
     return new SilentSmsProvider();
   }
   const apiKey = config.KAVENEGAR_API_KEY ?? '';

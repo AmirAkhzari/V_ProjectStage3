@@ -142,12 +142,19 @@ describe('KavenegarSmsProvider recorded fixtures', () => {
 });
 
 describe('createSmsProvider', () => {
-  it('keeps fake without capture; live-send off uses silent for kavenegar', () => {
+  it('keeps fake without capture; live-send off uses silent for kavenegar', async () => {
     expect(createSmsProvider({ SMS_PROVIDER: 'fake' }).name).toBe('fake');
-    expect(
-      createSmsProvider({ SMS_PROVIDER: 'kavenegar', SMS_LIVE_SEND: false, KAVENEGAR_API_KEY: KEY })
-        .name,
-    ).toBe('silent');
+    const silent = createSmsProvider({
+      SMS_PROVIDER: 'kavenegar',
+      SMS_LIVE_SEND: false,
+      KAVENEGAR_API_KEY: KEY,
+    });
+    expect(silent.name).toBe('silent');
+    expect(await silent.sendOtp(PHONE, CODE, 'app')).toMatchObject({
+      status: 'ops',
+      failureClass: 'ops',
+      reason: 'disabled',
+    });
   });
 
   it('refuses placeholder keys and invalid templates on live send', () => {

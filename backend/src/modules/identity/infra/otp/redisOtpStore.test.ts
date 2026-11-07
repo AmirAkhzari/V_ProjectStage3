@@ -8,6 +8,7 @@ describe('otp digest (J-5)', () => {
     const c = otpDigest('pepper-32-bytes-minimum-value!!', 'staff', '+989121111111', '042001');
     expect(otpDigestsEqual(a, b)).toBe(true);
     expect(otpDigestsEqual(a, c)).toBe(false);
+    // N17-5: equal-length HMAC compare stays available for tests; consume uses Lua ==.
     const codes = new Set(Array.from({ length: 40 }, () => generateOtpCode()));
     expect([...codes].every((code) => /^[0-9]{6}$/.test(code))).toBe(true);
     expect(codes.size).toBeGreaterThan(8);

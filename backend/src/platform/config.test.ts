@@ -4,6 +4,7 @@ import {
   EXAMPLE_AUDIT_HASH_KEY,
   PROD_FIXTURE_AUDIT_HASH_KEY,
   PROD_FIXTURE_KAVENEGAR_API_KEY,
+  PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
   PROD_FIXTURE_KAVENEGAR_TEMPLATE,
   PROD_FIXTURE_OTP_HMAC_KEY,
   TEST_AUDIT_HASH_KEY,
@@ -30,7 +31,10 @@ const validApiProduction = {
   TRUST_PROXY_HOPS: '1',
   AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
   SMS_PROVIDER: 'kavenegar',
-  KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY,
+  SMS_LIVE_SEND: 'true',
+  SMS_BUDGET_HOUR: '100',
+  SMS_BUDGET_DAY: '1000',
+  KAVENEGAR_API_KEY: PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
   KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
   OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
 };
@@ -175,12 +179,22 @@ describe('loadApiConfig', () => {
       /KAVENEGAR_TEMPLATE/,
     );
     expect(loadApiConfig(validApiProduction).SMS_PROVIDER).toBe('kavenegar');
-    expect(() => loadApiConfig({ ...validApiProduction, SMS_LIVE_SEND: 'true' })).toThrow(
-      /SMS_BUDGET/,
+    expect(loadApiConfig(validApiProduction).SMS_LIVE_SEND).toBe(true);
+    expect(() =>
+      loadApiConfig({ ...validApiProduction, KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY }),
+    ).toThrow(/placeholder/);
+    expect(() => loadApiConfig({ ...validApiProduction, SMS_LIVE_SEND: 'false' })).toThrow(
+      /SMS_LIVE_SEND/,
     );
-    expect(loadApiConfig({ ...validApiProduction, SMS_LIVE_SEND: 'false' }).SMS_LIVE_SEND).toBe(
-      false,
-    );
+    expect(
+      loadApiConfig({
+        ...validApiProduction,
+        SMS_LIVE_SEND: 'false',
+        SMS_STAGING_ALLOW_DISABLED: 'true',
+      }).SMS_LIVE_SEND,
+    ).toBe(false);
+    const { SMS_BUDGET_HOUR: _h, SMS_BUDGET_DAY: _d, ...noBudget } = validApiProduction;
+    expect(() => loadApiConfig(noBudget)).toThrow(/SMS_BUDGET/);
   });
 
   it('rejects Postgres URLs without TLS in production', () => {
