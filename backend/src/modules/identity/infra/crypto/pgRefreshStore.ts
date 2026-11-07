@@ -129,11 +129,9 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           const membership = await client.query<{
             role: string;
             distributor_id: string | null;
-          }>(
-            `SELECT role, distributor_id FROM identity.staff_memberships
-              WHERE account_id = $1 FOR UPDATE`,
-            [input.accountId],
-          );
+          }>(`SELECT role, distributor_id FROM identity.staff_otp_membership($1)`, [
+            input.accountId,
+          ]);
           const mem = membership.rows[0];
           if (
             membership.rows.length !== 1 ||
