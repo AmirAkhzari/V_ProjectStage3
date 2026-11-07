@@ -34,7 +34,38 @@ EXCEPTION WHEN unique_violation THEN
 END;
 $$;
 --> statement-breakpoint
+CREATE OR REPLACE FUNCTION identity.lookup_staff_otp(p_phone text)
+RETURNS TABLE (
+  account_id uuid,
+  role text,
+  distributor_id uuid,
+  status text,
+  permissions text[]
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = identity, tenancy, pg_temp
+AS $$
+  SELECT a.id, sm.role, sm.distributor_id, a.status, sm.permissions
+  FROM identity.accounts a
+  INNER JOIN identity.staff_memberships sm ON sm.account_id = a.id
+  LEFT JOIN tenancy.distributors d ON d.id = sm.distributor_id
+  WHERE a.phone = p_phone
+    AND a.typ = 'staff'
+    AND (
+      (sm.role = 'super_admin' AND sm.distributor_id IS NULL)
+      OR (
+        sm.role = 'distributor_admin'
+        AND sm.distributor_id IS NOT NULL
+        AND d.status = 'active'
+      )
+    );
+$$;
+--> statement-breakpoint
 REVOKE ALL ON FUNCTION identity.ensure_shopkeeper_account(text) FROM PUBLIC;
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION identity.lookup_staff_otp(text) FROM PUBLIC;
 --> statement-breakpoint
 DO $grants$
 DECLARE
@@ -53,10 +84,12 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
     ALTER FUNCTION identity.ensure_shopkeeper_account(text) OWNER TO vproject_migrator;
+    ALTER FUNCTION identity.lookup_staff_otp(text) OWNER TO vproject_migrator;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
     GRANT EXECUTE ON FUNCTION identity.ensure_shopkeeper_account(text) TO vproject_identity;
+    GRANT EXECUTE ON FUNCTION identity.lookup_staff_otp(text) TO vproject_identity;
   END IF;
 END
 $grants$;

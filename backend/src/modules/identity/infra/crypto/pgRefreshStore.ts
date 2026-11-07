@@ -125,6 +125,26 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         if (!row || row.status !== 'active') {
           throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
         }
+        if (input.typ === 'staff') {
+          const membership = await client.query<{
+            role: string;
+            distributor_id: string | null;
+          }>(
+            `SELECT role, distributor_id FROM identity.staff_memberships
+              WHERE account_id = $1 FOR UPDATE`,
+            [input.accountId],
+          );
+          const mem = membership.rows[0];
+          if (
+            membership.rows.length !== 1 ||
+            !mem ||
+            (mem.role !== 'super_admin' && mem.role !== 'distributor_admin') ||
+            (mem.role === 'super_admin' && mem.distributor_id) ||
+            (mem.role === 'distributor_admin' && !mem.distributor_id)
+          ) {
+            throw Object.assign(new Error('membership'), { code: 'ISSUE_ABORTED' });
+          }
+        }
       }
       await client.query(
         `INSERT INTO identity.sessions
