@@ -28,7 +28,7 @@ import {
   type StartedPostgresRoles,
 } from '../helpers/containers.js';
 
-const DIST = '11111111-1111-1111-1111-111111111111';
+const DIST = '11111111-1111-4111-8111-111111111111';
 let ipSeq = 1;
 function nextIp(): string {
   const n = ipSeq++;
@@ -307,7 +307,7 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     await post('/v1/admin/auth/otp/send', { phone });
     const code = fake.outbox.at(-1)?.code;
     const ok = await post('/v1/admin/auth/otp/verify', { phone, code });
-    expect(ok.statusCode).toBe(200);
+    expect(ok.statusCode, ok.body).toBe(200);
     const body = ok.json() as {
       accessToken: string;
       staff: { role: string; distributorId: string | null; permissions: string[] };
