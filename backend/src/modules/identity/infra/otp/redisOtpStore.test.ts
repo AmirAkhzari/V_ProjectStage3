@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { maskIranMobile, smsHourSpike } from '../../domain/otpPolicy.js';
 import { generateOtpCode, otpDigest, otpDigestsEqual } from './redisOtpStore.js';
 
 describe('otp digest (J-5)', () => {
@@ -13,5 +14,13 @@ describe('otp digest (J-5)', () => {
     expect([...codes].every((code) => /^[0-9]{6}$/.test(code))).toBe(true);
     expect(codes.size).toBeGreaterThan(8);
     expect(generateOtpCode().length).toBe(6);
+  });
+
+  it('N17-7 / G7 mask: spike is 3x baseline; phone mask keeps no full number', () => {
+    expect(smsHourSpike(3, 1)).toBe(false);
+    expect(smsHourSpike(4, 1)).toBe(true);
+    expect(smsHourSpike(100, undefined)).toBe(false);
+    expect(maskIranMobile('+989121234567')).toBe('+989*****4567');
+    expect(maskIranMobile('+989121234567')).not.toBe('+989121234567');
   });
 });

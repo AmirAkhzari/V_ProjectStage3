@@ -3,6 +3,7 @@ import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redi
 import {
   luaSafeInt,
   otpLimitKeys,
+  refundOtpBudgetOnly,
   refundOtpSend,
   reserveOtpSend,
   type OtpBudgetLimits,
@@ -202,6 +203,24 @@ describe('S11b-5a OTP Redis core', () => {
     expect(
       (await consumeOtpChallenge(redis, { pepper, purpose: 'app', phone, code: '222222' })).status,
     ).toBe('ok');
+  });
+
+  it('N19-1: budget-only refund leaves phone/IP counters', async () => {
+    const phone = '+989121000011';
+    const ip = '203.0.113.21';
+    const budget = { hour: 100, day: 100 };
+    const first = await reserveOtpSend(redis, phone, ip, pepper, budget);
+    expect(first.status).toBe('reserved');
+    if (first.status !== 'reserved') return;
+    const keys = otpLimitKeys(phone, ip, pepper, first.token);
+    expect(await redis.get(keys.budgetHour)).toBe('1');
+    expect(await redis.get(keys.phoneHour)).toBe('1');
+    expect(await redis.exists(keys.phone60)).toBe(1);
+    expect(await refundOtpBudgetOnly(redis, phone, ip, pepper, first.token)).toBe(1);
+    expect(await redis.get(keys.budgetHour)).toBeNull();
+    expect(await redis.get(keys.phoneHour)).toBe('1');
+    expect(await redis.exists(keys.phone60)).toBe(1);
+    expect((await reserveOtpSend(redis, phone, ip, pepper, budget)).status).toBe('blocked');
   });
 
   it('N17-2: skipBudget is not blocked; luaSafeInt rejects undefined', async () => {
