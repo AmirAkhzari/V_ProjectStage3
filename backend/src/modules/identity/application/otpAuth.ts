@@ -91,11 +91,19 @@ function logOtpSendOutcome(
   bindings: Record<string, unknown>,
 ): void {
   const payload = { otpSendOutcome: outcome, ...bindings };
-  if (outcome === 'ops' || outcome === 'error') {
+  try {
+    if (outcome === 'ops' || outcome === 'error') {
+      runtime.log.error(payload, 'otp send outcome');
+      return;
+    }
+    if (runtime.log.warn) {
+      runtime.log.warn(payload, 'otp send outcome');
+      return;
+    }
     runtime.log.error(payload, 'otp send outcome');
-    return;
+  } catch {
+    // Logging must not drop a live issuance.
   }
-  (runtime.log.info ?? runtime.log.warn ?? runtime.log.error)(payload, 'otp send outcome');
 }
 
 /** N18-1 / N18-6: exactly one active super_admin or distributor_admin membership. */
