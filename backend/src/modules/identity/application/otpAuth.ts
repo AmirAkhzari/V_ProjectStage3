@@ -381,6 +381,8 @@ export async function verifyStaffOtp(
       familyId: randomUUID(),
       typ: 'staff',
       requireActive: true,
+      expectedStaffRole: role,
+      expectedDistributorId: staff.distributor_id,
       ...(staff.distributor_id ? { distributorId: staff.distributor_id } : {}),
       beforeCommit: async (client) => {
         await writeOtpAudit(client, {

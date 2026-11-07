@@ -678,4 +678,50 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
       runtime.identityPool = real;
     }
   });
+
+  it('N-R4: distributor deactivation under lock aborts staff issue', async () => {
+    const phone = '+989121100094';
+    const accountId = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [accountId, phone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       VALUES ($1, 'distributor_admin', $2, '{}')`,
+      [accountId, DIST],
+    );
+    await post('/v1/admin/auth/otp/send', { phone });
+    const code = fake.outbox.at(-1)?.code;
+    const holder = await ownerPool.connect();
+    try {
+      try {
+        await holder.query('BEGIN');
+        await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+        const pending = post('/v1/admin/auth/otp/verify', { phone, code });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 150);
+        });
+        await holder.query(`UPDATE tenancy.distributors SET status = 'inactive' WHERE id = $1`, [
+          DIST,
+        ]);
+        await holder.query('COMMIT');
+        const response = await pending;
+        expect([422, 503]).toContain(response.statusCode);
+      } finally {
+        holder.release();
+      }
+      const sessions = await ownerPool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM identity.sessions WHERE account_id = $1`,
+        [accountId],
+      );
+      expect(sessions.rows[0]?.n).toBe('0');
+    } finally {
+      await ownerPool.query(`UPDATE tenancy.distributors SET status = 'active' WHERE id = $1`, [
+        DIST,
+      ]);
+    }
+  });
 });

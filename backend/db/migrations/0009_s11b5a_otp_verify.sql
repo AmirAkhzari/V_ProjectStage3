@@ -64,18 +64,19 @@ AS $$
 $$;
 --> statement-breakpoint
 CREATE OR REPLACE FUNCTION identity.staff_otp_membership(p_account_id uuid)
-RETURNS TABLE (role text, distributor_id uuid)
+RETURNS TABLE (role text, distributor_id uuid, distributor_status text)
 LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
-SET search_path = identity, pg_temp
+SET search_path = identity, tenancy, pg_temp
 AS $$
 BEGIN
   RETURN QUERY
-    SELECT sm.role, sm.distributor_id
+    SELECT sm.role, sm.distributor_id, d.status
       FROM identity.staff_memberships sm
+      LEFT JOIN tenancy.distributors d ON d.id = sm.distributor_id
      WHERE sm.account_id = p_account_id
-     FOR UPDATE;
+     FOR UPDATE OF sm;
 END;
 $$;
 --> statement-breakpoint
