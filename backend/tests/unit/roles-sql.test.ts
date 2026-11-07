@@ -182,6 +182,8 @@ describe('0009_s11b5a_otp_verify.sql', () => {
     expect(sql).toMatch(/distributors_otp_lookup/);
     expect(sql).toMatch(/staff_memberships_otp_lock/);
     expect(sql).toMatch(/staff_otp_membership/);
+    expect(sql).toMatch(/distributor_status/);
+    expect(sql).toMatch(/FOR UPDATE OF sm/);
     expect(sql).not.toMatch(/GRANT .*customers\.shopkeepers TO vproject_identity/);
     expect(sql).toMatch(/SET search_path = identity, customers, pg_temp/);
     expect(sql).toMatch(/set_config\('app\.shopkeeper_id'/);

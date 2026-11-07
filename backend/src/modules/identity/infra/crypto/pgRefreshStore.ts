@@ -129,16 +129,22 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           const membership = await client.query<{
             role: string;
             distributor_id: string | null;
-          }>(`SELECT role, distributor_id FROM identity.staff_otp_membership($1)`, [
-            input.accountId,
-          ]);
+            distributor_status: string | null;
+          }>(
+            `SELECT role, distributor_id, distributor_status FROM identity.staff_otp_membership($1)`,
+            [input.accountId],
+          );
           const mem = membership.rows[0];
           if (
             membership.rows.length !== 1 ||
             !mem ||
             (mem.role !== 'super_admin' && mem.role !== 'distributor_admin') ||
             (mem.role === 'super_admin' && mem.distributor_id) ||
-            (mem.role === 'distributor_admin' && !mem.distributor_id)
+            (mem.role === 'distributor_admin' && !mem.distributor_id) ||
+            (input.expectedStaffRole !== undefined && mem.role !== input.expectedStaffRole) ||
+            (input.expectedDistributorId !== undefined &&
+              mem.distributor_id !== input.expectedDistributorId) ||
+            (mem.role === 'distributor_admin' && mem.distributor_status !== 'active')
           ) {
             throw Object.assign(new Error('membership'), { code: 'ISSUE_ABORTED' });
           }
