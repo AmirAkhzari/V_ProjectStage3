@@ -22,6 +22,8 @@ import {
 
 export interface OtpAuthLog {
   error(bindings: Record<string, unknown>, message: string): void;
+  warn?(bindings: Record<string, unknown>, message: string): void;
+  info?(bindings: Record<string, unknown>, message: string): void;
 }
 
 export interface OtpAuthRuntime {
@@ -83,6 +85,19 @@ async function applyDelay(runtime: OtpAuthRuntime, delayMs: number): Promise<voi
   await (runtime.sleep ?? defaultSleep)(delayMs);
 }
 
+function logOtpSendOutcome(
+  runtime: OtpAuthRuntime,
+  outcome: 'sent' | 'suppressed' | 'refunded' | 'ops' | 'error',
+  bindings: Record<string, unknown>,
+): void {
+  const payload = { otpSendOutcome: outcome, ...bindings };
+  if (outcome === 'ops' || outcome === 'error') {
+    runtime.log.error(payload, 'otp send outcome');
+    return;
+  }
+  (runtime.log.info ?? runtime.log.warn ?? runtime.log.error)(payload, 'otp send outcome');
+}
+
 /** N18-1 / N18-6: exactly one active super_admin or distributor_admin membership. */
 export async function lookupActiveStaffOtp(
   pool: pg.Pool,
@@ -134,6 +149,11 @@ export async function sendOtp(
       [randomUUID(), input.purpose, otpPhoneHash(input.phone, runtime.pepper)],
     );
   } catch (error) {
+    await dropIssuance(runtime, {
+      purpose: input.purpose,
+      phone: input.phone,
+      issuanceId,
+    });
     await refundOtpSend(runtime.redis, input.phone, input.ip, runtime.pepper, reserved.token).catch(
       () => {},
     );
@@ -141,7 +161,11 @@ export async function sendOtp(
   }
   if (smsHourSpike(reserved.hourCount, runtime.spikeBaselineHour)) {
     runtime.log.error(
-      { hourCount: reserved.hourCount, phoneMasked: maskIranMobile(input.phone) },
+      {
+        otpSendOutcome: 'spike',
+        hourCount: reserved.hourCount,
+        phoneMasked: maskIranMobile(input.phone),
+      },
       'sms hour spike',
     );
   }
@@ -188,6 +212,7 @@ async function dispatchSend(
       const staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
       if (!staff) {
         await dropIssuance(runtime, input);
+        logOtpSendOutcome(runtime, 'suppressed', { purpose: input.purpose, phoneMasked });
         return;
       }
     }
@@ -195,16 +220,24 @@ async function dispatchSend(
     if (smsRefundable(result)) {
       await refundOtpSend(runtime.redis, input.phone, input.ip, runtime.pepper, input.token);
       await dropIssuance(runtime, input);
+      logOtpSendOutcome(runtime, 'refunded', {
+        purpose: input.purpose,
+        phoneMasked,
+        smsReason: result.reason ?? result.status,
+      });
       return;
     }
     if (result.status === 'ops' || result.status === 'ambiguous') {
-      runtime.log.error(
-        { smsReason: result.reason ?? result.status, phoneMasked },
-        'otp sms send failed after respond',
-      );
+      logOtpSendOutcome(runtime, 'ops', {
+        purpose: input.purpose,
+        phoneMasked,
+        smsReason: result.reason ?? result.status,
+      });
+      return;
     }
+    logOtpSendOutcome(runtime, 'sent', { purpose: input.purpose, phoneMasked });
   } catch (error) {
-    runtime.log.error({ err: error, phoneMasked }, 'otp sms send failed after respond');
+    logOtpSendOutcome(runtime, 'error', { purpose: input.purpose, phoneMasked, err: error });
     if (input.purpose === 'staff') await dropIssuance(runtime, input);
   }
 }

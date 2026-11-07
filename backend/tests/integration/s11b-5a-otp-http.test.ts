@@ -190,6 +190,7 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     const second = await post('/v1/app/auth/otp/send', { phone }, ip);
     expect(second.statusCode).toBe(429);
     expect(second.headers['retry-after']).toBeTruthy();
+    expect(second.json()).toMatchObject({ error: { code: 'too_many_attempts' } });
     const dead = createRedis('redis://127.0.0.1:1');
     const down = await buildApp({
       config: testConfig({ TRUST_PROXY_HOPS: '1' }),
@@ -213,5 +214,44 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     const blob = logs.join('\n');
     expect(blob).not.toMatch(/\+9891[0-9]{9}/);
     expect(blob).not.toMatch(/"code":"[0-9]{6}"/);
+  });
+
+  it('P16-4: PG history insert fail drops the Redis challenge', async () => {
+    const phone = '+989121100041';
+    const orig = identityPool.query.bind(identityPool) as typeof identityPool.query;
+    identityPool.query = ((...args: unknown[]) => {
+      const text = args[0];
+      if (typeof text === 'string' && text.includes('INSERT INTO identity.otp_challenges')) {
+        return Promise.reject(new Error('otp history down'));
+      }
+      return orig(...(args as Parameters<typeof orig>));
+    }) as typeof identityPool.query;
+    try {
+      const response = await post('/v1/app/auth/otp/send', { phone });
+      expect(response.statusCode).toBe(503);
+      expect(await redis.exists(`otp:app:${otpPhoneHash(phone, TEST_OTP_HMAC_KEY)}`)).toBe(0);
+    } finally {
+      identityPool.query = orig;
+    }
+  });
+
+  it('P16-6: send outcomes are structured logs', async () => {
+    const active = '+989121100051';
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [randomUUID(), active],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       SELECT id, 'super_admin', NULL, '{}'::text[] FROM identity.accounts WHERE phone = $1`,
+      [active],
+    );
+    await post('/v1/admin/auth/otp/send', { phone: active });
+    await post('/v1/admin/auth/otp/send', { phone: '+989121100052' });
+    const blob = logs.join('\n');
+    expect(blob).toMatch(/"otpSendOutcome":"sent"/);
+    expect(blob).toMatch(/"otpSendOutcome":"suppressed"/);
   });
 });
