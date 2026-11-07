@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
 import { Argon2idPasswordHasher } from './modules/identity/infra/crypto/argon2Hasher.js';
+import { createSmsProvider } from './modules/notification/api.js';
 import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
 import { assertAdapterAllowed, assertStartupAdapters } from './platform/adapters.js';
@@ -37,6 +38,20 @@ const redis = createRedis(config.REDIS_URL, log);
 const sessionAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(sessionLookupPool));
 const verifier = await createJwtFromEnv();
 const hasher = new Argon2idPasswordHasher();
+const sms = createSmsProvider(
+  {
+    SMS_PROVIDER: config.SMS_PROVIDER,
+    SMS_LIVE_SEND: config.SMS_LIVE_SEND,
+    ...(config.KAVENEGAR_API_KEY !== undefined
+      ? { KAVENEGAR_API_KEY: config.KAVENEGAR_API_KEY }
+      : {}),
+    ...(config.KAVENEGAR_TEMPLATE !== undefined
+      ? { KAVENEGAR_TEMPLATE: config.KAVENEGAR_TEMPLATE }
+      : {}),
+    SMS_TIMEOUT_MS: config.SMS_TIMEOUT_MS,
+  },
+  { log },
+);
 const refreshStore = new PgRefreshTokenStore(identityDb.pool, {
   onSidsRevoked: (sids) => sessionAuthority.deny(sids),
   log,
@@ -78,6 +93,24 @@ const app = await buildApp({
     hasher,
     log,
     auditHashKey: config.AUDIT_HASH_KEY,
+  },
+  otpAuth: {
+    identityPool: identityDb.pool,
+    redis,
+    sms,
+    log,
+    pepper: config.OTP_HMAC_KEY,
+    budget: {
+      hour: config.SMS_BUDGET_HOUR ?? 0,
+      day: config.SMS_BUDGET_DAY ?? 0,
+      skipBudget: config.SMS_PROVIDER === 'fake' || config.SMS_LIVE_SEND !== true,
+      ...(config.SMS_SPIKE_BASELINE_HOUR !== undefined
+        ? { spikeBaselineHour: config.SMS_SPIKE_BASELINE_HOUR }
+        : {}),
+    },
+    ...(config.SMS_SPIKE_BASELINE_HOUR !== undefined
+      ? { spikeBaselineHour: config.SMS_SPIKE_BASELINE_HOUR }
+      : {}),
   },
   healthChecks: [
     postgresHealthCheck(db.pool),

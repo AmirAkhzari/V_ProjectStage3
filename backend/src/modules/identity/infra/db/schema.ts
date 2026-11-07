@@ -116,3 +116,15 @@ export const pendingSessionDenies = identitySchema.table(
   },
   (table) => [index('pending_session_denies_open_idx').on(table.enqueuedAt)],
 );
+
+/** Send history. HMAC of phone only; never the OTP code. */
+export const otpChallenges = identitySchema.table(
+  'otp_challenges',
+  {
+    id: uuid('id').primaryKey(),
+    purpose: text('purpose').notNull(),
+    phoneHmac: text('phone_hmac').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('otp_challenges_created_at_idx').on(table.createdAt)],
+);

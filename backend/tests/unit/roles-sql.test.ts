@@ -151,6 +151,22 @@ describe('0006_s11b3_pending_denies.sql', () => {
   });
 });
 
+describe('0008_s11b5a_otp_http.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0008_s11b5a_otp_http.sql'), 'utf8');
+
+  it('FORCE RLS on otp_challenges and grants identity insert/select only', () => {
+    expect(sql).toMatch(/ALTER TABLE identity\.otp_challenges FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/CREATE POLICY otp_challenges_identity/);
+    expect(sql).toMatch(
+      /GRANT SELECT, INSERT ON TABLE identity\.otp_challenges TO vproject_identity/,
+    );
+    expect(sql).not.toMatch(/GRANT .*otp_challenges TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT .*customers\.shopkeepers TO vproject_identity/);
+    expect(sql).not.toMatch(/ensure_shopkeeper_account/);
+    expect(sql).not.toMatch(/lookup_staff_otp/);
+  });
+});
+
 describe('0007_s11b4b_pending_denies_purge.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0007_s11b4b_pending_denies_purge.sql'), 'utf8');
 

@@ -34,7 +34,8 @@ describe('checkMigrationSql', () => {
     expect(ALLOWED_TABLES.has('identity.pending_session_denies')).toBe(true);
     expect(ALLOWED_TABLES.has('tenancy.distributors')).toBe(true);
     expect(ALLOWED_TABLES.has('customers.shopkeepers')).toBe(true);
-    expect(ALLOWED_TABLES.size).toBe(12);
+    expect(ALLOWED_TABLES.has('identity.otp_challenges')).toBe(true);
+    expect(ALLOWED_TABLES.size).toBe(13);
   });
 
   it('rejects a domain CREATE TABLE', () => {

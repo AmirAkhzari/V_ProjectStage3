@@ -17,6 +17,7 @@ import {
 } from './platform/auth/sessionAuthority.js';
 import { AppError } from './platform/http/errors.js';
 import type { DriverAuthRuntime } from './modules/identity/application/driverAuth.js';
+import type { OtpAuthRuntime } from './modules/identity/application/otpAuth.js';
 import type { Config } from './platform/config.js';
 import { InProcessEventBus } from './platform/events/bus.js';
 import { InMemoryInboxStore } from './platform/events/inbox.js';
@@ -29,6 +30,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     nodeEnv: Config['NODE_ENV'];
     driverAuth?: DriverAuthRuntime;
+    otpAuth?: OtpAuthRuntime;
   }
 }
 
@@ -39,6 +41,7 @@ export interface BuildAppOptions {
   sessionAuthority?: SessionAuthority;
   assertIssuance?: () => Promise<void>;
   driverAuth?: DriverAuthRuntime;
+  otpAuth?: OtpAuthRuntime;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -59,6 +62,7 @@ export async function buildApp(options: BuildAppOptions) {
   registerErrorHandling(app);
   app.decorate('nodeEnv', options.config.NODE_ENV);
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
+  if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
 
   if (options.config.OPENAPI_DOCS_ENABLED) {
     await app.register(swagger, {
