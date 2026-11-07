@@ -29,7 +29,12 @@ import {
   type DrainLog,
 } from '../infra/session/pgSessionStore.js';
 import { sessionWindows } from '../domain/sessionTtl.js';
-import { refundOtpSend, reserveOtpSend, type OtpBudgetLimits } from './otpLimiter.js';
+import {
+  refundOtpBudgetOnly,
+  refundOtpSend,
+  reserveOtpSend,
+  type OtpBudgetLimits,
+} from './otpLimiter.js';
 import {
   consumeOtpChallenge,
   deleteOtpChallengeIfIssuance,
@@ -104,8 +109,6 @@ const una = (retry = 5) =>
   new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
     retryAfter: retry,
   });
-const tooMany = (retryAfter: number) =>
-  new AppError('too_many_attempts', 429, 'Too many attempts', { retryAfter });
 const rateLimited = (retryAfter: number) =>
   new AppError('RATE_LIMITED', 429, 'Too many requests', { retryAfter });
 const otpInvalid = () => new AppError('OTP_INVALID', 422, 'Invalid or expired code');
@@ -206,7 +209,7 @@ export async function sendOtp(
   } catch (error) {
     mapRedis(error);
   }
-  if (reservation.status === 'blocked') throw tooMany(reservation.retryAfter);
+  if (reservation.status === 'blocked') throw rateLimited(reservation.retryAfter);
   const reserved = reservation;
   const code = generateOtpCode();
   const issuanceId = newOtpIssuanceId();
@@ -286,7 +289,13 @@ async function dispatchSend(
     if (input.purpose === 'staff') {
       const staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
       if (!staff) {
-        await dropIssuance(runtime, input);
+        await refundOtpBudgetOnly(
+          runtime.redis,
+          input.phone,
+          input.ip,
+          runtime.pepper,
+          input.token,
+        ).catch(() => {});
         logOtpSendOutcome(runtime, 'suppressed', { purpose: input.purpose, phoneMasked });
         return;
       }
@@ -313,7 +322,6 @@ async function dispatchSend(
     logOtpSendOutcome(runtime, 'sent', { purpose: input.purpose, phoneMasked });
   } catch (error) {
     logOtpSendOutcome(runtime, 'error', { purpose: input.purpose, phoneMasked, err: error });
-    if (input.purpose === 'staff') await dropIssuance(runtime, input);
   }
 }
 
@@ -355,7 +363,12 @@ export async function verifyStaffOtp(
 ): Promise<StaffSessionView> {
   await assertRedisForAuthIssuance(runtime.redis);
   await consumeOrThrow(runtime, 'staff', input);
-  const staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
+  let staff;
+  try {
+    staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
+  } catch {
+    throw una();
+  }
   if (!staff) throw otpInvalid();
   const role = staff.role as StaffRole;
   const sid = randomUUID();
