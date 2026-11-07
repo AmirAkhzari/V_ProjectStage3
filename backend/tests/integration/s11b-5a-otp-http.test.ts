@@ -218,20 +218,21 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
 
   it('P16-4: PG history insert fail drops the Redis challenge', async () => {
     const phone = '+989121100041';
-    const orig = identityPool.query.bind(identityPool) as typeof identityPool.query;
-    identityPool.query = ((...args: unknown[]) => {
-      const text = args[0];
-      if (typeof text === 'string' && text.includes('INSERT INTO identity.otp_challenges')) {
-        return Promise.reject(new Error('otp history down'));
-      }
-      return orig(...(args as Parameters<typeof orig>));
-    }) as typeof identityPool.query;
+    const real = runtime.identityPool;
+    runtime.identityPool = {
+      query: (text: unknown, values?: unknown) => {
+        if (typeof text === 'string' && text.includes('INSERT INTO identity.otp_challenges')) {
+          return Promise.reject(new Error('otp history down'));
+        }
+        return real.query(text as never, values as never);
+      },
+    } as typeof real;
     try {
       const response = await post('/v1/app/auth/otp/send', { phone });
       expect(response.statusCode).toBe(503);
       expect(await redis.exists(`otp:app:${otpPhoneHash(phone, TEST_OTP_HMAC_KEY)}`)).toBe(0);
     } finally {
-      identityPool.query = orig;
+      runtime.identityPool = real;
     }
   });
 
