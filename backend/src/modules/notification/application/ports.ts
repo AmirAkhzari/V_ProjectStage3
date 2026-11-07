@@ -17,6 +17,7 @@ export type SmsFailureReason =
   | 'timeout'
   | 'server'
   | 'malformed'
+  | 'disabled'
   | 'unknown';
 
 export interface SmsOtpResult {

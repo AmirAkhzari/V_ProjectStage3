@@ -144,11 +144,19 @@ export const EXAMPLE_AUDIT_HASH_KEY = 'change-me-to-a-32-byte-or-longer-secret';
 export const PROD_FIXTURE_AUDIT_HASH_KEY = 'prod-fixture-audit-hash-key-32b!!';
 /** Production-shaped Kavenegar fixture (not a live credential). */
 export const PROD_FIXTURE_KAVENEGAR_API_KEY = 'prod-fixture-kavenegar-api-key-32b';
+/** Production-shaped live key used in config tests; not a placeholder. */
+export const PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY = 'prod-live-kavenegar-key-32bytes-min!';
 export const PROD_FIXTURE_KAVENEGAR_TEMPLATE = 'vproject-otp';
 export const TEST_OTP_HMAC_KEY = 'test-otp-hmac-key-32-bytes-min!!';
 export const EXAMPLE_OTP_HMAC_KEY = 'change-me-to-a-32-byte-otp-pepper';
 export const PROD_FIXTURE_OTP_HMAC_KEY = 'prod-fixture-otp-hmac-key-32b!!!!';
 const KNOWN_OTP_HMAC_KEYS = new Set([TEST_OTP_HMAC_KEY, EXAMPLE_OTP_HMAC_KEY]);
+/** N17-6: single placeholder-key list. Live send and boot checks share this set. */
+export const KAVENEGAR_PLACEHOLDER_KEYS = new Set([
+  PROD_FIXTURE_KAVENEGAR_API_KEY,
+  'change-me',
+  'kavenegar-test-api-key-do-not-leak',
+]);
 /** Kavenegar template: letter, then 1–63 letters/digits/_/- (docs + P14-1). */
 export const KAVENEGAR_TEMPLATE_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
@@ -169,6 +177,8 @@ export const apiConfigSchema = z
     /** Local/CI default is fake. Production extras refuse fake and require key+template. */
     SMS_PROVIDER: z.enum(['fake', 'kavenegar']).default('fake'),
     SMS_LIVE_SEND: booleanString,
+    /** N17-1: production may boot without live send only when this is explicit. */
+    SMS_STAGING_ALLOW_DISABLED: booleanString,
     KAVENEGAR_API_KEY: z.string().min(1).optional(),
     KAVENEGAR_TEMPLATE: z
       .string()
@@ -264,6 +274,8 @@ function auditHashKeyIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
 function smsProviderIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   const live = env['SMS_LIVE_SEND'] === 'true';
+  const stagingDisabled = env['SMS_STAGING_ALLOW_DISABLED'] === 'true';
+  const prod = env['NODE_ENV'] === 'production';
   if (live) {
     if (!presentEnv(env, 'SMS_BUDGET_HOUR')) {
       issues.push({ field: 'SMS_BUDGET_HOUR', message: 'must be set when SMS_LIVE_SEND=true' });
@@ -272,14 +284,29 @@ function smsProviderIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
       issues.push({ field: 'SMS_BUDGET_DAY', message: 'must be set when SMS_LIVE_SEND=true' });
     }
     const key = env['KAVENEGAR_API_KEY'] ?? '';
-    if (
-      (env['SMS_PROVIDER'] ?? 'fake') === 'kavenegar' &&
-      (key === PROD_FIXTURE_KAVENEGAR_API_KEY || key === 'kavenegar-test-api-key-do-not-leak')
-    ) {
+    if ((env['SMS_PROVIDER'] ?? 'fake') === 'kavenegar' && KAVENEGAR_PLACEHOLDER_KEYS.has(key)) {
       issues.push({ field: 'KAVENEGAR_API_KEY', message: 'placeholder keys cannot live-send' });
     }
   }
-  if (env['NODE_ENV'] !== 'production') return issues;
+  if (!prod) return issues;
+  if (!live && !stagingDisabled) {
+    issues.push({
+      field: 'SMS_LIVE_SEND',
+      message: 'must be true in production (or set SMS_STAGING_ALLOW_DISABLED)',
+    });
+  }
+  if (!presentEnv(env, 'SMS_BUDGET_HOUR')) {
+    issues.push({
+      field: 'SMS_BUDGET_HOUR',
+      message: 'must be set in production (fail closed; no unlimited default)',
+    });
+  }
+  if (!presentEnv(env, 'SMS_BUDGET_DAY')) {
+    issues.push({
+      field: 'SMS_BUDGET_DAY',
+      message: 'must be set in production (fail closed; no unlimited default)',
+    });
+  }
   const provider = env['SMS_PROVIDER'] ?? 'fake';
   if (provider === 'fake' || provider === 'mock') {
     issues.push({
