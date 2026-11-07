@@ -5,6 +5,7 @@ import {
   PROD_FIXTURE_AUDIT_HASH_KEY,
   PROD_FIXTURE_KAVENEGAR_API_KEY,
   PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+  PROD_FIXTURE_OTP_HMAC_KEY,
   TEST_AUDIT_HASH_KEY,
   loadApiConfig,
   loadConfig,
@@ -31,6 +32,7 @@ const validApiProduction = {
   SMS_PROVIDER: 'kavenegar',
   KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY,
   KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+  OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
 };
 
 const validWorkerProduction = {
@@ -173,6 +175,12 @@ describe('loadApiConfig', () => {
       /KAVENEGAR_TEMPLATE/,
     );
     expect(loadApiConfig(validApiProduction).SMS_PROVIDER).toBe('kavenegar');
+    expect(() => loadApiConfig({ ...validApiProduction, SMS_LIVE_SEND: 'true' })).toThrow(
+      /SMS_BUDGET/,
+    );
+    expect(loadApiConfig({ ...validApiProduction, SMS_LIVE_SEND: 'false' }).SMS_LIVE_SEND).toBe(
+      false,
+    );
   });
 
   it('rejects Postgres URLs without TLS in production', () => {

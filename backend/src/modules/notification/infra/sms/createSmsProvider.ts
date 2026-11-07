@@ -1,9 +1,21 @@
 import type { SmsProvider, SmsProviderLog } from '../../application/ports.js';
 import { FakeSmsProvider } from './fakeSmsProvider.js';
-import { KavenegarSmsProvider, type SmsFetch } from './kavenegar/kavenegarSmsProvider.js';
+import {
+  KAVENEGAR_TEMPLATE_RE,
+  KavenegarSmsProvider,
+  type SmsFetch,
+} from './kavenegar/kavenegarSmsProvider.js';
+import { SilentSmsProvider } from './silentSmsProvider.js';
+
+export const KAVENEGAR_PLACEHOLDER_KEYS = new Set([
+  'prod-fixture-kavenegar-api-key-32b',
+  'change-me',
+  'kavenegar-test-api-key-do-not-leak',
+]);
 
 export interface SmsProviderConfig {
   SMS_PROVIDER: 'fake' | 'kavenegar';
+  SMS_LIVE_SEND?: boolean;
   KAVENEGAR_API_KEY?: string;
   KAVENEGAR_TEMPLATE?: string;
   SMS_TIMEOUT_MS?: number;
@@ -16,10 +28,16 @@ export function createSmsProvider(
   if (config.SMS_PROVIDER === 'fake') {
     return deps.fake ?? new FakeSmsProvider();
   }
+  if (config.SMS_LIVE_SEND !== true) {
+    return new SilentSmsProvider();
+  }
   const apiKey = config.KAVENEGAR_API_KEY ?? '';
   const template = config.KAVENEGAR_TEMPLATE ?? '';
-  if (apiKey.length === 0 || template.length === 0) {
-    throw new Error('KAVENEGAR_API_KEY and KAVENEGAR_TEMPLATE are required');
+  if (apiKey.length === 0 || KAVENEGAR_PLACEHOLDER_KEYS.has(apiKey)) {
+    throw new Error('KAVENEGAR_API_KEY is missing or a placeholder; live send refused');
+  }
+  if (!KAVENEGAR_TEMPLATE_RE.test(template)) {
+    throw new Error('KAVENEGAR_TEMPLATE failed documented validation');
   }
   return new KavenegarSmsProvider({
     apiKey,

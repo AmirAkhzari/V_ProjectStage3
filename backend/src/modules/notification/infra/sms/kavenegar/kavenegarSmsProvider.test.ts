@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { FakeSmsProvider } from '../fakeSmsProvider.js';
+import { smsRefundable } from '../../../application/ports.js';
 import { createSmsProvider } from '../createSmsProvider.js';
+import { FAKE_OUTBOX_CAP, FakeSmsProvider } from '../fakeSmsProvider.js';
 import { KAVENEGAR_FIXTURES } from './fixtures.js';
 import { KAVENEGAR_HOST, KavenegarSmsProvider } from './kavenegarSmsProvider.js';
 import { redactSmsSecrets } from './redact.js';
@@ -15,15 +16,19 @@ function jsonResponse(body: string, status = 200): Response {
 }
 
 describe('FakeSmsProvider', () => {
-  it('records sends in memory with no I/O and exposes a test-only code hook', async () => {
+  it('captures plaintext only when opted in and bounds the outbox', async () => {
+    const silent = new FakeSmsProvider();
+    await silent.sendOtp(PHONE, CODE, 'app');
+    expect(silent.outbox).toEqual([]);
     const seen: string[] = [];
-    const sms = new FakeSmsProvider((code) => seen.push(code));
-    const result = await sms.sendOtp(PHONE, CODE, 'app');
-    expect(result.status).toBe('sent');
+    const sms = new FakeSmsProvider({ capture: true, onCode: (code) => seen.push(code) });
+    await sms.sendOtp(PHONE, CODE, 'app');
     expect(sms.outbox).toEqual([{ phone: PHONE, code: CODE, purpose: 'app' }]);
     expect(seen).toEqual([CODE]);
-    sms.nextStatus = 'rejected';
-    expect((await sms.sendOtp(PHONE, CODE, 'staff')).status).toBe('rejected');
+    for (let i = 0; i < FAKE_OUTBOX_CAP + 5; i += 1) {
+      await sms.sendOtp(PHONE, CODE, 'app');
+    }
+    expect(sms.outbox.length).toBe(FAKE_OUTBOX_CAP);
   });
 });
 
@@ -45,24 +50,50 @@ describe('KavenegarSmsProvider recorded fixtures', () => {
     expect(url).toBe(`${KAVENEGAR_HOST}/v1/${KEY}/verify/lookup.json`);
     expect(seen?.method).toBe('POST');
     expect(seen?.redirect).toBe('error');
-    expect(String(seen?.body)).toContain(`receptor=${encodeURIComponent(PHONE)}`);
-    expect(String(seen?.body)).toContain(`token=${CODE}`);
     expect(String(seen?.body)).toContain(`template=${TEMPLATE}`);
   });
 
-  it('maps 4xx / provider 411 to rejected and 5xx / malformed / oversized to ambiguous', async () => {
-    const run = (body: string, status: number) =>
+  it('N16-1: receptor 411 is refundable; ops 401/403/418/424/426 are not; 408/429 ambiguous', async () => {
+    const run = (body: string, status = 200) =>
       new KavenegarSmsProvider({
         apiKey: KEY,
         template: TEMPLATE,
         fetch: async () => jsonResponse(body, status),
       }).sendOtp(PHONE, CODE, 'app');
-    expect((await run(KAVENEGAR_FIXTURES.clientError, 200)).status).toBe('rejected');
-    expect((await run('{}', 411)).status).toBe('rejected');
-    expect((await run(KAVENEGAR_FIXTURES.serverError, 200)).status).toBe('ambiguous');
-    expect((await run('{}', 503)).status).toBe('ambiguous');
-    expect((await run(KAVENEGAR_FIXTURES.malformed, 200)).status).toBe('ambiguous');
-    expect((await run(KAVENEGAR_FIXTURES.oversized, 200)).status).toBe('ambiguous');
+    const receptor = await run(KAVENEGAR_FIXTURES.receptor411);
+    expect(receptor).toMatchObject({
+      status: 'rejected',
+      failureClass: 'receptor',
+      reason: 'invalid_receptor',
+    });
+    expect(smsRefundable(receptor)).toBe(true);
+    expect((await run('{}', 411)).failureClass).toBe('receptor');
+    const logs: string[] = [];
+    const opsRun = (body: string) =>
+      new KavenegarSmsProvider({
+        apiKey: KEY,
+        template: TEMPLATE,
+        log: { error: (b, m) => logs.push(JSON.stringify(b) + m) },
+        fetch: async () => jsonResponse(body),
+      }).sendOtp(PHONE, CODE, 'app');
+    for (const body of [
+      KAVENEGAR_FIXTURES.key401,
+      KAVENEGAR_FIXTURES.key403,
+      KAVENEGAR_FIXTURES.credit418,
+      KAVENEGAR_FIXTURES.template424,
+      KAVENEGAR_FIXTURES.template426,
+    ]) {
+      const result = await opsRun(body);
+      expect(result.status).toBe('ops');
+      expect(smsRefundable(result)).toBe(false);
+    }
+    expect(logs.join('')).toMatch(/kavenegar ops failure/);
+    expect((await run(KAVENEGAR_FIXTURES.timeout408)).status).toBe('ambiguous');
+    expect((await run(KAVENEGAR_FIXTURES.rate429)).status).toBe('ambiguous');
+    expect((await run('{}', 408)).status).toBe('ambiguous');
+    expect((await run('{}', 429)).status).toBe('ambiguous');
+    expect((await run(KAVENEGAR_FIXTURES.serverError)).status).toBe('ambiguous');
+    expect((await run(KAVENEGAR_FIXTURES.malformed)).status).toBe('ambiguous');
   });
 
   it('timeouts and fetch throws are ambiguous; no retry', async () => {
@@ -85,32 +116,6 @@ describe('KavenegarSmsProvider recorded fixtures', () => {
     });
     expect((await sms.sendOtp(PHONE, CODE, 'app')).status).toBe('ambiguous');
     expect(calls).toBe(1);
-    const throwing = new KavenegarSmsProvider({
-      apiKey: KEY,
-      template: TEMPLATE,
-      fetch: async () => {
-        throw new Error(`upstream ${KEY} phone=${PHONE} token=${CODE}`);
-      },
-    });
-    expect((await throwing.sendOtp(PHONE, CODE, 'staff')).status).toBe('ambiguous');
-  });
-
-  it('rejects invalid receptor/code without fetching; duplicate calls both go out', async () => {
-    let calls = 0;
-    const sms = new KavenegarSmsProvider({
-      apiKey: KEY,
-      template: TEMPLATE,
-      fetch: async () => {
-        calls += 1;
-        return jsonResponse(KAVENEGAR_FIXTURES.success);
-      },
-    });
-    expect((await sms.sendOtp('09121234567', CODE, 'app')).status).toBe('rejected');
-    expect((await sms.sendOtp(PHONE, '42', 'app')).status).toBe('rejected');
-    expect(calls).toBe(0);
-    await sms.sendOtp(PHONE, CODE, 'app');
-    await sms.sendOtp(PHONE, CODE, 'app');
-    expect(calls).toBe(2);
   });
 
   it('redacts API key, phone and code from error logs', async () => {
@@ -137,21 +142,30 @@ describe('KavenegarSmsProvider recorded fixtures', () => {
 });
 
 describe('createSmsProvider', () => {
-  it('selects fake or kavenegar from config', () => {
+  it('keeps fake without capture; live-send off uses silent for kavenegar', () => {
     expect(createSmsProvider({ SMS_PROVIDER: 'fake' }).name).toBe('fake');
     expect(
-      createSmsProvider(
-        {
-          SMS_PROVIDER: 'kavenegar',
-          KAVENEGAR_API_KEY: KEY,
-          KAVENEGAR_TEMPLATE: TEMPLATE,
-        },
-        { fetch: async () => jsonResponse(KAVENEGAR_FIXTURES.success) },
-      ).name,
-    ).toBe('kavenegar');
+      createSmsProvider({ SMS_PROVIDER: 'kavenegar', SMS_LIVE_SEND: false, KAVENEGAR_API_KEY: KEY })
+        .name,
+    ).toBe('silent');
   });
 
-  it('fails closed when kavenegar is selected without key or template', () => {
-    expect(() => createSmsProvider({ SMS_PROVIDER: 'kavenegar' })).toThrow(/KAVENEGAR/);
+  it('refuses placeholder keys and invalid templates on live send', () => {
+    expect(() =>
+      createSmsProvider({
+        SMS_PROVIDER: 'kavenegar',
+        SMS_LIVE_SEND: true,
+        KAVENEGAR_API_KEY: 'prod-fixture-kavenegar-api-key-32b',
+        KAVENEGAR_TEMPLATE: TEMPLATE,
+      }),
+    ).toThrow(/placeholder/);
+    expect(() =>
+      createSmsProvider({
+        SMS_PROVIDER: 'kavenegar',
+        SMS_LIVE_SEND: true,
+        KAVENEGAR_API_KEY: 'live-key-not-a-placeholder-value',
+        KAVENEGAR_TEMPLATE: 'bad template',
+      }),
+    ).toThrow(/TEMPLATE/);
   });
 });

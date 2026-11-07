@@ -3,7 +3,7 @@ import { FakeSmsProvider } from './fakeSmsProvider.js';
 
 describe('FakeSmsProvider', () => {
   it('records OTP sends without performing I/O', async () => {
-    const sms = new FakeSmsProvider();
+    const sms = new FakeSmsProvider({ capture: true });
     const result = await sms.sendOtp('+989120000000', '123456', 'app');
     expect(result.status).toBe('sent');
     expect(result.messageId).toBeTruthy();
