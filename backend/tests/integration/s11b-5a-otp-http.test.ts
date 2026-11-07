@@ -608,4 +608,74 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     );
     expect(sessions.rows[0]?.n).toBe('0');
   });
+
+  it('P18-9: five wrong B2 guesses match for staff vs non-staff', async () => {
+    const staffPhone = '+989121100091';
+    const unknown = '+989121100092';
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [randomUUID(), staffPhone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       SELECT id, 'super_admin', NULL, '{}'::text[] FROM identity.accounts WHERE phone = $1`,
+      [staffPhone],
+    );
+    expect((await post('/v1/admin/auth/otp/send', { phone: staffPhone })).statusCode).toBe(200);
+    expect((await post('/v1/admin/auth/otp/send', { phone: unknown })).statusCode).toBe(200);
+    const guess = async (phone: string) => {
+      const response = await post('/v1/admin/auth/otp/verify', { phone, code: '999999' });
+      return { status: response.statusCode, body: response.body };
+    };
+    const staffSeq: { status: number; body: string }[] = [];
+    const unknownSeq: { status: number; body: string }[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      staffSeq.push(await guess(staffPhone));
+      unknownSeq.push(await guess(unknown));
+    }
+    expect(staffSeq).toEqual(unknownSeq);
+    expect(staffSeq.map((row) => row.status)).toEqual([422, 422, 422, 422, 429]);
+    expect(staffSeq.slice(0, 4).map((row) => JSON.parse(row.body).error.code)).toEqual([
+      'OTP_INVALID',
+      'OTP_INVALID',
+      'OTP_INVALID',
+      'OTP_INVALID',
+    ]);
+    expect(JSON.parse(staffSeq[4]?.body ?? '{}').error.code).toBe('OTP_LOCKED');
+  });
+
+  it('N-R3: B2 staff lookup PG error is 503', async () => {
+    const phone = '+989121100093';
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [randomUUID(), phone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       SELECT id, 'super_admin', NULL, '{}'::text[] FROM identity.accounts WHERE phone = $1`,
+      [phone],
+    );
+    await post('/v1/admin/auth/otp/send', { phone });
+    const code = fake.outbox.at(-1)?.code;
+    const real = runtime.identityPool;
+    runtime.identityPool = {
+      query: (text: unknown, values?: unknown) => {
+        if (typeof text === 'string' && text.includes('lookup_staff_otp')) {
+          return Promise.reject(new Error('staff lookup down'));
+        }
+        return real.query(text as never, values as never);
+      },
+    } as typeof real;
+    try {
+      const response = await post('/v1/admin/auth/otp/verify', { phone, code });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+    } finally {
+      runtime.identityPool = real;
+    }
+  });
 });
