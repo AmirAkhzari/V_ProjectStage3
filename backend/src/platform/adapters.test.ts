@@ -9,6 +9,7 @@ describe('assertAdapterAllowed', () => {
 
   it('hard-fails mock adapters in production', () => {
     expect(() => assertAdapterAllowed('sms', 'mock', 'production')).toThrow(/sms mock adapter/);
+    expect(() => assertAdapterAllowed('sms', 'fake', 'production')).toThrow(/sms fake adapter/);
     expect(() => assertAdapterAllowed('payment', 'mock', 'production')).toThrow(
       /payment mock adapter/,
     );

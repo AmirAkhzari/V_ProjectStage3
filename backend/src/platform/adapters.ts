@@ -1,16 +1,20 @@
 /**
- * Composition-root guard (M-5). Mock adapters exist for tests only. Selecting `mock` in
- * production must fail closed at startup, before any request is served.
+ * Composition-root guard (M-5). Mock/fake adapters exist for tests only. Selecting
+ * `mock` or `fake` in production must fail closed at startup, before any request is served.
  */
 export type AdapterKind = 'sms' | 'payment' | 'kyc' | 'payout' | 'otp' | 'passwordHasher' | 'token';
+
+const FORBIDDEN_PROD_ADAPTERS = new Set(['mock', 'fake']);
 
 export function assertAdapterAllowed(
   kind: AdapterKind,
   implementation: string,
   nodeEnv: string,
 ): void {
-  if (nodeEnv === 'production' && implementation === 'mock') {
-    throw new Error(`${kind} mock adapter cannot be selected when NODE_ENV=production`);
+  if (nodeEnv === 'production' && FORBIDDEN_PROD_ADAPTERS.has(implementation)) {
+    throw new Error(
+      `${kind} ${implementation} adapter cannot be selected when NODE_ENV=production`,
+    );
   }
 }
 

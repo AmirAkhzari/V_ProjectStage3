@@ -1,6 +1,8 @@
 import {
   loadApiConfig,
   PROD_FIXTURE_AUDIT_HASH_KEY,
+  PROD_FIXTURE_KAVENEGAR_API_KEY,
+  PROD_FIXTURE_KAVENEGAR_TEMPLATE,
   type ApiConfig,
 } from '../../src/platform/config.js';
 
@@ -27,6 +29,9 @@ export function productionApiConfig(overrides: Record<string, string | undefined
     OPENAPI_DOCS_ENABLED: 'false',
     TRUST_PROXY_HOPS: '1',
     AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
+    SMS_PROVIDER: 'kavenegar',
+    KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY,
+    KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
     ...overrides,
   });
 }

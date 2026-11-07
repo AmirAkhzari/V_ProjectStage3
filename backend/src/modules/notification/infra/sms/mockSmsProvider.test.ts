@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { MockSmsProvider } from './mockSmsProvider.js';
+import { FakeSmsProvider } from './fakeSmsProvider.js';
 
-describe('MockSmsProvider', () => {
-  it('records template sends without performing I/O', async () => {
-    const sms = new MockSmsProvider();
-    const result = await sms.sendTemplate({
-      receptor: '09120000000',
-      template: 'otp',
-      tokens: ['12345'],
-    });
+describe('FakeSmsProvider', () => {
+  it('records OTP sends without performing I/O', async () => {
+    const sms = new FakeSmsProvider();
+    const result = await sms.sendOtp('+989120000000', '123456', 'app');
+    expect(result.status).toBe('sent');
     expect(result.messageId).toBeTruthy();
     expect(sms.outbox).toHaveLength(1);
-    expect(sms.name).toBe('mock');
+    expect(sms.name).toBe('fake');
   });
 });
