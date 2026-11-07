@@ -32,7 +32,7 @@ export interface OtpAuthRuntime {
   pepper: string;
   budget: OtpBudgetLimits;
   spikeBaselineHour?: number;
-  runAfterRespond?: (fn: () => void) => void;
+  runAfterRespond?: (fn: () => void | Promise<void>) => void;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -68,8 +68,8 @@ function mapRedis(error: unknown): never {
   throw una();
 }
 
-function runAfter(runtime: OtpAuthRuntime, fn: () => void): void {
-  (runtime.runAfterRespond ?? setImmediate)(fn);
+function runAfter(runtime: OtpAuthRuntime, fn: () => void | Promise<void>): void {
+  (runtime.runAfterRespond ?? ((cb) => setImmediate(() => void cb())))(fn);
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -146,16 +146,16 @@ export async function sendOtp(
     );
   }
   await applyDelay(runtime, reserved.delayMs);
-  runAfter(runtime, () => {
-    void dispatchSend(runtime, {
+  runAfter(runtime, () =>
+    dispatchSend(runtime, {
       purpose: input.purpose,
       phone: input.phone,
       ip: input.ip,
       code,
       issuanceId,
       token: reserved.token,
-    });
-  });
+    }),
+  );
   return SEND_BODY;
 }
 

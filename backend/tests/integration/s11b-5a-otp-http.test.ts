@@ -34,6 +34,7 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
   let fake: FakeSmsProvider;
   let runtime: OtpAuthRuntime;
   let app: App;
+  let afterRespond: Promise<void> = Promise.resolve();
   const logs: string[] = [];
 
   beforeAll(async () => {
@@ -59,7 +60,7 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
       runAfterRespond: (fn) => {
-        fn();
+        afterRespond = Promise.resolve(fn());
       },
     };
     await ownerPool.query(
@@ -92,13 +93,16 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
     logs.length = 0;
   });
 
-  const post = (url: string, payload: object, ip = nextIp()) =>
-    app.inject({
+  const post = async (url: string, payload: object, ip = nextIp()) => {
+    const response = await app.inject({
       method: 'POST',
       url,
       headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' },
       payload,
     });
+    await afterRespond;
+    return response;
+  };
 
   it('LIM-OTP-T-08 / AUTH-LG-02: A1/B1 byte-identical for registered/unregistered', async () => {
     const staffPhone = '+989121100011';
