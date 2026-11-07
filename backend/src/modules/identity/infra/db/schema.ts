@@ -117,7 +117,7 @@ export const pendingSessionDenies = identitySchema.table(
   (table) => [index('pending_session_denies_open_idx').on(table.enqueuedAt)],
 );
 
-/** Send history. HMAC of phone only; never the OTP code. */
+/** Send history. HMAC of phone only; never the OTP code. TODO N18-3: ip/status/provider_msg_id + retention purge. */
 export const otpChallenges = identitySchema.table(
   'otp_challenges',
   {

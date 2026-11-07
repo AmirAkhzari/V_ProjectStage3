@@ -16,6 +16,28 @@ CREATE POLICY otp_challenges_identity ON identity.otp_challenges
   USING (true)
   WITH CHECK (true);
 --> statement-breakpoint
+CREATE OR REPLACE FUNCTION identity.lookup_staff_otp(p_phone text)
+RETURNS TABLE (
+  account_id uuid,
+  role text,
+  distributor_id uuid,
+  status text,
+  permissions text[]
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = identity, pg_temp
+AS $$
+  SELECT a.id, sm.role, sm.distributor_id, a.status, sm.permissions
+  FROM identity.accounts a
+  INNER JOIN identity.staff_memberships sm ON sm.account_id = a.id
+  WHERE a.phone = p_phone
+    AND a.typ = 'staff';
+$$;
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION identity.lookup_staff_otp(text) FROM PUBLIC;
+--> statement-breakpoint
 DO $grants$
 DECLARE
   allow_missing boolean := current_setting('vproject.allow_missing_roles', true) = 'on';
@@ -33,10 +55,12 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
     ALTER TABLE identity.otp_challenges OWNER TO vproject_migrator;
+    ALTER FUNCTION identity.lookup_staff_otp(text) OWNER TO vproject_migrator;
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
     GRANT SELECT, INSERT ON TABLE identity.otp_challenges TO vproject_identity;
+    GRANT EXECUTE ON FUNCTION identity.lookup_staff_otp(text) TO vproject_identity;
   END IF;
 END
 $grants$;

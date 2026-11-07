@@ -163,7 +163,10 @@ describe('0008_s11b5a_otp_http.sql', () => {
     expect(sql).not.toMatch(/GRANT .*otp_challenges TO vproject_app/);
     expect(sql).not.toMatch(/GRANT .*customers\.shopkeepers TO vproject_identity/);
     expect(sql).not.toMatch(/ensure_shopkeeper_account/);
-    expect(sql).not.toMatch(/lookup_staff_otp/);
+    expect(sql).toMatch(
+      /GRANT EXECUTE ON FUNCTION identity\.lookup_staff_otp\(text\) TO vproject_identity/,
+    );
+    expect(sql).toMatch(/SET search_path = identity, pg_temp/);
   });
 });
 

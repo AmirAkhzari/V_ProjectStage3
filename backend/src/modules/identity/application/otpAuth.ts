@@ -33,12 +33,21 @@ export interface OtpAuthRuntime {
   budget: OtpBudgetLimits;
   spikeBaselineHour?: number;
   runAfterRespond?: (fn: () => void) => void;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface OtpSendView {
   status: 'sent';
   expiresInSeconds: number;
   resendAfterSeconds: number;
+}
+
+export interface StaffOtpRow {
+  account_id: string;
+  role: string;
+  distributor_id: string | null;
+  status: string;
+  permissions: string[];
 }
 
 const SEND_BODY: OtpSendView = {
@@ -61,6 +70,33 @@ function mapRedis(error: unknown): never {
 
 function runAfter(runtime: OtpAuthRuntime, fn: () => void): void {
   (runtime.runAfterRespond ?? setImmediate)(fn);
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function applyDelay(runtime: OtpAuthRuntime, delayMs: number): Promise<void> {
+  if (delayMs <= 0) return;
+  await (runtime.sleep ?? defaultSleep)(delayMs);
+}
+
+/** N18-1 / N18-6: exactly one active super_admin or distributor_admin membership. */
+export async function lookupActiveStaffOtp(
+  pool: pg.Pool,
+  phone: string,
+): Promise<StaffOtpRow | undefined> {
+  const found = await pool.query<StaffOtpRow>(
+    `SELECT account_id, role, distributor_id, status, permissions FROM identity.lookup_staff_otp($1)`,
+    [phone],
+  );
+  if (found.rows.length !== 1) return undefined;
+  const row = found.rows[0];
+  if (!row || row.status !== 'active') return undefined;
+  if (row.role !== 'super_admin' && row.role !== 'distributor_admin') return undefined;
+  return { ...row, permissions: row.permissions ?? [] };
 }
 
 export async function sendOtp(
@@ -109,6 +145,7 @@ export async function sendOtp(
       'sms hour spike',
     );
   }
+  await applyDelay(runtime, reserved.delayMs);
   runAfter(runtime, () => {
     void dispatchSend(runtime, {
       purpose: input.purpose,
@@ -120,6 +157,18 @@ export async function sendOtp(
     });
   });
   return SEND_BODY;
+}
+
+async function dropIssuance(
+  runtime: OtpAuthRuntime,
+  input: { purpose: OtpPurpose; phone: string; issuanceId: string },
+): Promise<void> {
+  await deleteOtpChallengeIfIssuance(runtime.redis, {
+    pepper: runtime.pepper,
+    purpose: input.purpose,
+    phone: input.phone,
+    issuanceId: input.issuanceId,
+  }).catch(() => {});
 }
 
 async function dispatchSend(
@@ -135,15 +184,17 @@ async function dispatchSend(
 ): Promise<void> {
   const phoneMasked = maskIranMobile(input.phone);
   try {
+    if (input.purpose === 'staff') {
+      const staff = await lookupActiveStaffOtp(runtime.identityPool, input.phone);
+      if (!staff) {
+        await dropIssuance(runtime, input);
+        return;
+      }
+    }
     const result = await runtime.sms.sendOtp(input.phone, input.code, input.purpose);
     if (smsRefundable(result)) {
       await refundOtpSend(runtime.redis, input.phone, input.ip, runtime.pepper, input.token);
-      await deleteOtpChallengeIfIssuance(runtime.redis, {
-        pepper: runtime.pepper,
-        purpose: input.purpose,
-        phone: input.phone,
-        issuanceId: input.issuanceId,
-      });
+      await dropIssuance(runtime, input);
       return;
     }
     if (result.status === 'ops' || result.status === 'ambiguous') {
@@ -154,5 +205,6 @@ async function dispatchSend(
     }
   } catch (error) {
     runtime.log.error({ err: error, phoneMasked }, 'otp sms send failed after respond');
+    if (input.purpose === 'staff') await dropIssuance(runtime, input);
   }
 }

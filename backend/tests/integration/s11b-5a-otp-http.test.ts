@@ -8,6 +8,7 @@ import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpA
 import { FakeSmsProvider } from '../../src/modules/notification/infra/sms/fakeSmsProvider.js';
 import { pinoOptions } from '../../src/platform/logger.js';
 import { TEST_OTP_HMAC_KEY } from '../../src/platform/config.js';
+import { otpPhoneHash } from '../../src/modules/identity/infra/otp/redisOtpStore.js';
 import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
@@ -122,11 +123,57 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
       resendAfterSeconds: 60,
     });
     const b1a = await post('/v1/admin/auth/otp/send', { phone: staffPhone });
-    const b1b = await post('/v1/admin/auth/otp/send', { phone: '+989121100012' });
+    expect(fake.outbox).toHaveLength(1);
+    const unknown = '+989121100012';
+    const b1b = await post('/v1/admin/auth/otp/send', { phone: unknown });
     expect(b1a.body).toBe(b1b.body);
     expect(b1a.statusCode).toBe(200);
-    expect(fake.outbox.length).toBeGreaterThan(0);
-    expect(fake.outbox.every((row) => /^[0-9]{6}$/.test(row.code))).toBe(true);
+    expect(fake.outbox).toHaveLength(1);
+    expect(fake.outbox[0]?.code).toMatch(/^[0-9]{6}$/);
+    expect(await redis.exists(`otp:staff:${otpPhoneHash(unknown, TEST_OTP_HMAC_KEY)}`)).toBe(0);
+  });
+
+  it('N18-1: B1 unknown/inactive does not SMS; bytes match active staff', async () => {
+    const active = '+989121100021';
+    const inactive = '+989121100022';
+    const unknown = '+989121100023';
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now()),
+              ($3, 'staff', $4, 'inactive', 0, false, now())`,
+      [randomUUID(), active, randomUUID(), inactive],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       SELECT id, 'super_admin', NULL, '{}'::text[] FROM identity.accounts
+        WHERE phone IN ($1, $2)`,
+      [active, inactive],
+    );
+    const ok = await post('/v1/admin/auth/otp/send', { phone: active });
+    expect(ok.statusCode).toBe(200);
+    expect(fake.outbox).toHaveLength(1);
+    fake.outbox.length = 0;
+    const dead = await post('/v1/admin/auth/otp/send', { phone: inactive });
+    const miss = await post('/v1/admin/auth/otp/send', { phone: unknown });
+    expect(dead.body).toBe(ok.body);
+    expect(miss.body).toBe(ok.body);
+    expect(fake.outbox).toHaveLength(0);
+  });
+
+  it('LIM-OTP-T-02: IP slowdown sleeps before respond', async () => {
+    const slept: number[] = [];
+    runtime.sleep = async (ms) => {
+      slept.push(ms);
+    };
+    const ip = nextIp();
+    for (let i = 0; i < 11; i += 1) {
+      const phone = `+98912111${String(1000 + i)}`;
+      const response = await post('/v1/app/auth/otp/send', { phone }, ip);
+      expect(response.statusCode).toBe(200);
+    }
+    expect(slept).toEqual([100]);
+    delete runtime.sleep;
   });
 
   it('LIM-OTP-T-01 HTTP: second send in 60s is 429; Redis down before respond is 503', async () => {
