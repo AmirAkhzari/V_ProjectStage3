@@ -63,9 +63,27 @@ AS $$
     );
 $$;
 --> statement-breakpoint
+CREATE OR REPLACE FUNCTION identity.staff_otp_membership(p_account_id uuid)
+RETURNS TABLE (role text, distributor_id uuid)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = identity, pg_temp
+AS $$
+BEGIN
+  RETURN QUERY
+    SELECT sm.role, sm.distributor_id
+      FROM identity.staff_memberships sm
+     WHERE sm.account_id = p_account_id
+     FOR UPDATE;
+END;
+$$;
+--> statement-breakpoint
 REVOKE ALL ON FUNCTION identity.ensure_shopkeeper_account(text) FROM PUBLIC;
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION identity.lookup_staff_otp(text) FROM PUBLIC;
+--> statement-breakpoint
+REVOKE ALL ON FUNCTION identity.staff_otp_membership(uuid) FROM PUBLIC;
 --> statement-breakpoint
 DO $grants$
 DECLARE
@@ -85,11 +103,16 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_migrator') THEN
     ALTER FUNCTION identity.ensure_shopkeeper_account(text) OWNER TO vproject_migrator;
     ALTER FUNCTION identity.lookup_staff_otp(text) OWNER TO vproject_migrator;
+    ALTER FUNCTION identity.staff_otp_membership(uuid) OWNER TO vproject_migrator;
+    CREATE POLICY distributors_otp_lookup ON tenancy.distributors
+      FOR SELECT TO vproject_migrator
+      USING (true);
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vproject_identity') THEN
     GRANT EXECUTE ON FUNCTION identity.ensure_shopkeeper_account(text) TO vproject_identity;
     GRANT EXECUTE ON FUNCTION identity.lookup_staff_otp(text) TO vproject_identity;
+    GRANT EXECUTE ON FUNCTION identity.staff_otp_membership(uuid) TO vproject_identity;
   END IF;
 END
 $grants$;
