@@ -126,8 +126,10 @@ describe('S11b-5a OTP HTTP A1/B1 send', () => {
       expiresInSeconds: 120,
       resendAfterSeconds: 60,
     });
+    fake.outbox.length = 0;
     const b1a = await post('/v1/admin/auth/otp/send', { phone: staffPhone });
     expect(fake.outbox).toHaveLength(1);
+    expect(fake.outbox[0]?.purpose).toBe('staff');
     const unknown = '+989121100012';
     const b1b = await post('/v1/admin/auth/otp/send', { phone: unknown });
     expect(b1a.body).toBe(b1b.body);
