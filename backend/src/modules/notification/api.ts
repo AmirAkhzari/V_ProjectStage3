@@ -1,8 +1,9 @@
 /**
- * Public synchronous API of the `notification` module (§9.3 rules 1 and 5). Together with `events.ts` this
- * is the only file other modules may import. Operations take an optional transaction so callers can
- * compose them atomically; none are defined until the module's phase is authorized.
+ * Public synchronous API of the `notification` module (§9.3 rules 1 and 5).
  */
+export type { OtpPurpose, SmsOtpResult, SmsProvider } from './application/ports.js';
+export { createSmsProvider, type SmsProviderConfig } from './infra/sms/createSmsProvider.js';
+
 export type NotificationApi = Readonly<Record<never, never>>;
 
 export function createNotificationApi(): NotificationApi {

@@ -27,7 +27,11 @@ const SENSITIVE_KEYS = new Set([
   'privatekey',
   'private_key',
   'hash',
+  'kavenegar_api_key',
+  'apikey',
 ]);
+
+const KAVENEGAR_KEY_IN_PATH = /https?:\/\/api\.kavenegar\.com\/v1\/[^/?#]+/gi;
 
 const HEADER_REDACT_PATHS = [
   'req.headers.authorization',
@@ -59,7 +63,13 @@ export const REDACT_PATHS = [
   '*.privateKey',
   '*.private_key',
   '*.hash',
+  '*.KAVENEGAR_API_KEY',
+  '*.apiKey',
 ];
+
+function redactString(value: string): string {
+  return value.replace(KAVENEGAR_KEY_IN_PATH, 'https://api.kavenegar.com/v1/[REDACTED]');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -68,6 +78,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Walks nested objects/arrays and censors sensitive keys (L-4). Does not mutate the input. */
 export function redactDeep(value: unknown, depth = 0): unknown {
   if (depth > 8 || value === null || value === undefined) return value;
+  if (typeof value === 'string') return redactString(value);
   if (Array.isArray(value)) return value.map((item) => redactDeep(item, depth + 1));
   if (!isRecord(value)) return value;
   const out: Record<string, unknown> = {};

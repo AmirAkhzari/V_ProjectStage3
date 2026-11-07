@@ -4,7 +4,7 @@ import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
 import { Argon2idPasswordHasher } from './modules/identity/infra/crypto/argon2Hasher.js';
 import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
-import { assertStartupAdapters } from './platform/adapters.js';
+import { assertAdapterAllowed, assertStartupAdapters } from './platform/adapters.js';
 import { createJwtFromEnv } from './platform/auth/eddsa.js';
 import { assertRedisForAuthIssuance } from './platform/auth/failClosed.js';
 import { startPendingDenyWorker } from './modules/identity/application/pendingDenyWorker.js';
@@ -21,6 +21,7 @@ import { pino } from 'pino';
 
 const config = loadConfigOrExit();
 assertStartupAdapters(config.NODE_ENV);
+assertAdapterAllowed('sms', config.SMS_PROVIDER, config.NODE_ENV);
 configureSessionTtl({
   shopkeeperAbsoluteMs: config.SESSION_TTL_SHOPKEEPER_ABSOLUTE_DAYS * 24 * 60 * 60 * 1000,
   shopkeeperIdleMs: config.SESSION_TTL_SHOPKEEPER_SLIDING_DAYS * 24 * 60 * 60 * 1000,

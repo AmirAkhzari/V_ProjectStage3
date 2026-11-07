@@ -44,4 +44,18 @@ describe('redactDeep', () => {
     expect(redacted['privateKey']).toBe('[REDACTED]');
     expect(redacted['private_key']).toBe('[REDACTED]');
   });
+
+  it('redacts Kavenegar API keys that sit in the URL path', () => {
+    const key = 'kavenegar-test-api-key-do-not-leak';
+    const redacted = redactDeep({
+      KAVENEGAR_API_KEY: key,
+      apiKey: key,
+      err: { message: `POST https://api.kavenegar.com/v1/${key}/verify/lookup.json` },
+    }) as Record<string, unknown>;
+    expect(redacted['KAVENEGAR_API_KEY']).toBe('[REDACTED]');
+    expect(redacted['apiKey']).toBe('[REDACTED]');
+    const err = redacted['err'] as Record<string, unknown>;
+    expect(String(err['message'])).not.toContain(key);
+    expect(String(err['message'])).toContain('https://api.kavenegar.com/v1/[REDACTED]');
+  });
 });

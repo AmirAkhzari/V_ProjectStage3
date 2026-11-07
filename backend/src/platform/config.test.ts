@@ -3,6 +3,8 @@ import {
   ConfigError,
   EXAMPLE_AUDIT_HASH_KEY,
   PROD_FIXTURE_AUDIT_HASH_KEY,
+  PROD_FIXTURE_KAVENEGAR_API_KEY,
+  PROD_FIXTURE_KAVENEGAR_TEMPLATE,
   TEST_AUDIT_HASH_KEY,
   loadApiConfig,
   loadConfig,
@@ -26,6 +28,9 @@ const validApiProduction = {
   OPENAPI_DOCS_ENABLED: 'false',
   TRUST_PROXY_HOPS: '1',
   AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
+  SMS_PROVIDER: 'kavenegar',
+  KAVENEGAR_API_KEY: PROD_FIXTURE_KAVENEGAR_API_KEY,
+  KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
 };
 
 const validWorkerProduction = {
@@ -52,6 +57,8 @@ describe('loadApiConfig', () => {
     expect(config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS).toBe(10);
     expect(config.TRUST_PROXY_HOPS).toBe(0);
     expect(config.AUDIT_HASH_KEY).toBe(TEST_AUDIT_HASH_KEY);
+    expect(config.SMS_PROVIDER).toBe('fake');
+    expect(config.SMS_TIMEOUT_MS).toBe(4000);
     expect(loadApiConfig({ ...validApi, TRUST_PROXY_HOPS: '1' }).TRUST_PROXY_HOPS).toBe(1);
   });
 
@@ -146,6 +153,26 @@ describe('loadApiConfig', () => {
     expect(() => loadApiConfig({ ...validApiProduction, PAYMENT_PROVIDER: 'mock' })).toThrow(
       ConfigError,
     );
+  });
+
+  it('S11b-5: production refuses fake SMS and requires kavenegar key+template', () => {
+    expect(() => loadApiConfig({ ...validApiProduction, SMS_PROVIDER: 'fake' })).toThrow(
+      /SMS_PROVIDER/,
+    );
+    const {
+      SMS_PROVIDER: _provider,
+      KAVENEGAR_API_KEY: _key,
+      KAVENEGAR_TEMPLATE: _template,
+      ...omitted
+    } = validApiProduction;
+    expect(() => loadApiConfig(omitted)).toThrow(/SMS_PROVIDER/);
+    expect(() => loadApiConfig({ ...validApiProduction, KAVENEGAR_API_KEY: undefined })).toThrow(
+      /KAVENEGAR_API_KEY/,
+    );
+    expect(() => loadApiConfig({ ...validApiProduction, KAVENEGAR_TEMPLATE: undefined })).toThrow(
+      /KAVENEGAR_TEMPLATE/,
+    );
+    expect(loadApiConfig(validApiProduction).SMS_PROVIDER).toBe('kavenegar');
   });
 
   it('rejects Postgres URLs without TLS in production', () => {

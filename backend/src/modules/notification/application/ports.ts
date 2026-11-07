@@ -1,18 +1,24 @@
+/** OTP purpose is bound at send time so app and staff challenges stay separate. */
+export type OtpPurpose = 'app' | 'staff';
+
+/** `rejected` is definite (refundable). `ambiguous` is timeout/5xx — never refund. */
+export type SmsSendStatus = 'sent' | 'rejected' | 'ambiguous';
+
+export interface SmsOtpResult {
+  status: SmsSendStatus;
+  messageId?: string;
+}
+
 /**
- * SMS provider port (DL-06: Kavenegar `verify/lookup`). Only a mock exists in Foundation; the real
- * adapter needs an API key and staging, which are out of scope (X-4, X-5).
+ * SMS port (DL-06). Identity calls this; Kavenegar types stay in
+ * `notification/infra/sms/kavenegar`. sms.ir can implement the same port.
  */
-export interface SmsTemplateMessage {
-  receptor: string;
-  template: string;
-  tokens: readonly string[];
-}
-
-export interface SmsSendResult {
-  messageId: string;
-}
-
 export interface SmsProvider {
   readonly name: string;
-  sendTemplate(message: SmsTemplateMessage): Promise<SmsSendResult>;
+  sendOtp(phone: string, code: string, purpose: OtpPurpose): Promise<SmsOtpResult>;
+}
+
+export interface SmsProviderLog {
+  error(bindings: Record<string, unknown>, message: string): void;
+  warn?(bindings: Record<string, unknown>, message: string): void;
 }

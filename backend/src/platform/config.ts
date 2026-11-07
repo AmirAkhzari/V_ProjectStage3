@@ -35,8 +35,11 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
     if (key.startsWith('MOCK_')) {
       issues.push({ field: key, message: 'MOCK_* flags are forbidden in production' });
     }
-    if (key.endsWith('_PROVIDER') && value === 'mock') {
-      issues.push({ field: key, message: 'mock providers are forbidden in production' });
+    if (key.endsWith('_PROVIDER') && (value === 'mock' || value === 'fake')) {
+      issues.push({
+        field: key,
+        message: `${value} providers are forbidden in production`,
+      });
     }
   }
   return issues;
@@ -139,6 +142,9 @@ export const TEST_AUDIT_HASH_KEY = 'test-audit-hash-key-32-bytes-min';
 export const EXAMPLE_AUDIT_HASH_KEY = 'change-me-to-a-32-byte-or-longer-secret';
 /** Production-shaped fixture for config tests (not TEST / example). */
 export const PROD_FIXTURE_AUDIT_HASH_KEY = 'prod-fixture-audit-hash-key-32b!!';
+/** Production-shaped Kavenegar fixture (not a live credential). */
+export const PROD_FIXTURE_KAVENEGAR_API_KEY = 'prod-fixture-kavenegar-api-key-32b';
+export const PROD_FIXTURE_KAVENEGAR_TEMPLATE = 'vproject-otp';
 
 const KNOWN_AUDIT_HASH_KEYS = new Set([TEST_AUDIT_HASH_KEY, EXAMPLE_AUDIT_HASH_KEY]);
 
@@ -154,6 +160,11 @@ export const apiConfigSchema = z
         message: 'AUDIT_HASH_KEY must be at least 32 bytes',
       })
       .default(TEST_AUDIT_HASH_KEY),
+    /** Local/CI default is fake. Production extras refuse fake and require key+template. */
+    SMS_PROVIDER: z.enum(['fake', 'kavenegar']).default('fake'),
+    KAVENEGAR_API_KEY: z.string().min(1).optional(),
+    KAVENEGAR_TEMPLATE: z.string().min(1).optional(),
+    SMS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(5000).default(4000),
   })
   .superRefine((value, ctx) => {
     applyProductionShared(value, ctx);
@@ -230,6 +241,34 @@ function auditHashKeyIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
   return issues;
 }
 
+function smsProviderIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
+  if (env['NODE_ENV'] !== 'production') return [];
+  const provider = env['SMS_PROVIDER'] ?? 'fake';
+  if (provider === 'fake' || provider === 'mock') {
+    return [
+      {
+        field: 'SMS_PROVIDER',
+        message: 'fake/mock SMS providers are forbidden in production',
+      },
+    ];
+  }
+  if (provider !== 'kavenegar') return [];
+  const issues: ConfigIssue[] = [];
+  if (!presentEnv(env, 'KAVENEGAR_API_KEY')) {
+    issues.push({
+      field: 'KAVENEGAR_API_KEY',
+      message: 'must be set when SMS_PROVIDER=kavenegar',
+    });
+  }
+  if (!presentEnv(env, 'KAVENEGAR_TEMPLATE')) {
+    issues.push({
+      field: 'KAVENEGAR_TEMPLATE',
+      message: 'must be set when SMS_PROVIDER=kavenegar',
+    });
+  }
+  return issues;
+}
+
 function productionExtras(env: NodeJS.ProcessEnv, forbiddenKeys: readonly string[]): ConfigIssue[] {
   if (env['NODE_ENV'] !== 'production') return [];
   return [
@@ -256,6 +295,7 @@ export function loadApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
   return parseOrThrow(apiConfigSchema, env, [
     ...productionExtras(env, API_FORBIDDEN_URLS),
     ...requireProdKeys(env, ['TRUST_PROXY_HOPS', 'AUDIT_HASH_KEY']),
+    ...smsProviderIssues(env),
   ]);
 }
 
