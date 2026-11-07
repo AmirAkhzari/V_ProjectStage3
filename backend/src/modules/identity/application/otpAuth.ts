@@ -106,8 +106,11 @@ const una = (retry = 5) =>
   });
 const tooMany = (retryAfter: number) =>
   new AppError('too_many_attempts', 429, 'Too many attempts', { retryAfter });
-const otpInvalid = () => new AppError('OTP_INVALID', 401, 'Invalid or expired code');
-const otpLocked = () => new AppError('OTP_LOCKED', 401, 'Code locked');
+const rateLimited = (retryAfter: number) =>
+  new AppError('RATE_LIMITED', 429, 'Too many requests', { retryAfter });
+const otpInvalid = () => new AppError('OTP_INVALID', 422, 'Invalid or expired code');
+const otpLocked = () =>
+  new AppError('OTP_LOCKED', 429, 'Code locked', { retryAfter: OTP_TTL_SECONDS });
 
 function isIssueAborted(error: unknown): boolean {
   return Boolean(
@@ -176,7 +179,13 @@ export async function lookupActiveStaffOtp(
   if (found.rows.length !== 1) return undefined;
   const row = found.rows[0];
   if (!row || row.status !== 'active') return undefined;
-  if (row.role !== 'super_admin' && row.role !== 'distributor_admin') return undefined;
+  if (row.role === 'super_admin') {
+    if (row.distributor_id) return undefined;
+  } else if (row.role === 'distributor_admin') {
+    if (!row.distributor_id) return undefined;
+  } else {
+    return undefined;
+  }
   return { ...row, permissions: row.permissions ?? [] };
 }
 
@@ -419,7 +428,7 @@ async function consumeOrThrow(
   } catch (error) {
     mapRedis(error);
   }
-  if (consumed.status === 'limited') throw tooMany(consumed.retryAfter ?? 1);
+  if (consumed.status === 'limited') throw rateLimited(consumed.retryAfter ?? 1);
   if (consumed.status === 'locked') throw otpLocked();
   if (consumed.status !== 'ok') throw otpInvalid();
 }
@@ -459,6 +468,13 @@ async function issueShopkeeper(
       accountId: row.account_id,
       lockAccount: true,
     });
+    const locked = await client.query<{ status: string }>(
+      `SELECT status FROM identity.accounts WHERE id = $1`,
+      [row.account_id],
+    );
+    if (!locked.rows[0] || locked.rows[0].status !== 'active') {
+      throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
+    }
     await client.query(
       `INSERT INTO identity.sessions
          (sid, account_id, typ, family_id, created_at, last_used_at, absolute_expires_at)

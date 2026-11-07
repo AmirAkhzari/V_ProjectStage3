@@ -256,8 +256,8 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
       phone: '+989121100099',
       code: '123456',
     });
-    expect(wrong.statusCode).toBe(401);
-    expect(unknown.statusCode).toBe(401);
+    expect(wrong.statusCode).toBe(422);
+    expect(unknown.statusCode).toBe(422);
     expect(wrong.json()).toEqual(unknown.json());
     expect(wrong.json()).toMatchObject({ error: { code: 'OTP_INVALID' } });
     const ok = await post('/v1/admin/auth/otp/verify', { phone, code });
@@ -319,7 +319,7 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     expect(claims.did).toBe(DIST);
   });
 
-  it('N18-4: ISSUE_ABORTED is 401 OTP_INVALID; other issue errors are 503', async () => {
+  it('N18-4: ISSUE_ABORTED is 422 OTP_INVALID; other issue errors are 503', async () => {
     const phone = '+989121100032';
     const accountId = randomUUID();
     await ownerPool.query(
@@ -341,7 +341,7 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
         throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
       };
       const aborted = await post('/v1/admin/auth/otp/verify', { phone, code: codeAborted });
-      expect(aborted.statusCode).toBe(401);
+      expect(aborted.statusCode).toBe(422);
       expect(aborted.json()).toMatchObject({ error: { code: 'OTP_INVALID' } });
       await redis.del(`otp:lim:p60:${otpPhoneHash(phone, TEST_OTP_HMAC_KEY)}`);
       await post('/v1/admin/auth/otp/send', { phone });
@@ -384,20 +384,49 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     await down.close();
   });
 
-  it('AUTH-LG-02-PR + G7: B2 timing overlap; logs/audit have no code or full phone', async () => {
-    const times: number[] = [];
-    for (let i = 0; i < 30; i += 1) {
-      const start = performance.now();
-      const response = await post('/v1/admin/auth/otp/verify', {
-        phone: `+989122${String(200000 + i)}`,
+  it('AUTH-LG-02-PR + G7: B2 unknown vs wrong p95 overlap; logs/audit have no code or full phone', async () => {
+    const p95 = (samples: number[]): number => {
+      const sorted = [...samples].sort((a, b) => a - b);
+      return sorted[Math.ceil(0.95 * sorted.length) - 1] ?? 0;
+    };
+    const unknownTimes: number[] = [];
+    const wrongTimes: number[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const staffPhone = `+989124${String(400000 + i)}`;
+      const accountId = randomUUID();
+      await ownerPool.query(
+        `INSERT INTO identity.accounts
+           (id, typ, phone, status, session_version, must_change_password, created_at)
+         VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+        [accountId, staffPhone],
+      );
+      await ownerPool.query(
+        `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+         VALUES ($1, 'super_admin', NULL, '{}')`,
+        [accountId],
+      );
+      await post('/v1/admin/auth/otp/send', { phone: staffPhone });
+      const unknownStart = performance.now();
+      const unknown = await post('/v1/admin/auth/otp/verify', {
+        phone: `+989123${String(300000 + i)}`,
         code: '000000',
       });
-      times.push(performance.now() - start);
-      expect(response.statusCode).toBe(401);
+      unknownTimes.push(performance.now() - unknownStart);
+      expect(unknown.statusCode).toBe(422);
+      const wrongStart = performance.now();
+      const wrong = await post('/v1/admin/auth/otp/verify', {
+        phone: staffPhone,
+        code: '000000',
+      });
+      wrongTimes.push(performance.now() - wrongStart);
+      expect(wrong.statusCode).toBe(422);
+      expect(unknown.json()).toEqual(wrong.json());
     }
-    times.sort((a, b) => a - b);
-    const p95 = times[Math.ceil(0.95 * times.length) - 1] ?? 0;
-    expect(p95).toBeGreaterThan(0);
+    const unknownP95 = p95(unknownTimes);
+    const wrongP95 = p95(wrongTimes);
+    expect(unknownP95).toBeGreaterThan(0);
+    expect(wrongP95).toBeGreaterThan(0);
+    expect(Math.max(unknownP95, wrongP95) / Math.min(unknownP95, wrongP95)).toBeLessThan(4);
     const blob = logs.join('\n');
     expect(blob).not.toMatch(/\+9891[0-9]{9}/);
     expect(blob).not.toMatch(/"code":"[0-9]{6}"/);
@@ -446,5 +475,137 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
     const blob = logs.join('\n');
     expect(blob).toMatch(/"otpSendOutcome":"sent"/);
     expect(blob).toMatch(/"otpSendOutcome":"suppressed"/);
+  });
+
+  it('P18-1: A2 rechecks active status under the account lock', async () => {
+    const phone = '+989121100081';
+    const ip = nextIp();
+    await post('/v1/app/auth/otp/send', { phone }, ip);
+    const firstCode = fake.outbox.at(-1)?.code;
+    const first = await post('/v1/app/auth/otp/verify', { phone, code: firstCode }, ip);
+    expect(first.statusCode).toBe(200);
+    const accountId = first.json().user.id as string;
+    await redis.del(`otp:lim:p60:${otpPhoneHash(phone, TEST_OTP_HMAC_KEY)}`);
+    await post('/v1/app/auth/otp/send', { phone });
+    const code = fake.outbox.at(-1)?.code;
+    const holder = await ownerPool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      const pending = post('/v1/app/auth/otp/verify', { phone, code });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      await holder.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
+        accountId,
+      ]);
+      await holder.query('COMMIT');
+      const response = await pending;
+      expect([422, 503]).toContain(response.statusCode);
+      if (response.statusCode === 422) {
+        expect(response.json()).toMatchObject({ error: { code: 'OTP_INVALID' } });
+      }
+    } finally {
+      holder.release();
+    }
+    const sessions = await ownerPool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM identity.sessions WHERE account_id = $1`,
+      [accountId],
+    );
+    expect(sessions.rows[0]?.n).toBe('1');
+  });
+
+  it('P18-2: OTP_LOCKED is 429; hourly verify cap is RATE_LIMITED', async () => {
+    const lockedPhone = '+989121100082';
+    await post('/v1/app/auth/otp/send', { phone: lockedPhone });
+    for (let i = 0; i < 4; i += 1) {
+      const wrong = await post('/v1/app/auth/otp/verify', { phone: lockedPhone, code: '000000' });
+      expect(wrong.statusCode).toBe(422);
+      expect(wrong.json()).toMatchObject({ error: { code: 'OTP_INVALID' } });
+    }
+    const locked = await post('/v1/app/auth/otp/verify', { phone: lockedPhone, code: '000000' });
+    expect(locked.statusCode).toBe(429);
+    expect(locked.headers['retry-after']).toBeTruthy();
+    expect(locked.json()).toMatchObject({ error: { code: 'OTP_LOCKED' } });
+
+    const hourlyPhone = '+989121100083';
+    for (let i = 0; i < 10; i += 1) {
+      const miss = await post('/v1/app/auth/otp/verify', { phone: hourlyPhone, code: '000000' });
+      expect(miss.statusCode).toBe(422);
+    }
+    const limited = await post('/v1/app/auth/otp/verify', { phone: hourlyPhone, code: '000000' });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['retry-after']).toBeTruthy();
+    expect(limited.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } });
+  });
+
+  it('P18-5: inactive distributor is not staff for B1/B2', async () => {
+    const distId = '22222222-2222-4222-8222-222222222222';
+    const phone = '+989121100084';
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at)
+       VALUES ($1, 'Locked Dist', 'inactive', now())`,
+      [distId],
+    );
+    const accountId = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [accountId, phone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       VALUES ($1, 'distributor_admin', $2, '{}')`,
+      [accountId, distId],
+    );
+    expect(await lookupActiveStaffOtp(identityPool, phone)).toBeUndefined();
+    fake.outbox.length = 0;
+    const send = await post('/v1/admin/auth/otp/send', { phone });
+    expect(send.statusCode).toBe(200);
+    expect(fake.outbox).toHaveLength(0);
+    const verify = await post('/v1/admin/auth/otp/verify', { phone, code: '123456' });
+    expect(verify.statusCode).toBe(422);
+    expect(verify.json()).toMatchObject({ error: { code: 'OTP_INVALID' } });
+  });
+
+  it('P18-6: membership removed before issue does not create a staff session', async () => {
+    const phone = '+989121100085';
+    const accountId = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, now())`,
+      [accountId, phone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       VALUES ($1, 'super_admin', NULL, '{}')`,
+      [accountId],
+    );
+    await post('/v1/admin/auth/otp/send', { phone });
+    const code = fake.outbox.at(-1)?.code;
+    const holder = await ownerPool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
+      const pending = post('/v1/admin/auth/otp/verify', { phone, code });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      await holder.query(`DELETE FROM identity.staff_memberships WHERE account_id = $1`, [
+        accountId,
+      ]);
+      await holder.query('COMMIT');
+      const response = await pending;
+      expect([422, 503]).toContain(response.statusCode);
+    } finally {
+      holder.release();
+    }
+    const sessions = await ownerPool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM identity.sessions WHERE account_id = $1`,
+      [accountId],
+    );
+    expect(sessions.rows[0]?.n).toBe('0');
   });
 });
