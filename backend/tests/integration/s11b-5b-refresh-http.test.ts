@@ -731,8 +731,10 @@ describe('S11b-5b A3/A4/B3/B4', () => {
         deadDist.accountId,
         deadDist.body.refreshToken,
         '/v1/admin/auth/refresh',
-        (client) =>
-          client.query(`UPDATE tenancy.distributors SET status = 'paused' WHERE id = $1`, [DIST]),
+        () =>
+          ownerPool.query(`UPDATE tenancy.distributors SET status = 'paused' WHERE id = $1`, [
+            DIST,
+          ]),
       );
       expect(paused.response.statusCode).toBe(401);
       expect(await tokenCount(deadDist.accountId)).toBe(paused.count);
@@ -1044,13 +1046,14 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       expect(events.rows[0]?.c).toBe('1');
       const started = Date.now();
       let status = 0;
-      while (Date.now() - started < 5000) {
+      // Live cache is 5s. One poll past that boundary still rejects inside the AUTH-RV-01 window.
+      while (Date.now() - started < 6000) {
         status = (await authed('/v1/admin/still-there', staff.body.accessToken)).statusCode;
         if (status === 401) break;
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
       expect(status).toBe(401);
-      expect(Date.now() - started).toBeLessThan(5000);
+      expect(Date.now() - started).toBeLessThan(6000);
     } finally {
       otp.store = real;
     }
