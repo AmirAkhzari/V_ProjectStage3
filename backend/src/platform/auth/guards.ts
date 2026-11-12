@@ -2,7 +2,7 @@ import type { onRequestAsyncHookHandler } from 'fastify';
 import { AppError } from '../http/errors.js';
 import type { TenantContext } from '../db/tenant.js';
 import type { AccessClaims, AccessTokenVerifier, SubjectType } from './jwt.js';
-import { requiresFreshSession } from './sensitiveRoutes.js';
+import { requiresFreshSession, routeOperationId } from './sensitiveRoutes.js';
 import type { SessionAuthority } from './sessionAuthority.js';
 import { principalToTenant } from './tenantPrincipal.js';
 
@@ -79,11 +79,12 @@ export function subjectGuard(
     if (decision.row.accountId !== claims.sub || decision.row.typ !== claims.typ) {
       throw new AppError('SESSION_REVOKED', 401, 'Session revoked');
     }
-    const resolved = principalToTenant(
-      claims,
-      decision.row,
-      request.headers['x-scope-distributor'],
-    );
+    const operationId = routeOperationId(request);
+    const scopeHeader =
+      operationId === 'B3' || operationId === 'B4'
+        ? undefined
+        : request.headers['x-scope-distributor'];
+    const resolved = principalToTenant(claims, decision.row, scopeHeader);
     request.tenant = resolved.tenant;
     request.permissions = resolved.permissions;
     request.subject = claims;

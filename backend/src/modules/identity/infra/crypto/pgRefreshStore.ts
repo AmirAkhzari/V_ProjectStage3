@@ -10,16 +10,20 @@ import {
   isIdleExpired,
   sessionWindows,
 } from '../../domain/sessionTtl.js';
+import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import type {
+  RefreshCallContext,
   RefreshIssueInput,
   RefreshIssueResult,
   RefreshRotateResult,
+  RefreshSubjectProfile,
   RefreshTokenStore,
 } from '../../application/refreshStore.js';
 import {
   REFRESH_GRACE_AUDIT_ACTION,
   REFRESH_REUSE_AUDIT_ACTION,
   sessionsRevokedEvent,
+  type SessionRevokeReason,
 } from '../../events.js';
 import {
   applyLockTimeout,
@@ -183,6 +187,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     presented: string,
     expectedTyp: SubjectType,
     clock: Clock = systemClock,
+    context: RefreshCallContext = {},
   ): Promise<RefreshRotateResult> {
     const now = clock();
     const hash = hashRefreshToken(presented);
@@ -212,10 +217,21 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         if (!row) return { result: { status: 'rejected' as const, reason: 'unknown' as const } };
 
         if (row.typ !== expectedTyp) {
+          await insertAudit(client, {
+            accountId: row.account_id,
+            action: 'refresh_typ_mismatch',
+            familyId: row.family_id,
+            sid: row.sid,
+            now,
+            distributorId: await lookupDistributorId(client, row.account_id),
+            ip: context.ip,
+            userAgent: context.userAgent,
+            actualTyp: row.typ,
+          });
           return { result: { status: 'rejected' as const, reason: 'typ_mismatch' as const } };
         }
         if (row.rotated_at !== null) {
-          return this.replayRotated(client, row, expectedTyp, now);
+          return this.replayRotated(client, row, expectedTyp, now, context);
         }
 
         if (row.revoked_at !== null) {
@@ -227,8 +243,11 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         if (isIdleExpired(row.typ as SubjectType, row.created_at, row.last_used_at, now)) {
           return { result: { status: 'rejected' as const, reason: 'idle_expired' as const } };
         }
-
-        return { result: await this.claimRotation(client, row, now) };
+        const profile = await this.subjectProfile(client, row);
+        if (row.typ !== 'driver' && !profile) {
+          return { result: { status: 'rejected' as const, reason: 'inactive' as const } };
+        }
+        return { result: await this.claimRotation(client, row, now, profile ?? undefined) };
       });
       if (outcome.revokedSids && outcome.revokedSids.length > 0) {
         await drainPendingDenies(
@@ -249,6 +268,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     row: LockedRefreshRow,
     expectedTyp: SubjectType,
     now: Date,
+    context: RefreshCallContext,
   ): Promise<{ result: RefreshRotateResult; revokedSids?: string[] }> {
     if (row.revoked_at !== null) {
       return { result: { status: 'rejected', reason: 'family_revoked' } };
@@ -267,6 +287,10 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       !isIdleExpired(typ, row.created_at, row.last_used_at, now);
 
     if (graceOpen) {
+      const profile = await this.subjectProfile(client, row);
+      if (row.typ !== 'driver' && !profile) {
+        return { result: { status: 'rejected', reason: 'inactive' } };
+      }
       const claimed = await client.query(
         `UPDATE identity.refresh_tokens
             SET grace_used_at = $2
@@ -281,6 +305,8 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           sid: row.sid,
           now,
           distributorId: await lookupDistributorId(client, row.account_id),
+          ip: context.ip,
+          userAgent: context.userAgent,
         });
         return {
           result: {
@@ -290,6 +316,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
             typ,
             accountId: row.account_id,
             absoluteExpiresAt: row.absolute_expires_at,
+            ...(profile ? { profile } : {}),
           },
         };
       }
@@ -300,6 +327,8 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       sid: row.sid,
       accountId: row.account_id,
       now,
+      ip: context.ip,
+      userAgent: context.userAgent,
     });
     return { result: { status: 'rejected', reason: 'reuse' }, revokedSids };
   }
@@ -308,6 +337,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     client: pg.PoolClient,
     row: LockedRefreshRow,
     now: Date,
+    profile?: RefreshSubjectProfile,
   ): Promise<RefreshRotateResult> {
     const nextToken = generateRefreshToken();
     const nextHash = hashRefreshToken(nextToken);
@@ -340,6 +370,162 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       accountId: row.account_id,
       refreshExpiresAt: windows.refreshExpiresAt,
       absoluteExpiresAt: windows.absoluteExpiresAt,
+      ...(profile ? { profile } : {}),
+    };
+  }
+
+  async logoutPresented(
+    presented: string,
+    expectedTyp: SubjectType,
+    clock: Clock = systemClock,
+    context: RefreshCallContext = {},
+  ): Promise<{ revoked: boolean }> {
+    const now = clock();
+    const hash = hashRefreshToken(presented);
+    const outcome = await this.withTx(async (client) => {
+      await applyLockTimeout(client, REFRESH_LOCK_TIMEOUT);
+      const peeked = await client.query<{ family_id: string }>(
+        `SELECT family_id FROM identity.refresh_tokens WHERE hash = $1`,
+        [hash],
+      );
+      const familyId = peeked.rows[0]?.family_id;
+      if (!familyId) return [] as string[];
+      await lockSessionsThenTokensThenAccount(client, { kind: 'family', familyId });
+      const found = await client.query<{
+        typ: string;
+        sid: string;
+        account_id: string;
+        open: boolean;
+      }>(
+        `SELECT s.typ, s.sid, s.account_id, (s.revoked_at IS NULL) AS open
+           FROM identity.sessions s
+           JOIN identity.refresh_tokens t ON t.sid = s.sid
+          WHERE t.hash = $1`,
+        [hash],
+      );
+      const row = found.rows[0];
+      if (!row || row.typ !== expectedTyp || !row.open) return [] as string[];
+      return this.revokeFamilyInTx(client, {
+        familyId,
+        sid: row.sid,
+        accountId: row.account_id,
+        now,
+        reason: 'logout',
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
+    });
+    if (outcome.length > 0) {
+      await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids), this.hooks.log);
+    }
+    return { revoked: outcome.length > 0 };
+  }
+
+  async logoutSid(
+    sid: string,
+    expectedTyp: SubjectType,
+    clock: Clock = systemClock,
+    context: RefreshCallContext = {},
+  ): Promise<{ revoked: boolean }> {
+    const now = clock();
+    const outcome = await this.withTx(async (client) => {
+      await applyLockTimeout(client, REFRESH_LOCK_TIMEOUT);
+      const peeked = await client.query<{ family_id: string }>(
+        `SELECT family_id FROM identity.sessions WHERE sid = $1`,
+        [sid],
+      );
+      const familyId = peeked.rows[0]?.family_id;
+      if (!familyId) return [] as string[];
+      await lockSessionsThenTokensThenAccount(client, { kind: 'family', familyId });
+      const found = await client.query<{
+        typ: string;
+        sid: string;
+        account_id: string;
+        open: boolean;
+      }>(
+        `SELECT typ, sid, account_id, (revoked_at IS NULL) AS open
+           FROM identity.sessions WHERE sid = $1`,
+        [sid],
+      );
+      const row = found.rows[0];
+      if (!row || row.typ !== expectedTyp || !row.open) return [] as string[];
+      return this.revokeFamilyInTx(client, {
+        familyId,
+        sid: row.sid,
+        accountId: row.account_id,
+        now,
+        reason: 'logout',
+        ip: context.ip,
+        userAgent: context.userAgent,
+      });
+    });
+    if (outcome.length > 0) {
+      await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids), this.hooks.log);
+    }
+    return { revoked: outcome.length > 0 };
+  }
+
+  /** Shopkeeper/staff eligibility under the account lock. Driver is unchanged (null). */
+  private async subjectProfile(
+    client: pg.PoolClient,
+    row: LockedRefreshRow,
+  ): Promise<RefreshSubjectProfile | null> {
+    if (row.typ === 'driver') return null;
+    await client.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [
+      row.account_id,
+    ]);
+    const account = await client.query<{
+      status: string;
+      phone: string | null;
+      session_version: number;
+    }>(`SELECT status, phone, session_version FROM identity.accounts WHERE id = $1`, [
+      row.account_id,
+    ]);
+    const acc = account.rows[0];
+    if (!acc || acc.status !== 'active' || !acc.phone) return null;
+    if (row.typ === 'shopkeeper') {
+      return {
+        phone: acc.phone,
+        isNewAccount: false,
+        staffRole: null,
+        distributorId: null,
+        permissions: [],
+        sessionVersion: acc.session_version,
+      };
+    }
+    const membership = await client.query<{
+      role: string;
+      distributor_id: string | null;
+      distributor_status: string | null;
+    }>(`SELECT role, distributor_id, distributor_status FROM identity.staff_otp_membership($1)`, [
+      row.account_id,
+    ]);
+    if (membership.rows.length !== 1) return null;
+    const mem = membership.rows[0];
+    const role =
+      mem && (mem.role === 'super_admin' || mem.role === 'distributor_admin') ? mem.role : null;
+    if (!mem || !role) return null;
+    if (role === 'super_admin' && mem.distributor_id) return null;
+    if (
+      role === 'distributor_admin' &&
+      (!mem.distributor_id || mem.distributor_status !== 'active')
+    ) {
+      return null;
+    }
+    const stored = await client.query<{ permissions: string[] | null }>(
+      `SELECT permissions FROM identity.staff_memberships
+        WHERE account_id = $1 AND role = $2`,
+      [row.account_id, role],
+    );
+    return {
+      phone: acc.phone,
+      isNewAccount: false,
+      staffRole: role,
+      distributorId: mem.distributor_id,
+      permissions: [
+        ...new Set(permissionsForRole(role as StaffRole, stored.rows[0]?.permissions ?? [])),
+      ],
+      sessionVersion: acc.session_version,
     };
   }
 
@@ -424,7 +610,15 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
 
   private async revokeFamilyInTx(
     client: pg.PoolClient,
-    input: { familyId: string; sid: string; accountId: string; now: Date },
+    input: {
+      familyId: string;
+      sid: string;
+      accountId: string;
+      now: Date;
+      reason?: SessionRevokeReason;
+      ip?: string | null | undefined;
+      userAgent?: string | null | undefined;
+    },
   ): Promise<string[]> {
     const locked = await lockSessionsThenTokensThenAccount(client, {
       kind: 'family',
@@ -432,11 +626,13 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     });
     const revokedSids = locked.map((row) => row.sid);
     await enqueuePendingDenies(client, revokedSids, input.now);
+    const reason = input.reason ?? 'refresh_reuse';
+    const action = reason === 'refresh_reuse' ? REFRESH_REUSE_AUDIT_ACTION : reason;
     await client.query(
       `UPDATE identity.sessions
-          SET revoked_at = $2, revoke_reason = 'refresh_reuse'
+          SET revoked_at = $2, revoke_reason = $3
         WHERE family_id = $1 AND revoked_at IS NULL`,
-      [input.familyId, input.now],
+      [input.familyId, input.now, reason],
     );
     await client.query(
       `UPDATE identity.refresh_tokens
@@ -447,18 +643,20 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     const distributorId = await lookupDistributorId(client, input.accountId);
     await insertAudit(client, {
       accountId: input.accountId,
-      action: REFRESH_REUSE_AUDIT_ACTION,
+      action,
       familyId: input.familyId,
       sid: input.sid,
       now: input.now,
       distributorId,
+      ip: input.ip,
+      userAgent: input.userAgent,
     });
     const event = sessionsRevokedEvent(
       {
         familyId: input.familyId,
         sid: input.sid,
         accountId: input.accountId,
-        reason: 'refresh_reuse',
+        reason,
       },
       input.now,
       distributorId,
@@ -518,21 +716,32 @@ async function insertAudit(
     sid: string;
     now: Date;
     distributorId?: string | null;
+    ip?: string | null | undefined;
+    userAgent?: string | null | undefined;
+    actualTyp?: string;
   },
 ): Promise<void> {
+  const data: Record<string, string> = {
+    sid: input.sid,
+    familyId: input.familyId,
+    reason: input.action,
+  };
+  if (input.userAgent) data['ua'] = input.userAgent.slice(0, 200);
+  if (input.actualTyp) data['actualTyp'] = input.actualTyp;
   await client.query(
     `INSERT INTO platform.audit_log (
        id, at, actor_type, actor_id, actor_name, distributor_id,
        action, entity, entity_id, data, ip
-     ) VALUES ($1, $2, 'system', $3, 'identity', $7, $4, 'session', $5, $6, NULL)`,
+     ) VALUES ($1, $2, 'system', $3, 'identity', $7, $4, 'session', $5, $6, $8)`,
     [
       randomUUID(),
       input.now,
       input.accountId,
       input.action,
       input.familyId,
-      JSON.stringify({ sid: input.sid, familyId: input.familyId, reason: input.action }),
+      JSON.stringify(data),
       input.distributorId ?? null,
+      input.ip ?? null,
     ],
   );
 }
