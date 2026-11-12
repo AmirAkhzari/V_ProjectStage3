@@ -122,7 +122,12 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       [DIST, DIST2],
     );
     app = await buildApp({
-      config: testConfig({ TRUST_PROXY_HOPS: '1', LOG_LEVEL: 'silent' }),
+      config: testConfig({ TRUST_PROXY_HOPS: '1', LOG_LEVEL: 'info' }),
+      logDestination: {
+        write(chunk: string) {
+          logs.push(chunk);
+        },
+      },
       healthChecks: [],
       verifier: jwt,
       sessionAuthority: authority,
@@ -165,19 +170,44 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     return response;
   };
 
-  async function loginShop() {
-    const phone = nextPhone();
+  async function clearOtpLimits(): Promise<void> {
+    const keys = await redis.keys('otp:lim:*');
+    if (keys.length > 0) await redis.del(...keys);
+  }
+
+  async function loginShop(phone = nextPhone()) {
+    await clearOtpLimits();
     expect((await post('/v1/app/auth/otp/send', { phone })).statusCode).toBe(200);
     const code = fake.outbox.at(-1)?.code;
     expect(code).toMatch(/^[0-9]{6}$/);
     const verified = await post('/v1/app/auth/otp/verify', { phone, code });
     expect(verified.statusCode).toBe(200);
-    return verified.json() as {
-      accessToken: string;
-      refreshToken: string;
-      absoluteExpiresAt: string;
-      user: { id: string };
+    return {
+      phone,
+      ...(verified.json() as {
+        accessToken: string;
+        refreshToken: string;
+        absoluteExpiresAt: string;
+        user: { id: string };
+      }),
     };
+  }
+
+  function claimsOf(token: string): { exp: number; iat: number; sid: string; did?: string } {
+    return JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString()) as {
+      exp: number;
+      iat: number;
+      sid: string;
+      did?: string;
+    };
+  }
+
+  async function actionCount(accountId: string, action: string): Promise<string> {
+    const row = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM platform.audit_log WHERE actor_id = $1 AND action = $2`,
+      [accountId, action],
+    );
+    return row.rows[0]?.c ?? '0';
   }
 
   async function seedStaff(role: 'super_admin' | 'distributor_admin', dist: string | null) {
@@ -197,25 +227,27 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     return { phone, accountId };
   }
 
+  async function verifyStaff(phone: string) {
+    await clearOtpLimits();
+    expect((await post('/v1/admin/auth/otp/send', { phone })).statusCode).toBe(200);
+    const code = fake.outbox.at(-1)?.code;
+    expect(code).toMatch(/^[0-9]{6}$/);
+    const verified = await post('/v1/admin/auth/otp/verify', { phone, code });
+    expect(verified.statusCode).toBe(200);
+    return verified.json() as {
+      accessToken: string;
+      refreshToken: string;
+      absoluteExpiresAt: string;
+      staff: { distributorId: string | null; role: string };
+    };
+  }
+
   async function loginStaff(
     role: 'super_admin' | 'distributor_admin' = 'distributor_admin',
     dist: string | null = DIST,
   ) {
     const seeded = await seedStaff(role, dist);
-    expect((await post('/v1/admin/auth/otp/send', { phone: seeded.phone })).statusCode).toBe(200);
-    const code = fake.outbox.at(-1)?.code;
-    expect(code).toMatch(/^[0-9]{6}$/);
-    const verified = await post('/v1/admin/auth/otp/verify', { phone: seeded.phone, code });
-    expect(verified.statusCode).toBe(200);
-    return {
-      ...seeded,
-      body: verified.json() as {
-        accessToken: string;
-        refreshToken: string;
-        absoluteExpiresAt: string;
-        staff: { distributorId: string | null; role: string };
-      },
-    };
+    return { ...seeded, body: await verifyStaff(seeded.phone) };
   }
 
   async function loginDriverUser() {
@@ -288,12 +320,17 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       `SELECT last_used_at FROM identity.sessions WHERE sid = $1`,
       [(await familyOf(shop.accessToken, 'shopkeeper')).sid],
     );
+    const tokensBeforeGrace = await tokenCount(shop.user.id);
     const grace = await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken });
     expect(grace.statusCode).toBe(200);
     expect(grace.json().refreshToken).toBeUndefined();
     expect(grace.json().refreshExpiresAt).toBeUndefined();
     expect(grace.json().absoluteExpiresAt).toBe(absolute);
     expect(schemas.shopkeeper(grace.json())).toBe(true);
+    const graceClaims = claimsOf(grace.json().accessToken);
+    expect(graceClaims.exp - graceClaims.iat).toBeLessThanOrEqual(15 * 60);
+    expect(graceClaims.sid).toBe(claimsOf(shop.accessToken).sid);
+    expect(await tokenCount(shop.user.id)).toBe(tokensBeforeGrace);
     const afterGrace = await ownerPool.query<{ last_used_at: Date }>(
       `SELECT last_used_at FROM identity.sessions WHERE sid = $1`,
       [(await familyOf(shop.accessToken, 'shopkeeper')).sid],
@@ -327,6 +364,12 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       [shop.user.id],
     );
     expect(e3.rowCount).toBe(1);
+    expect((await authed('/v1/app/still-there', grace.json().accessToken)).statusCode).toBe(401);
+    const shopReasons = await ownerPool.query<{ revoke_reason: string }>(
+      `SELECT revoke_reason FROM identity.sessions WHERE family_id = $1`,
+      [(await familyOf(shop.accessToken, 'shopkeeper')).familyId],
+    );
+    expect(shopReasons.rows.every((row) => row.revoke_reason === 'refresh_reuse')).toBe(true);
 
     const staff = await loginStaff();
     const staffAbs = staff.body.absoluteExpiresAt;
@@ -348,6 +391,36 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     });
     expect(staffReuse.statusCode).toBe(401);
     expect(staffReuse.json()).toEqual(reuse.json());
+    expect(await actionCount(staff.accountId, 'refresh_reuse')).toBe('1');
+    const staffE3 = await ownerPool.query(
+      `SELECT 1 FROM platform.outbox_events
+        WHERE payload->>'accountId' = $1 AND payload->>'reason' = 'refresh_reuse'`,
+      [staff.accountId],
+    );
+    expect(staffE3.rowCount).toBe(1);
+    expect((await authed('/v1/admin/still-there', staffGrace.json().accessToken)).statusCode).toBe(
+      401,
+    );
+    const staffParallel = await loginStaff();
+    const staffParent = staffParallel.body.refreshToken;
+    expect((await post('/v1/admin/auth/refresh', { refreshToken: staffParent })).statusCode).toBe(
+      200,
+    );
+    const staffRaced = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        post('/v1/admin/auth/refresh', { refreshToken: staffParent }),
+      ),
+    );
+    expect(
+      staffRaced.filter((row) => row.statusCode === 200 && !row.json().refreshToken),
+    ).toHaveLength(1);
+    expect((await familyOf(staffParallel.body.accessToken, 'staff')).revoked).toBe(true);
+    expect(await actionCount(staffParallel.accountId, 'refresh_reuse')).toBe('1');
+    const staffReasons = await ownerPool.query<{ revoke_reason: string }>(
+      `SELECT revoke_reason FROM identity.sessions WHERE family_id = $1`,
+      [(await familyOf(staffParallel.body.accessToken, 'staff')).familyId],
+    );
+    expect(staffReasons.rows.every((row) => row.revoke_reason === 'refresh_reuse')).toBe(true);
 
     const parallel = await loginShop();
     const parent = parallel.refreshToken;
@@ -377,6 +450,17 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       expect(locked.statusCode).toBe(503);
       expect(locked.headers['retry-after']).toBeTruthy();
       expect(await tokenCount(lockedSession.user.id)).toBe(before);
+      expect(await actionCount(lockedSession.user.id, 'refresh_reuse')).toBe('0');
+      expect(await actionCount(lockedSession.user.id, 'refresh_grace_replay')).toBe('0');
+      const marker = await ownerPool.query<{ grace_used_at: Date | null; revoked_at: Date | null }>(
+        `SELECT t.grace_used_at, s.revoked_at
+           FROM identity.refresh_tokens t
+           JOIN identity.sessions s ON s.sid = t.sid
+          WHERE t.hash = $1`,
+        [hashRefreshToken(lockedSession.refreshToken)],
+      );
+      expect(marker.rows[0]?.grace_used_at).toBeNull();
+      expect(marker.rows[0]?.revoked_at).toBeNull();
       await locker.query('ROLLBACK');
     } finally {
       locker.release();
@@ -384,6 +468,56 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     expect(
       (await post('/v1/app/auth/refresh', { refreshToken: lockedSession.refreshToken })).statusCode,
     ).toBe(200);
+
+    const lockedStaff = await loginStaff();
+    const staffBefore = await tokenCount(lockedStaff.accountId);
+    const staffLocker = await identityPool.connect();
+    try {
+      await staffLocker.query('BEGIN');
+      await staffLocker.query(`SELECT set_config('lock_timeout', '15s', true)`);
+      await staffLocker.query(
+        `SELECT hash FROM identity.refresh_tokens WHERE hash = $1 FOR UPDATE`,
+        [hashRefreshToken(lockedStaff.body.refreshToken)],
+      );
+      const locked = await post('/v1/admin/auth/refresh', {
+        refreshToken: lockedStaff.body.refreshToken,
+      });
+      expect(locked.statusCode).toBe(503);
+      expect(locked.headers['retry-after']).toBeTruthy();
+      expect(await tokenCount(lockedStaff.accountId)).toBe(staffBefore);
+      expect(await actionCount(lockedStaff.accountId, 'refresh_reuse')).toBe('0');
+      expect(await actionCount(lockedStaff.accountId, 'refresh_grace_replay')).toBe('0');
+      const marker = await ownerPool.query<{ grace_used_at: Date | null; revoked_at: Date | null }>(
+        `SELECT t.grace_used_at, s.revoked_at
+           FROM identity.refresh_tokens t JOIN identity.sessions s ON s.sid = t.sid
+          WHERE t.hash = $1`,
+        [hashRefreshToken(lockedStaff.body.refreshToken)],
+      );
+      expect(marker.rows[0]?.grace_used_at).toBeNull();
+      expect(marker.rows[0]?.revoked_at).toBeNull();
+      await staffLocker.query('ROLLBACK');
+    } finally {
+      staffLocker.release();
+    }
+
+    clockAt = new Date('2026-04-01T00:00:00.000Z');
+    const windowed = await loginShop();
+    const spun = await post('/v1/app/auth/refresh', { refreshToken: windowed.refreshToken });
+    expect(spun.statusCode).toBe(200);
+    expect(
+      (await post('/v1/app/auth/refresh', { refreshToken: spun.json().refreshToken })).statusCode,
+    ).toBe(200);
+    const usedParent = await post('/v1/app/auth/refresh', { refreshToken: windowed.refreshToken });
+    expect(usedParent.statusCode).toBe(401);
+    clockAt = new Date('2026-04-02T00:00:00.000Z');
+    const late = await loginShop();
+    expect(
+      (await post('/v1/app/auth/refresh', { refreshToken: late.refreshToken })).statusCode,
+    ).toBe(200);
+    clockAt = new Date(clockAt.getTime() + 21_000);
+    const outside = await post('/v1/app/auth/refresh', { refreshToken: late.refreshToken });
+    expect(outside.statusCode).toBe(401);
+    clockAt = undefined;
 
     const unknown = await post('/v1/app/auth/refresh', { refreshToken: 'b'.repeat(43) });
     const malformed = await post('/v1/app/auth/refresh', { refreshToken: 'short' });
@@ -394,9 +528,29 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       expect(row.json()).toEqual(unknown.json());
       expect(JSON.stringify(row.json())).not.toContain('session_expired');
     }
+    const idleStaff = await loginStaff();
+    clockAt = new Date(Date.now() + 13 * 60 * 60 * 1000);
+    const bIdle = await post('/v1/admin/auth/refresh', {
+      refreshToken: idleStaff.body.refreshToken,
+    });
+    clockAt = undefined;
+    const revokedStaff = await loginStaff();
+    await ownerPool.query(
+      `UPDATE identity.sessions SET revoked_at = now(), revoke_reason = 'logout' WHERE account_id = $1`,
+      [revokedStaff.accountId],
+    );
+    const bRevoked = await post('/v1/admin/auth/refresh', {
+      refreshToken: revokedStaff.body.refreshToken,
+    });
+    const bUnknown = await post('/v1/admin/auth/refresh', { refreshToken: 'b'.repeat(43) });
+    const bShort = await post('/v1/admin/auth/refresh', { refreshToken: 'short' });
+    for (const row of [bUnknown, bShort, bIdle, bRevoked, staffReuse]) {
+      expect(row.statusCode).toBe(401);
+      expect(row.json()).toEqual(unknown.json());
+    }
     expect(logs.join('')).not.toContain(shop.refreshToken);
     expect(logs.join('')).not.toContain(hashRefreshToken(shop.refreshToken));
-  }, 60_000);
+  }, 90_000);
 
   it('AUTH-RT-04 / ruling 3: 3x3 refresh matrix is uniform 401 and does not revoke', async () => {
     const shop = await loginShop();
@@ -447,21 +601,74 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     ).toBe(200);
   });
 
-  it('AUTH-RT-03: staff idle 12h, shopkeeper day 91, absolute is not extended', async () => {
+  it('AUTH-RT-03: continuous use to the absolute cap; idle is not reset by grace', async () => {
     const shop = await loginShop();
-    clockAt = new Date(Date.now() + 10 * DAY);
-    const mid = await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken });
-    expect(mid.statusCode).toBe(200);
-    expect(mid.json().absoluteExpiresAt).toBe(shop.absoluteExpiresAt);
-    clockAt = new Date(new Date(shop.absoluteExpiresAt).getTime() + 1000);
-    const past = await post('/v1/app/auth/refresh', { refreshToken: mid.json().refreshToken });
-    expect(past.statusCode).toBe(401);
-    expect(past.json().error.code).toBe('UNAUTHENTICATED');
+    let token = shop.refreshToken;
+    let cursor = Date.now();
+    const absoluteAt = new Date(shop.absoluteExpiresAt).getTime();
+    while (cursor + 29 * DAY < absoluteAt) {
+      cursor += 29 * DAY;
+      clockAt = new Date(cursor);
+      const step = await post('/v1/app/auth/refresh', { refreshToken: token });
+      expect(step.statusCode).toBe(200);
+      expect(step.json().absoluteExpiresAt).toBe(shop.absoluteExpiresAt);
+      token = step.json().refreshToken;
+    }
+    clockAt = new Date(absoluteAt - 1000);
+    const day90 = await post('/v1/app/auth/refresh', { refreshToken: token });
+    expect(day90.statusCode).toBe(200);
+    expect(day90.json().absoluteExpiresAt).toBe(shop.absoluteExpiresAt);
+    clockAt = new Date(absoluteAt + 1000);
+    const day91 = await post('/v1/app/auth/refresh', { refreshToken: day90.json().refreshToken });
+    expect(day91.statusCode).toBe(401);
+    expect(day91.json().error.code).toBe('UNAUTHENTICATED');
+    clockAt = undefined;
+    const idleShop = await loginShop();
+    clockAt = new Date(Date.now() + 30 * DAY + 60 * 1000);
+    const idleOnly = await post('/v1/app/auth/refresh', { refreshToken: idleShop.refreshToken });
+    expect(idleOnly.statusCode).toBe(401);
+    expect(idleOnly.json()).toEqual(day91.json());
+
     const staff = await loginStaff();
+    let staffToken = staff.body.refreshToken;
+    let staffCursor = Date.now();
+    const staffAbsolute = new Date(staff.body.absoluteExpiresAt).getTime();
+    while (staffCursor + 11 * 60 * 60 * 1000 < staffAbsolute) {
+      staffCursor += 11 * 60 * 60 * 1000;
+      clockAt = new Date(staffCursor);
+      const step = await post('/v1/admin/auth/refresh', { refreshToken: staffToken });
+      expect(step.statusCode).toBe(200);
+      expect(step.json().absoluteExpiresAt).toBe(staff.body.absoluteExpiresAt);
+      staffToken = step.json().refreshToken;
+    }
+    clockAt = new Date(staffAbsolute + 1000);
+    const staffPast = await post('/v1/admin/auth/refresh', { refreshToken: staffToken });
+    expect(staffPast.statusCode).toBe(401);
+    expect(staffPast.json()).toEqual(day91.json());
+    clockAt = new Date('2026-05-01T00:00:00.000Z');
+    const graceStaff = await loginStaff();
+    const rotatedAt = clockAt;
+    const rotated = await post('/v1/admin/auth/refresh', {
+      refreshToken: graceStaff.body.refreshToken,
+    });
+    expect(rotated.statusCode).toBe(200);
+    clockAt = new Date(rotatedAt.getTime() + 1000);
+    expect(
+      (await post('/v1/admin/auth/refresh', { refreshToken: graceStaff.body.refreshToken }))
+        .statusCode,
+    ).toBe(200);
+    clockAt = new Date(rotatedAt.getTime() + 12 * 60 * 60 * 1000 + 500);
+    const graceIdle = await post('/v1/admin/auth/refresh', {
+      refreshToken: rotated.json().refreshToken,
+    });
+    expect(graceIdle.statusCode).toBe(401);
+    expect(graceIdle.json()).toEqual(day91.json());
+    clockAt = undefined;
+    const idleStaff = await loginStaff();
     clockAt = new Date(Date.now() + 12 * 60 * 60 * 1000 + 60 * 1000);
-    const idle = await post('/v1/admin/auth/refresh', { refreshToken: staff.body.refreshToken });
-    expect(idle.statusCode).toBe(401);
-    expect(idle.json()).toEqual(past.json());
+    expect(
+      (await post('/v1/admin/auth/refresh', { refreshToken: idleStaff.body.refreshToken })).json(),
+    ).toEqual(day91.json());
     const drv = await loginDriverUser();
     clockAt = new Date(Date.now() + 11 * 60 * 60 * 1000);
     const driverPast = await post('/v1/driver/auth/refresh', {
@@ -469,7 +676,8 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     });
     expect(driverPast.json().error.code).toBe('UNAUTHENTICATED');
     expect(JSON.stringify(driverPast.json())).not.toContain('session_expired');
-  });
+    clockAt = undefined;
+  }, 60_000);
 
   it('B3 rechecks membership inside the lock and ignores ScopeDistributor', async () => {
     const staff = await loginStaff();
@@ -491,59 +699,113 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     expect(moved.statusCode).toBe(200);
     expect(moved.json().staff.distributorId).toBe(DIST2);
     expect((await jwt.verify(moved.json().accessToken, 'staff')).did).toBe(DIST2);
+    expect(await tokenCount(staff.accountId)).toBeGreaterThan(before);
+    const flip = async (
+      accountId: string,
+      token: string,
+      url: string,
+      change: (client: pg.PoolClient) => Promise<unknown>,
+    ) => {
+      const count = await tokenCount(accountId);
+      const holder = await identityPool.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query(`SELECT set_config('lock_timeout', '15s', true)`);
+        await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [
+          accountId,
+        ]);
+        const pending = post(url, { refreshToken: token });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await change(holder);
+        await holder.query('COMMIT');
+        const response = await pending;
+        return { response, count };
+      } finally {
+        await holder.query('ROLLBACK').catch(() => {});
+        holder.release();
+      }
+    };
     const deadDist = await loginStaff('distributor_admin', DIST);
     try {
-      await ownerPool.query(`UPDATE tenancy.distributors SET status = 'paused' WHERE id = $1`, [
-        DIST,
-      ]);
-      const paused = await post('/v1/admin/auth/refresh', {
-        refreshToken: deadDist.body.refreshToken,
-      });
-      expect(paused.statusCode).toBe(401);
+      const paused = await flip(
+        deadDist.accountId,
+        deadDist.body.refreshToken,
+        '/v1/admin/auth/refresh',
+        (client) =>
+          client.query(`UPDATE tenancy.distributors SET status = 'paused' WHERE id = $1`, [DIST]),
+      );
+      expect(paused.response.statusCode).toBe(401);
+      expect(await tokenCount(deadDist.accountId)).toBe(paused.count);
     } finally {
       await ownerPool.query(`UPDATE tenancy.distributors SET status = 'active' WHERE id = $1`, [
         DIST,
       ]);
     }
     const removed = await loginStaff();
-    const removedBefore = await tokenCount(removed.accountId);
-    await ownerPool.query(`DELETE FROM identity.staff_memberships WHERE account_id = $1`, [
+    const gone = await flip(
       removed.accountId,
-    ]);
-    const gone = await post('/v1/admin/auth/refresh', { refreshToken: removed.body.refreshToken });
-    expect(gone.statusCode).toBe(401);
-    expect(await tokenCount(removed.accountId)).toBe(removedBefore);
-    expect(await tokenCount(staff.accountId)).toBeGreaterThan(before);
-    const shop = await loginShop();
-    const shopBefore = await tokenCount(shop.user.id);
+      removed.body.refreshToken,
+      '/v1/admin/auth/refresh',
+      (client) =>
+        client.query(`DELETE FROM identity.staff_memberships WHERE account_id = $1`, [
+          removed.accountId,
+        ]),
+    );
+    expect(gone.response.statusCode).toBe(401);
+    expect(await tokenCount(removed.accountId)).toBe(gone.count);
+    const inactiveStaff = await loginStaff();
+    const inactive = await flip(
+      inactiveStaff.accountId,
+      inactiveStaff.body.refreshToken,
+      '/v1/admin/auth/refresh',
+      (client) =>
+        client.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
+          inactiveStaff.accountId,
+        ]),
+    );
+    expect(inactive.response.statusCode).toBe(401);
+    expect(await tokenCount(inactiveStaff.accountId)).toBe(inactive.count);
+    const roleStaff = await loginStaff();
+    const roleCount = await tokenCount(roleStaff.accountId);
     const holder = await identityPool.connect();
     try {
       await holder.query('BEGIN');
       await holder.query(`SELECT set_config('lock_timeout', '15s', true)`);
       await holder.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [
-        shop.user.id,
+        roleStaff.accountId,
       ]);
-      const pending = post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken });
+      const pending = post('/v1/admin/auth/refresh', { refreshToken: roleStaff.body.refreshToken });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      await holder.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
-        shop.user.id,
-      ]);
+      await holder.query(
+        `UPDATE identity.staff_memberships SET role = 'super_admin', distributor_id = NULL WHERE account_id = $1`,
+        [roleStaff.accountId],
+      );
       await holder.query('COMMIT');
-      const inactive = await pending;
-      expect(inactive.statusCode).toBe(401);
-      expect(inactive.json().error.code).toBe('UNAUTHENTICATED');
-      expect(await tokenCount(shop.user.id)).toBe(shopBefore);
+      const promoted = await pending;
+      expect(promoted.statusCode).toBe(200);
+      expect(promoted.json().staff.role).toBe('super_admin');
+      expect(promoted.json().staff.distributorId ?? null).toBeNull();
+      expect(claimsOf(promoted.json().accessToken).did).toBeUndefined();
+      expect(await tokenCount(roleStaff.accountId)).toBe(roleCount + 1);
     } finally {
       await holder.query('ROLLBACK').catch(() => {});
       holder.release();
     }
-  }, 20_000);
+    const shop = await loginShop();
+    const shopFlip = await flip(shop.user.id, shop.refreshToken, '/v1/app/auth/refresh', (client) =>
+      client.query(`UPDATE identity.accounts SET status = 'inactive' WHERE id = $1`, [
+        shop.user.id,
+      ]),
+    );
+    expect(shopFlip.response.statusCode).toBe(401);
+    expect(await tokenCount(shop.user.id)).toBe(shopFlip.count);
+  }, 40_000);
 
   it('A4 uniform 200 revokes only the shopkeeper family; B4 revokes the caller sid', async () => {
     const shop = await loginShop();
-    const other = await loginShop();
+    const other = await loginShop(shop.phone);
     const staff = await loginStaff();
-    const otherStaff = await loginStaff();
+    const otherStaff = { ...staff, body: await verifyStaff(staff.phone) };
     const drv = await loginDriverUser();
     const unknown = await post('/v1/app/auth/logout', { refreshToken: 'e'.repeat(43) });
     const garbage = await post('/v1/app/auth/logout', { refreshToken: ' '.repeat(43) });
@@ -560,6 +822,14 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       expect(row.json()).toEqual({ status: 'ok' });
     }
     expect((await familyOf(shop.accessToken, 'shopkeeper')).revoked).toBe(true);
+    expect(await actionCount(shop.user.id, 'refresh_reuse')).toBe('1');
+    expect(
+      (await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken })).statusCode,
+    ).toBe(401);
+    const current = await loginShop();
+    const currentOut = await post('/v1/app/auth/logout', { refreshToken: current.refreshToken });
+    expect(currentOut.body).toBe(unknown.body);
+    expect(await actionCount(current.user.id, 'logout')).toBe('1');
     expect((await familyOf(staff.body.accessToken, 'staff')).revoked).toBe(false);
     expect((await familyOf(drv.body.accessToken, 'driver')).revoked).toBe(false);
     const started = Date.now();
@@ -574,21 +844,74 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     expect(invalid.json().error.code).toBe('VALIDATION_FAILED');
     expect(invalid.body).not.toContain('nope');
 
-    const times: number[][] = [[], []];
-    for (const token of ['f'.repeat(43), 'g'.repeat(43)]) {
-      const bucket = token.startsWith('f') ? 0 : 1;
-      for (let i = 0; i < 6; i += 1) {
+    const revokedShop = await loginShop();
+    const revokedOut = await post('/v1/app/auth/logout', {
+      refreshToken: revokedShop.refreshToken,
+    });
+    const againRevoked = await post('/v1/app/auth/logout', {
+      refreshToken: revokedShop.refreshToken,
+    });
+    expect(againRevoked.body).toBe(revokedOut.body);
+    clockAt = new Date('2026-07-01T00:00:00.000Z');
+    const expiredShop = await loginShop();
+    clockAt = new Date(clockAt.getTime() + 31 * DAY);
+    const expiredOut = await post('/v1/app/auth/logout', {
+      refreshToken: expiredShop.refreshToken,
+    });
+    expect(expiredOut.body).toBe(unknown.body);
+    clockAt = undefined;
+
+    const samples = 30;
+    const buckets = {
+      valid: [] as string[],
+      rotated: [] as string[],
+      revoked: [] as string[],
+      expired: [] as string[],
+      unknown: [] as string[],
+    };
+    for (let i = 0; i < samples; i += 1) {
+      buckets.valid.push((await loginShop()).refreshToken);
+      const spun = await loginShop();
+      expect(
+        (await post('/v1/app/auth/refresh', { refreshToken: spun.refreshToken })).statusCode,
+      ).toBe(200);
+      buckets.rotated.push(spun.refreshToken);
+      const dead = await loginShop();
+      expect(
+        (await post('/v1/app/auth/logout', { refreshToken: dead.refreshToken })).statusCode,
+      ).toBe(200);
+      buckets.revoked.push(dead.refreshToken);
+      buckets.unknown.push(`${i}`.padEnd(43, 'u'));
+    }
+    clockAt = new Date('2026-08-01T00:00:00.000Z');
+    const expiredBatch: string[] = [];
+    for (let i = 0; i < samples; i += 1) expiredBatch.push((await loginShop()).refreshToken);
+    clockAt = new Date(clockAt.getTime() + 31 * DAY);
+    buckets.expired = expiredBatch;
+    clockAt = undefined;
+    const durations = {
+      valid: [] as number[],
+      rotated: [] as number[],
+      revoked: [] as number[],
+      expired: [] as number[],
+      unknown: [] as number[],
+    };
+    const kinds = ['valid', 'rotated', 'revoked', 'expired', 'unknown'] as const;
+    for (const kind of kinds) {
+      for (const token of buckets[kind]) {
         const start = performance.now();
         const res = await post('/v1/app/auth/logout', { refreshToken: token });
-        times[bucket]?.push(performance.now() - start);
+        durations[kind].push(performance.now() - start);
         expect(res.statusCode).toBe(200);
+        expect(res.body).toBe(unknown.body);
       }
     }
-    const left = p95(times[0] ?? []);
-    const right = p95(times[1] ?? []);
-    expect(left).toBeGreaterThan(0);
-    expect(right).toBeGreaterThan(0);
-    expect(Math.max(left, right) / Math.min(left, right)).toBeLessThan(4);
+    const p95s = kinds.map((kind) => p95(durations[kind]));
+    const slowest = Math.max(...p95s);
+    const fastest = Math.min(...p95s);
+    // A4 pads every 200 to 300ms. Tolerance: slowest p95 stays under 1.5× the fastest.
+    expect(fastest).toBeGreaterThan(0);
+    expect(slowest / fastest).toBeLessThan(1.5);
 
     const b4 = await post(
       '/v1/admin/auth/logout',
@@ -605,6 +928,18 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     );
     expect(again.statusCode).toBe(401);
     expect(again.statusCode).not.toBe(500);
+    expect(
+      (await post('/v1/admin/auth/refresh', { refreshToken: staff.body.refreshToken })).statusCode,
+    ).toBe(401);
+    const missingBearer = await post('/v1/admin/auth/logout', {});
+    expect(missingBearer.statusCode).toBe(401);
+    const extraBody = await post(
+      '/v1/admin/auth/logout',
+      { refreshToken: 'a'.repeat(43) },
+      { authorization: `Bearer ${otherStaff.body.accessToken}` },
+    );
+    expect(extraBody.statusCode).toBe(422);
+    expect(extraBody.body).not.toContain('a'.repeat(43));
     const live = await authed('/v1/admin/still-there', otherStaff.body.accessToken);
     expect(live.statusCode).toBe(404);
     const shopOnB4 = await post(
@@ -623,14 +958,37 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     expect(badScope.statusCode).toBe(200);
     expect((await familyOf(sa.body.accessToken, 'staff')).revoked).toBe(true);
     expect((await familyOf(otherStaff.body.accessToken, 'staff')).revoked).toBe(false);
-  }, 40_000);
+    const driverOnB4 = await post(
+      '/v1/admin/auth/logout',
+      {},
+      { authorization: `Bearer ${drv.body.accessToken}` },
+    );
+    expect(driverOnB4.statusCode).toBe(401);
+    expect((await familyOf(drv.body.accessToken, 'driver')).revoked).toBe(false);
+  }, 300_000);
 
   it('AUTH-AV-03/04 and drain failure: Redis down still refreshes; PG down is 503; deny failure still 401', async () => {
     const shop = await loginShop();
+    const loggedOut = await loginShop();
     await redis.disconnect();
     try {
-      const ok = await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken });
-      expect(ok.statusCode).toBe(200);
+      expect(
+        (await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken })).statusCode,
+      ).toBe(200);
+      expect(
+        (await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken })).statusCode,
+      ).toBe(200);
+      const replay = await post('/v1/app/auth/refresh', { refreshToken: shop.refreshToken });
+      expect(replay.statusCode).toBe(401);
+      expect((await familyOf(shop.accessToken, 'shopkeeper')).revoked).toBe(true);
+      const out = await post('/v1/app/auth/logout', { refreshToken: loggedOut.refreshToken });
+      expect(out.statusCode).toBe(200);
+      const pending = await ownerPool.query<{ done_at: Date | null }>(
+        `SELECT done_at FROM identity.pending_session_denies WHERE sid = $1`,
+        [(await familyOf(loggedOut.accessToken, 'shopkeeper')).sid],
+      );
+      expect(pending.rows[0]?.done_at ?? null).toBeNull();
+      expect((await familyOf(loggedOut.accessToken, 'shopkeeper')).revoked).toBe(true);
     } finally {
       await redis.connect();
     }
@@ -684,8 +1042,71 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       );
       expect(audits.rows[0]?.c).toBe('1');
       expect(events.rows[0]?.c).toBe('1');
+      const started = Date.now();
+      let status = 0;
+      while (Date.now() - started < 5000) {
+        status = (await authed('/v1/admin/still-there', staff.body.accessToken)).statusCode;
+        if (status === 401) break;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      expect(status).toBe(401);
+      expect(Date.now() - started).toBeLessThan(5000);
     } finally {
       otp.store = real;
     }
-  });
+    logs.length = 0;
+    const captured = await loginShop();
+    const staffLog = await loginStaff();
+    const driverLog = await loginDriverUser();
+    await authed('/v1/admin/still-there', staffLog.body.accessToken);
+    const successor = (
+      await post('/v1/app/auth/refresh', { refreshToken: captured.refreshToken })
+    ).json().refreshToken as string;
+    otp.store = {
+      issue: (...args) => real.issue(...args),
+      rotate: () =>
+        Promise.resolve({
+          status: 'rotated' as const,
+          refreshToken: '',
+          hash: 'h',
+          sid: captured.user.id,
+          familyId: captured.user.id,
+          typ: 'shopkeeper' as const,
+          accountId: captured.user.id,
+          refreshExpiresAt: new Date(),
+          absoluteExpiresAt: new Date(captured.absoluteExpiresAt),
+          profile: {
+            phone: captured.phone,
+            isNewAccount: false,
+            staffRole: null,
+            distributorId: null,
+            permissions: [],
+            sessionVersion: 0,
+          },
+        }),
+      logoutPresented: (...args) => real.logoutPresented(...args),
+      logoutSid: (...args) => real.logoutSid(...args),
+    };
+    try {
+      const forced = await post('/v1/app/auth/refresh', { refreshToken: captured.refreshToken });
+      expect(forced.statusCode).toBe(500);
+    } finally {
+      otp.store = real;
+    }
+    const text = logs.join('');
+    expect(text).toContain('[REDACTED]');
+    for (const secret of [
+      captured.refreshToken,
+      successor,
+      staffLog.body.refreshToken,
+      staffLog.body.accessToken,
+      driverLog.body.refreshToken,
+      driverLog.body.accessToken,
+      `Bearer ${staffLog.body.accessToken}`,
+      hashRefreshToken(captured.refreshToken),
+      hashRefreshToken(successor),
+    ]) {
+      expect(text).not.toContain(secret);
+    }
+  }, 60_000);
 });
