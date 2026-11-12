@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../../src/platform/http/errors.js';
 import {
+  mapRefreshTransport,
   presentedRefreshToken,
   refreshSchemaValidators,
   requireLogoutToken,
@@ -42,5 +43,18 @@ describe('S11b-5b refresh shape', () => {
       expect((error as AppError).statusCode).toBe(422);
       expect(JSON.stringify(error)).not.toContain('short');
     }
+  });
+
+  it('a pg pool error with no code is 503, not 500', () => {
+    try {
+      mapRefreshTransport(new Error('Connection terminated unexpectedly'));
+      throw new Error('expected throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).code).toBe('SERVICE_UNAVAILABLE');
+      expect((error as AppError).statusCode).toBe(503);
+      expect((error as AppError).details).toEqual({ retryAfter: 2 });
+    }
+    expect(() => mapRefreshTransport(new Error('boom'))).toThrow(/boom/);
   });
 });

@@ -38,21 +38,29 @@ export function mapRefreshTransport(error: unknown): never {
   throw error;
 }
 
+const PG_DOWN_MESSAGE =
+  /connection terminated|connection timeout|ECONNREFUSED|ECONNRESET|ENOTFOUND|getaddrinfo/i;
+
 function isPgDown(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
-  const code = error.code;
-  if (typeof code !== 'string') return false;
-  return (
-    code.startsWith('08') ||
-    code === '57P01' ||
-    code === '57P02' ||
-    code === '57P03' ||
-    code === '53300' ||
-    code === 'ECONNREFUSED' ||
-    code === 'ECONNRESET' ||
-    code === 'ETIMEDOUT' ||
-    code === 'ENOTFOUND'
-  );
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  if (
+    code &&
+    (code.startsWith('08') ||
+      code === '57P01' ||
+      code === '57P02' ||
+      code === '57P03' ||
+      code === '53300' ||
+      code === 'ECONNREFUSED' ||
+      code === 'ECONNRESET' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ENOTFOUND')
+  ) {
+    return true;
+  }
+  if (code) return false;
+  const message = error instanceof Error ? error.message : '';
+  return PG_DOWN_MESSAGE.test(message);
 }
 
 /** Schema-valid refresh token, or undefined (A3/B3/C2 then 401, never 422). */
@@ -161,11 +169,21 @@ export async function refreshStaff(
   return body;
 }
 
+/** V11-LO-02: unknown and live A4 lookups share a response floor so the drain and writes are not an oracle. */
+const A4_RESPONSE_FLOOR_MS = 300;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export async function logoutShopkeeperRefresh(
   runtime: OtpAuthRuntime,
   refreshToken: string,
   context: RefreshCallContext,
 ): Promise<{ status: 'ok' }> {
+  const started = performance.now();
   try {
     await runtime.store.logoutPresented(
       refreshToken,
@@ -176,6 +194,8 @@ export async function logoutShopkeeperRefresh(
   } catch (error) {
     mapRefreshTransport(error);
   }
+  const remain = A4_RESPONSE_FLOOR_MS - (performance.now() - started);
+  if (remain > 0) await delay(remain);
   return { status: 'ok' };
 }
 
@@ -271,6 +291,9 @@ export function refreshSchemaValidators(): {
   validators = { shopkeeper, staff };
   return validators;
 }
+
+// Fail at import if the frozen schema file is missing, before a rotation can commit (P20-9).
+refreshSchemaValidators();
 
 function assertRefreshShape(
   runtime: OtpAuthRuntime,

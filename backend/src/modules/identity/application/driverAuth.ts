@@ -223,7 +223,7 @@ export async function refreshDriver(
   if (result.status === 'rejected') throw refreshUnauthenticated();
   const snap = await new PgSessionStore(runtime.identityPool).lookup(result.sid);
   if (!snap || snap.revokedAt !== null || snap.accountStatus !== 'active' || !snap.distributorId) {
-    throw invalidCredentials();
+    throw refreshUnauthenticated();
   }
   const accessToken = await runtime.jwt.sign({
     sub: snap.accountId,

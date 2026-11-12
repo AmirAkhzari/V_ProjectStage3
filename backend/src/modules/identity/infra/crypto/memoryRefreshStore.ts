@@ -187,7 +187,7 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     if (!session || session.typ !== expectedTyp || session.revokedAt) {
       return Promise.resolve({ revoked: false });
     }
-    this.revokeFamily(session.familyId, clock(), 'logout');
+    this.revokeFamily(session.familyId, clock(), token?.rotatedAt ? 'refresh_reuse' : 'logout');
     return Promise.resolve({ revoked: true });
   }
 
