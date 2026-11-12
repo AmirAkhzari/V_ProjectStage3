@@ -243,9 +243,6 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         if (isIdleExpired(row.typ as SubjectType, row.created_at, row.last_used_at, now)) {
           return { result: { status: 'rejected' as const, reason: 'idle_expired' as const } };
         }
-        if (row.typ === 'driver' && !(await this.driverEligible(client, row.account_id))) {
-          return { result: { status: 'rejected' as const, reason: 'inactive' as const } };
-        }
         const profile = await this.subjectProfile(client, row);
         if (row.typ !== 'driver' && !profile) {
           return { result: { status: 'rejected' as const, reason: 'inactive' as const } };
@@ -290,9 +287,6 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       !isIdleExpired(typ, row.created_at, row.last_used_at, now);
 
     if (graceOpen) {
-      if (row.typ === 'driver' && !(await this.driverEligible(client, row.account_id))) {
-        return { result: { status: 'rejected', reason: 'inactive' } };
-      }
       const profile = await this.subjectProfile(client, row);
       if (row.typ !== 'driver' && !profile) {
         return { result: { status: 'rejected', reason: 'inactive' } };
@@ -471,20 +465,6 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       await drainPendingDenies(this.pool, (sids) => this.hooks.onSidsRevoked(sids), this.hooks.log);
     }
     return { revoked: outcome.length > 0 };
-  }
-
-  /** Driver status and distributor under the account lock, before a successor is minted. */
-  private async driverEligible(client: pg.PoolClient, accountId: string): Promise<boolean> {
-    await client.query(`SELECT id FROM identity.accounts WHERE id = $1 FOR UPDATE`, [accountId]);
-    const found = await client.query<{ status: string; distributor_id: string | null }>(
-      `SELECT a.status, c.distributor_id
-         FROM identity.accounts a
-         LEFT JOIN identity.driver_credentials c ON c.account_id = a.id
-        WHERE a.id = $1`,
-      [accountId],
-    );
-    const row = found.rows[0];
-    return row !== undefined && row.status === 'active' && row.distributor_id !== null;
   }
 
   /** Shopkeeper/staff eligibility under the account lock. Driver is unchanged (null). */
