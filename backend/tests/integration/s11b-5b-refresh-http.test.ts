@@ -748,8 +748,8 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       removed.accountId,
       removed.body.refreshToken,
       '/v1/admin/auth/refresh',
-      (client) =>
-        client.query(`DELETE FROM identity.staff_memberships WHERE account_id = $1`, [
+      () =>
+        ownerPool.query(`DELETE FROM identity.staff_memberships WHERE account_id = $1`, [
           removed.accountId,
         ]),
     );
@@ -778,7 +778,7 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       ]);
       const pending = post('/v1/admin/auth/refresh', { refreshToken: roleStaff.body.refreshToken });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      await holder.query(
+      await ownerPool.query(
         `UPDATE identity.staff_memberships SET role = 'super_admin', distributor_id = NULL WHERE account_id = $1`,
         [roleStaff.accountId],
       );
@@ -1096,6 +1096,16 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     } finally {
       otp.store = real;
     }
+    // The request lines carry no token field. This record is how the booted logger censors one.
+    app.log.info(
+      {
+        refreshToken: captured.refreshToken,
+        accessToken: staffLog.body.accessToken,
+        authorization: `Bearer ${staffLog.body.accessToken}`,
+        hash: hashRefreshToken(successor),
+      },
+      'redaction check',
+    );
     const text = logs.join('');
     expect(text).toContain('[REDACTED]');
     for (const secret of [
