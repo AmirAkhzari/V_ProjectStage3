@@ -87,7 +87,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         accountId: input.accountId,
         lockAccount: true,
       });
-      if (input.requireActive || input.casPasswordHash || input.verifiedPasswordHash) {
+      if (input.verifiedPasswordHash || input.casPasswordHash) {
         if (input.distributorId) {
           await client.query('SELECT set_config($1, $2, true)', [
             'app.distributor_id',
@@ -116,6 +116,39 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
             [input.accountId, input.casPasswordHash.nextHash, input.casPasswordHash.oldHash],
           );
         }
+      } else if (input.requireActive) {
+        const current = await client.query<{ status: string }>(
+          `SELECT status FROM identity.accounts WHERE id = $1`,
+          [input.accountId],
+        );
+        const row = current.rows[0];
+        if (!row || row.status !== 'active') {
+          throw Object.assign(new Error('inactive'), { code: 'ISSUE_ABORTED' });
+        }
+        if (input.typ === 'staff') {
+          const membership = await client.query<{
+            role: string;
+            distributor_id: string | null;
+            distributor_status: string | null;
+          }>(
+            `SELECT role, distributor_id, distributor_status FROM identity.staff_otp_membership($1)`,
+            [input.accountId],
+          );
+          const mem = membership.rows[0];
+          if (
+            membership.rows.length !== 1 ||
+            !mem ||
+            (mem.role !== 'super_admin' && mem.role !== 'distributor_admin') ||
+            (mem.role === 'super_admin' && mem.distributor_id) ||
+            (mem.role === 'distributor_admin' && !mem.distributor_id) ||
+            (input.expectedStaffRole !== undefined && mem.role !== input.expectedStaffRole) ||
+            (input.expectedDistributorId !== undefined &&
+              mem.distributor_id !== input.expectedDistributorId) ||
+            (mem.role === 'distributor_admin' && mem.distributor_status !== 'active')
+          ) {
+            throw Object.assign(new Error('membership'), { code: 'ISSUE_ABORTED' });
+          }
+        }
       }
       await client.query(
         `INSERT INTO identity.sessions
@@ -129,6 +162,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
          VALUES ($1, $2, $3, NULL, NULL, NULL, NULL)`,
         [hash, input.familyId, input.sid],
       );
+      if (input.beforeCommit) await input.beforeCommit(client);
       return this.revokeOverflowInTx(client, input, now);
     });
     if (extraSids.length > 0) {

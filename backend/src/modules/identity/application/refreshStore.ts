@@ -21,9 +21,16 @@ export interface RefreshIssueInput {
   maxSessions?: number;
   distributorId?: string | null;
   requireActive?: boolean;
+  /** N19-2: pre-lock staff snapshot; mismatch under the issue lock aborts. */
+  expectedStaffRole?: string;
+  expectedDistributorId?: string | null;
   /** Hash that login verified. Under the issue lock a mismatch aborts (R2-2 / R13-4). */
   verifiedPasswordHash?: string;
   casPasswordHash?: { oldHash: string; nextHash: string };
+  /** N18-5: run inside the issue transaction before COMMIT (OTP login audit). */
+  beforeCommit?: (client: {
+    query: (queryText: string, values?: unknown[]) => Promise<unknown>;
+  }) => Promise<void>;
 }
 
 export interface RefreshIssueResult {

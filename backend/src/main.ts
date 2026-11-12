@@ -97,6 +97,9 @@ const app = await buildApp({
   otpAuth: {
     identityPool: identityDb.pool,
     redis,
+    jwt: verifier,
+    authority: sessionAuthority,
+    store: refreshStore,
     sms,
     log,
     pepper: config.OTP_HMAC_KEY,

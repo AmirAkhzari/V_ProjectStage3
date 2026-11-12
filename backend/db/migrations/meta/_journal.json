@@ -64,6 +64,13 @@
       "when": 1793700000000,
       "tag": "0008_s11b5a_otp_http",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793710000000,
+      "tag": "0009_s11b5a_otp_verify",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,8 @@ export const PLATFORM_ERROR_CODES = [
   'RATE_LIMITED',
   'too_many_attempts',
   'invalid_credentials',
+  'OTP_INVALID',
+  'OTP_LOCKED',
   'driver_inactive',
   'PASSWORD_CHANGE_REQUIRED',
   'session_expired',
