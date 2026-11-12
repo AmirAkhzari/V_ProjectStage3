@@ -421,6 +421,12 @@ describe('S11b-5b A3/A4/B3/B4', () => {
       [(await familyOf(staffParallel.body.accessToken, 'staff')).familyId],
     );
     expect(staffReasons.rows.every((row) => row.revoke_reason === 'refresh_reuse')).toBe(true);
+    const staffParallelE3 = await ownerPool.query(
+      `SELECT 1 FROM platform.outbox_events
+        WHERE payload->>'accountId' = $1 AND payload->>'reason' = 'refresh_reuse'`,
+      [staffParallel.accountId],
+    );
+    expect(staffParallelE3.rowCount).toBe(1);
 
     const parallel = await loginShop();
     const parent = parallel.refreshToken;
@@ -433,7 +439,22 @@ describe('S11b-5b A3/A4/B3/B4', () => {
     expect(raced.filter((row) => row.statusCode === 200 && row.json().refreshToken)).toHaveLength(
       0,
     );
-    expect((await familyOf(parallel.accessToken, 'shopkeeper')).revoked).toBe(true);
+    const shopParallelFamily = await familyOf(parallel.accessToken, 'shopkeeper');
+    expect(shopParallelFamily.revoked).toBe(true);
+    expect(await actionCount(parallel.user.id, 'refresh_reuse')).toBe('1');
+    const shopParallelE3 = await ownerPool.query(
+      `SELECT 1 FROM platform.outbox_events
+        WHERE payload->>'accountId' = $1 AND payload->>'reason' = 'refresh_reuse'`,
+      [parallel.user.id],
+    );
+    expect(shopParallelE3.rowCount).toBe(1);
+    const shopParallelReasons = await ownerPool.query<{ revoke_reason: string }>(
+      `SELECT revoke_reason FROM identity.sessions WHERE family_id = $1`,
+      [shopParallelFamily.familyId],
+    );
+    expect(shopParallelReasons.rows.every((row) => row.revoke_reason === 'refresh_reuse')).toBe(
+      true,
+    );
 
     const lockedSession = await loginShop();
     const before = await tokenCount(lockedSession.user.id);
