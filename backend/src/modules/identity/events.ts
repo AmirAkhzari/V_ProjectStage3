@@ -17,6 +17,7 @@ export type SessionRevokeReason =
   | 'deactivated'
   | 'password_reset'
   | 'password_change'
+  | 'logout'
   | 'logout_all'
   | 'session_limit';
 

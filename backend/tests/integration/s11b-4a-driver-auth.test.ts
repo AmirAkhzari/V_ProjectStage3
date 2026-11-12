@@ -487,7 +487,7 @@ describe('S11b-4a driver C1/C2', () => {
       payload: { refreshToken: 'b'.repeat(43) },
     });
     expect(unknown.statusCode).toBe(401);
-    expect(unknown.json()).toMatchObject({ error: { code: 'invalid_credentials' } });
+    expect(unknown.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
 
     const shop = await runtime.store.issue({
       accountId: issued.json().driver.id,
@@ -502,7 +502,8 @@ describe('S11b-4a driver C1/C2', () => {
       payload: { refreshToken: shop.refreshToken },
     });
     expect(mismatch.statusCode).toBe(401);
-    expect(mismatch.json()).toMatchObject({ error: { code: 'TOKEN_TYPE_MISMATCH' } });
+    expect(mismatch.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+    expect(mismatch.json()).toEqual(unknown.json());
     const family = await identityPool.query<{ revoked_at: Date | null }>(
       `SELECT revoked_at FROM identity.sessions WHERE family_id = $1`,
       [shop.familyId],

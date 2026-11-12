@@ -22,6 +22,7 @@ COPY --from=build --chown=root:root /app/node_modules ./node_modules
 COPY --from=build --chown=root:root /app/dist ./dist
 COPY --from=build --chown=root:root /app/package.json ./package.json
 COPY --chown=root:root db/migrations ./db/migrations
+COPY --chown=root:root openapi/openapi-v1.2.0.yaml ./openapi/openapi-v1.2.0.yaml
 COPY --chown=root:root docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod 555 docker-entrypoint.sh && chmod -R a-w /app
 USER node

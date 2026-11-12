@@ -4,8 +4,8 @@ import type { Redis } from 'ioredis';
 import { AppError } from '../../../platform/http/errors.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../../../platform/auth/jwt.js';
 import type { AccessTokenSigner } from '../../../platform/auth/eddsa.js';
-import { tokenTypeMismatch } from '../../../platform/auth/guards.js';
 import { assertRedisForAuthIssuance } from '../../../platform/auth/failClosed.js';
+import { systemClock, type Clock } from '../../../platform/lib/clock.js';
 import type { SessionAuthority } from '../../../platform/auth/sessionAuthority.js';
 import {
   DUMMY_ARGON2ID_HASH,
@@ -17,7 +17,8 @@ import {
 } from '../domain/loginPolicy.js';
 import { needsPasswordRehash } from '../infra/crypto/argon2Hasher.js';
 import type { PasswordHasher } from './ports.js';
-import type { RefreshTokenStore } from './refreshStore.js';
+import { mapRefreshTransport, refreshUnauthenticated } from './refreshAuth.js';
+import type { RefreshCallContext, RefreshTokenStore } from './refreshStore.js';
 import {
   applyLoginTarpit,
   refundLoginAttempt,
@@ -46,6 +47,7 @@ export interface DriverAuthRuntime {
   auditHashKey: string;
   maxSessions?: number;
   limiter?: LoginLimiterLimits;
+  clock?: Clock;
 }
 
 export interface DriverUserView {
@@ -202,23 +204,26 @@ export async function loginDriver(
 export async function refreshDriver(
   runtime: DriverAuthRuntime,
   refreshToken: string,
+  context: RefreshCallContext = {},
 ): Promise<DriverSessionView> {
   let result;
   try {
-    result = await runtime.store.rotate(refreshToken, 'driver');
+    result = await runtime.store.rotate(
+      refreshToken,
+      'driver',
+      runtime.clock ?? systemClock,
+      context,
+    );
   } catch (error) {
-    mapLockOr401(error);
+    mapRefreshTransport(error);
   }
   if (result.status === 'rejected' && result.reason === 'lock_timeout') {
     throw serviceUnavailable(2);
   }
-  if (result.status === 'rejected' && result.reason === 'typ_mismatch') {
-    throw tokenTypeMismatch();
-  }
-  if (result.status === 'rejected') throw invalidCredentials();
+  if (result.status === 'rejected') throw refreshUnauthenticated();
   const snap = await new PgSessionStore(runtime.identityPool).lookup(result.sid);
   if (!snap || snap.revokedAt !== null || snap.accountStatus !== 'active' || !snap.distributorId) {
-    throw invalidCredentials();
+    throw refreshUnauthenticated();
   }
   const accessToken = await runtime.jwt.sign({
     sub: snap.accountId,

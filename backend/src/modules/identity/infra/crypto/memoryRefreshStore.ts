@@ -177,6 +177,33 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     return { status: 'rejected', reason: 'reuse' };
   }
 
+  logoutPresented(
+    presented: string,
+    expectedTyp: SubjectType,
+    clock: Clock = systemClock,
+  ): Promise<{ revoked: boolean }> {
+    const token = this.tokens.get(hashRefreshToken(presented));
+    const session = token ? this.sessions.get(token.sid) : undefined;
+    if (!session || session.typ !== expectedTyp || session.revokedAt) {
+      return Promise.resolve({ revoked: false });
+    }
+    this.revokeFamily(session.familyId, clock(), token?.rotatedAt ? 'refresh_reuse' : 'logout');
+    return Promise.resolve({ revoked: true });
+  }
+
+  logoutSid(
+    sid: string,
+    expectedTyp: SubjectType,
+    clock: Clock = systemClock,
+  ): Promise<{ revoked: boolean }> {
+    const session = this.sessions.get(sid);
+    if (!session || session.typ !== expectedTyp || session.revokedAt) {
+      return Promise.resolve({ revoked: false });
+    }
+    this.revokeFamily(session.familyId, clock(), 'logout');
+    return Promise.resolve({ revoked: true });
+  }
+
   private claimRotation(session: SessionRow, current: TokenRow, now: Date): RefreshRotateResult {
     const nextToken = generateRefreshToken();
     const nextHash = hashRefreshToken(nextToken);
@@ -219,18 +246,22 @@ export class MemoryRefreshTokenStore implements RefreshTokenStore {
     }
   }
 
-  private revokeFamily(familyId: string, now: Date): void {
+  private revokeFamily(
+    familyId: string,
+    now: Date,
+    reason: 'refresh_reuse' | 'logout' = 'refresh_reuse',
+  ): void {
     for (const session of this.sessions.values()) {
       if (session.familyId === familyId && session.revokedAt === null) {
         session.revokedAt = now;
-        this.audits.push(reuseAudit(session));
+        this.audits.push(reuseAudit(session, reason));
         this.events.push(
           sessionsRevokedEvent(
             {
               familyId,
               sid: session.sid,
               accountId: session.accountId,
-              reason: 'refresh_reuse',
+              reason,
             },
             now,
           ),
@@ -260,16 +291,17 @@ function graceAudit(session: SessionRow): AuditEntry {
   };
 }
 
-function reuseAudit(session: SessionRow): AuditEntry {
+function reuseAudit(session: SessionRow, reason: 'refresh_reuse' | 'logout'): AuditEntry {
+  const action = reason === 'refresh_reuse' ? REFRESH_REUSE_AUDIT_ACTION : reason;
   return {
     actorType: 'system',
     actorId: session.accountId,
     actorName: 'identity',
     distributorId: null,
-    action: REFRESH_REUSE_AUDIT_ACTION,
+    action,
     entity: 'session',
     entityId: session.familyId,
-    data: { sid: session.sid, familyId: session.familyId, reason: REFRESH_REUSE_AUDIT_ACTION },
+    data: { sid: session.sid, familyId: session.familyId, reason: action },
     ip: null,
   };
 }

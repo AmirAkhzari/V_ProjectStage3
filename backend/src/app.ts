@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import swagger from '@fastify/swagger';
+import type { DestinationStream } from 'pino';
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -42,12 +43,16 @@ export interface BuildAppOptions {
   assertIssuance?: () => Promise<void>;
   driverAuth?: DriverAuthRuntime;
   otpAuth?: OtpAuthRuntime;
+  /** Test capture. Production uses Fastify's default destination. */
+  logDestination?: DestinationStream;
 }
 
 export async function buildApp(options: BuildAppOptions) {
   const hops = options.config.TRUST_PROXY_HOPS;
   const app = Fastify({
-    logger: pinoOptions(options.config),
+    logger: options.logDestination
+      ? { ...pinoOptions(options.config), stream: options.logDestination }
+      : pinoOptions(options.config),
     genReqId: generateRequestId,
     // Do not let Fastify copy x-request-id before validation (AppSec L-3).
     requestIdHeader: false,

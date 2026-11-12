@@ -28,6 +28,7 @@ import {
   revokeSessionsBySid,
   type DrainLog,
 } from '../infra/session/pgSessionStore.js';
+import type { Clock } from '../../../platform/lib/clock.js';
 import { sessionWindows } from '../domain/sessionTtl.js';
 import {
   refundOtpBudgetOnly,
@@ -57,6 +58,8 @@ export interface OtpAuthRuntime {
   spikeBaselineHour?: number;
   runAfterRespond?: (fn: () => void | Promise<void>) => void;
   sleep?: (ms: number) => Promise<void>;
+  /** Test hook. Production uses the system clock. */
+  clock?: Clock;
 }
 
 export interface ShopkeeperSessionView {

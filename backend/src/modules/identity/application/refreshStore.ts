@@ -9,9 +9,26 @@ export type RefreshRejectReason =
   | 'typ_mismatch'
   | 'absolute_expired'
   | 'idle_expired'
+  | 'inactive'
   | 'reuse'
   | 'conflict'
   | 'lock_timeout';
+
+/** HTTP context for audit rows. Never carries a token or a hash. */
+export interface RefreshCallContext {
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
+/** Server snapshot read inside the rotate transaction. Not taken from the presented RT. */
+export interface RefreshSubjectProfile {
+  phone: string;
+  isNewAccount: boolean;
+  staffRole: 'super_admin' | 'distributor_admin' | null;
+  distributorId: string | null;
+  permissions: string[];
+  sessionVersion: number;
+}
 
 export interface RefreshIssueInput {
   accountId: string;
@@ -53,6 +70,7 @@ export interface RefreshRotateOk {
   accountId: string;
   refreshExpiresAt: Date;
   absoluteExpiresAt: Date;
+  profile?: RefreshSubjectProfile;
 }
 
 /** Amir 9-2: replay inside 20s returns access-only (same sid/family); no new refresh token. */
@@ -63,6 +81,7 @@ export interface RefreshRotateGrace {
   typ: SubjectType;
   accountId: string;
   absoluteExpiresAt: Date;
+  profile?: RefreshSubjectProfile;
 }
 
 export interface RefreshRotateFail {
@@ -82,7 +101,26 @@ export interface RefreshTokenRow {
 
 export interface RefreshTokenStore {
   issue(input: RefreshIssueInput, clock?: Clock): Promise<RefreshIssueResult>;
-  rotate(presented: string, expectedTyp: SubjectType, clock?: Clock): Promise<RefreshRotateResult>;
+  rotate(
+    presented: string,
+    expectedTyp: SubjectType,
+    clock?: Clock,
+    context?: RefreshCallContext,
+  ): Promise<RefreshRotateResult>;
+  /** A4: revoke the presented token's family when typ matches. Same 200 either way. */
+  logoutPresented(
+    presented: string,
+    expectedTyp: SubjectType,
+    clock?: Clock,
+    context?: RefreshCallContext,
+  ): Promise<{ revoked: boolean }>;
+  /** B4/C3: revoke the family of this sid. Does not touch other families. */
+  logoutSid(
+    sid: string,
+    expectedTyp: SubjectType,
+    clock?: Clock,
+    context?: RefreshCallContext,
+  ): Promise<{ revoked: boolean }>;
 }
 
 export function isRefreshRejected(result: RefreshRotateResult): result is RefreshRotateFail {

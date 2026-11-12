@@ -2,6 +2,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
 import { loginDriver, refreshDriver, type DriverAuthRuntime } from '../application/driverAuth.js';
+import {
+  presentedRefreshToken,
+  refreshCallContext,
+  refreshUnauthenticated,
+} from '../application/refreshAuth.js';
 
 const driverUser = z
   .object({
@@ -40,7 +45,6 @@ const driverRefreshSession = z
   });
 
 const loginBody = z.object({ username: z.string(), password: z.string() }).strict();
-const refreshBody = z.object({ refreshToken: z.string().min(43).max(512) }).strict();
 
 function runtimeOf(app: { driverAuth?: DriverAuthRuntime }): DriverAuthRuntime {
   if (!app.driverAuth) {
@@ -62,12 +66,15 @@ export const driverRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
   });
-  app.post(
-    '/auth/refresh',
-    { schema: { operationId: 'C2', body: refreshBody } },
-    async (request) => {
-      const body = request.body as z.infer<typeof refreshBody>;
-      return driverRefreshSession.parse(await refreshDriver(runtimeOf(app), body.refreshToken));
-    },
-  );
+  app.post('/auth/refresh', { schema: { operationId: 'C2' } }, async (request) => {
+    const token = presentedRefreshToken(request.body);
+    if (!token) throw refreshUnauthenticated();
+    return driverRefreshSession.parse(
+      await refreshDriver(
+        runtimeOf(app),
+        token,
+        refreshCallContext(request.ip, request.headers['user-agent']),
+      ),
+    );
+  });
 };
