@@ -417,6 +417,11 @@ describe('S11b-6 demo login HTTP', () => {
          (SELECT sid FROM identity.sessions WHERE account_id = $1)`,
       [DEMO_SHOPKEEPER_ID],
     );
+    await ownerPool.query(
+      `DELETE FROM identity.pending_session_denies WHERE sid IN
+         (SELECT sid FROM identity.sessions WHERE account_id = $1)`,
+      [DEMO_SHOPKEEPER_ID],
+    );
     await ownerPool.query(`DELETE FROM identity.sessions WHERE account_id = $1`, [
       DEMO_SHOPKEEPER_ID,
     ]);
