@@ -10,7 +10,7 @@ import {
   isIdleExpired,
   sessionWindows,
 } from '../../domain/sessionTtl.js';
-import { demoDaPermissions } from '../../domain/demoAccounts.js';
+import { demoDaPermissions, permissionList } from '../../domain/demoAccounts.js';
 import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import type {
   RefreshCallContext,
@@ -526,7 +526,9 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       [row.account_id, role],
     );
     const issued = [
-      ...new Set(permissionsForRole(role as StaffRole, stored.rows[0]?.permissions ?? [])),
+      ...new Set(
+        permissionsForRole(role as StaffRole, permissionList(stored.rows[0]?.permissions)),
+      ),
     ];
     return {
       phone: acc.phone,

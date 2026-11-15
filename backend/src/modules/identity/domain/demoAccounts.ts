@@ -16,8 +16,18 @@ export const DEMO_DA_PERMISSIONS = [
   'drivers.view',
 ] as const;
 
-export function demoDaPermissions(stored: readonly string[]): string[] {
-  const held = new Set(stored);
+/** pg may return `text[]` as a JS array or as a `{a,b}` literal. */
+export function permissionList(stored: unknown): string[] {
+  if (Array.isArray(stored))
+    return stored.filter((item): item is string => typeof item === 'string');
+  if (typeof stored !== 'string' || stored.length === 0) return [];
+  const body = stored.startsWith('{') && stored.endsWith('}') ? stored.slice(1, -1) : stored;
+  if (body.length === 0) return [];
+  return body.split(',').map((part) => part.trim().replace(/^"|"$/g, ''));
+}
+
+export function demoDaPermissions(stored: unknown): string[] {
+  const held = new Set(permissionList(stored));
   return DEMO_DA_PERMISSIONS.filter((permission) => held.has(permission));
 }
 

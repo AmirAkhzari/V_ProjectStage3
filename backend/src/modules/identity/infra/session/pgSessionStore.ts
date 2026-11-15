@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { SubjectType } from '../../../../platform/auth/jwt.js';
 import type { SessionReader, SessionSnapshot } from '../../../../platform/auth/sessionAuthority.js';
-import { demoDaPermissions } from '../../domain/demoAccounts.js';
+import { demoDaPermissions, permissionList } from '../../domain/demoAccounts.js';
 import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import {
   SESSIONS_REVOKED_EVENT,
@@ -42,7 +42,9 @@ export class PgSessionStore implements SessionReader {
     const row = found.rows[0];
     if (!row) return null;
     const staffRole = asStaffRole(row.staff_role);
-    let permissions = staffRole ? [...permissionsForRole(staffRole, row.permissions ?? [])] : [];
+    let permissions = staffRole
+      ? [...permissionsForRole(staffRole, permissionList(row.permissions))]
+      : [];
     if (staffRole) {
       const demo = await this.pool.query<{ is_demo: boolean }>(
         `SELECT is_demo FROM identity.accounts WHERE id = $1`,

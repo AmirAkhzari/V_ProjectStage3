@@ -156,9 +156,19 @@ describe('V11-DM-05 staging demo login', () => {
         WHERE account_id = $1`,
       [DEMO_STAFF_ID],
     );
+    const held = await ownerPool.query<{ permissions: string[] }>(
+      `SELECT permissions FROM identity.staff_memberships WHERE account_id = $1`,
+      [DEMO_STAFF_ID],
+    );
     const login = await post('/v1/admin/auth/demo', {}, { 'x-forwarded-for': '203.0.113.10' });
-    expect(login.statusCode).toBe(200);
-    expect(login.json().staff.permissions).toEqual(['dashboard.view']);
+    expect(login.statusCode, JSON.stringify(login.json())).toBe(200);
+    expect({
+      db: held.rows[0]?.permissions,
+      body: login.json().staff.permissions,
+    }).toEqual({
+      db: ['dashboard.view', 'orders.update', 'stock.manage', 'staff.manage'],
+      body: ['dashboard.view'],
+    });
     const refreshed = await post('/v1/admin/auth/refresh', {
       refreshToken: login.json().refreshToken,
     });
