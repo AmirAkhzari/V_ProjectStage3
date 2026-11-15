@@ -60,6 +60,7 @@ describe('V11-DM-05 staging demo login', () => {
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
   let fake: FakeSmsProvider;
+  let pendingSms: Promise<void> = Promise.resolve();
   let app: App;
 
   beforeAll(async () => {
@@ -99,6 +100,9 @@ describe('V11-DM-05 staging demo login', () => {
       log,
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
+      runAfterRespond: (fn) => {
+        pendingSms = Promise.resolve(fn());
+      },
     };
     await seedDemoLogin(ownerPool);
     app = await buildApp({
@@ -308,6 +312,7 @@ describe('V11-DM-05 staging demo login', () => {
     );
     const sent = await post('/v1/admin/auth/otp/send', { phone: input.phone });
     expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
+    await pendingSms;
     const code = fake.outbox.at(-1)?.code;
     const verified = await post('/v1/admin/auth/otp/verify', { phone: input.phone, code });
     expect(verified.statusCode, JSON.stringify(verified.json())).toBe(200);
