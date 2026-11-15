@@ -203,3 +203,16 @@ describe('0007_s11b4b_pending_denies_purge.sql', () => {
     expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
   });
 });
+
+describe('0010_s11b6_demo_login.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
+
+  it('adds is_demo, keeps FORCE RLS, and does not grant the table to the app role', () => {
+    expect(sql).toMatch(/ADD COLUMN is_demo boolean NOT NULL DEFAULT false/);
+    expect(sql).toMatch(/FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/REVOKE ALL ON TABLE identity\.accounts FROM vproject_app/);
+    expect(sql).toMatch(/a\.is_demo = false/);
+    expect(sql).toMatch(/lookup_demo_account/);
+    expect(sql).not.toMatch(/GRANT .*identity\.accounts TO vproject_app/);
+  });
+});

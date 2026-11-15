@@ -46,6 +46,8 @@ export const AUTH_ISSUANCE_PATHS: readonly { method: HttpMethod; path: string }[
   { method: 'POST', path: '/v1/admin/auth/otp/verify' },
   { method: 'POST', path: '/v1/driver/auth/login' },
   { method: 'POST', path: '/v1/driver/auth/password' },
+  { method: 'POST', path: '/v1/app/auth/demo' },
+  { method: 'POST', path: '/v1/admin/auth/demo' },
 ];
 
 export function isAuthIssuanceRoute(
@@ -58,10 +60,18 @@ export function isAuthIssuanceRoute(
     return path.endsWith('/auth/login') || path.endsWith('/auth/password');
   }
   if (group === 'app' || path.startsWith('/v1/app/')) {
-    return path.endsWith('/auth/otp/send') || path.endsWith('/auth/otp/verify');
+    return (
+      path.endsWith('/auth/otp/send') ||
+      path.endsWith('/auth/otp/verify') ||
+      path.endsWith('/auth/demo')
+    );
   }
   if (group === 'admin' || path.startsWith('/v1/admin/')) {
-    return path.endsWith('/auth/otp/send') || path.endsWith('/auth/otp/verify');
+    return (
+      path.endsWith('/auth/otp/send') ||
+      path.endsWith('/auth/otp/verify') ||
+      path.endsWith('/auth/demo')
+    );
   }
   return AUTH_ISSUANCE_PATHS.some((route) => route.method === method && route.path === path);
 }

@@ -90,9 +90,10 @@ export function assertEmptyLogoutBody(body: unknown): void {
 export function refreshCallContext(
   ip: string,
   userAgent: string | string[] | undefined,
+  demoLogin = false,
 ): RefreshCallContext {
   const ua = Array.isArray(userAgent) ? userAgent[0] : userAgent;
-  return { ip, ...(ua ? { userAgent: ua.slice(0, 200) } : {}) };
+  return { ip, demoLogin, ...(ua ? { userAgent: ua.slice(0, 200) } : {}) };
 }
 
 export interface ShopkeeperRefreshBody {
@@ -249,6 +250,7 @@ async function sign(
     sid: result.sid,
     sv: profile.sessionVersion,
     ...(typ === 'staff' && profile.distributorId ? { did: profile.distributorId } : {}),
+    ...(profile.isDemo ? { demo: true as const } : {}),
   });
 }
 

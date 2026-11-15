@@ -71,6 +71,13 @@
       "when": 1793710000000,
       "tag": "0009_s11b5a_otp_verify",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793720000000,
+      "tag": "0010_s11b6_demo_login",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,8 @@ import { createSmsProvider } from './modules/notification/api.js';
 import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
 import { assertAdapterAllowed, assertStartupAdapters } from './platform/adapters.js';
-import { createJwtFromEnv } from './platform/auth/eddsa.js';
+import { createAccessTokensFromEnv } from './platform/auth/demoTokens.js';
+import { demoLoginEnabled } from './platform/auth/demoLogin.js';
 import { assertRedisForAuthIssuance } from './platform/auth/failClosed.js';
 import { startPendingDenyWorker } from './modules/identity/application/pendingDenyWorker.js';
 import { fallbackPoolOptions, RedisPgSessionAuthority } from './platform/auth/sessionAuthority.js';
@@ -36,7 +37,8 @@ const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
 const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_IDENTITY));
 const redis = createRedis(config.REDIS_URL, log);
 const sessionAuthority = new RedisPgSessionAuthority(redis, new PgSessionStore(sessionLookupPool));
-const verifier = await createJwtFromEnv();
+const verifier = await createAccessTokensFromEnv();
+const demoLogin = demoLoginEnabled(config.NODE_ENV, config.DEMO_LOGIN_ENABLED);
 const hasher = new Argon2idPasswordHasher();
 const sms = createSmsProvider(
   {
@@ -103,6 +105,7 @@ const app = await buildApp({
     sms,
     log,
     pepper: config.OTP_HMAC_KEY,
+    demoLogin,
     budget: {
       hour: config.SMS_BUDGET_HOUR ?? 0,
       day: config.SMS_BUDGET_DAY ?? 0,

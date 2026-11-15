@@ -29,7 +29,7 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || value === '' || value === 'false') continue;
-    if (key.startsWith('DEMO_')) {
+    if (key.startsWith('DEMO_') && key !== 'DEMO_LOGIN_ENABLED') {
       issues.push({ field: key, message: 'DEMO_* flags are forbidden in production' });
     }
     if (key.startsWith('MOCK_')) {
@@ -96,6 +96,8 @@ const processShared = {
    * Production must set this explicitly. The API port is reachable only through the LB.
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+  /** Exact string `true` plus a non-production NODE_ENV registers A5/B5. */
+  DEMO_LOGIN_ENABLED: z.string().optional(),
 };
 
 function applyProductionShared(

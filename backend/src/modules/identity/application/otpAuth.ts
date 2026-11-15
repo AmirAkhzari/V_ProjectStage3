@@ -60,6 +60,8 @@ export interface OtpAuthRuntime {
   sleep?: (ms: number) => Promise<void>;
   /** Test hook. Production uses the system clock. */
   clock?: Clock;
+  /** True only when demo routes are registered. Refresh of a demo RT checks this. */
+  demoLogin?: boolean;
 }
 
 export interface ShopkeeperSessionView {
@@ -132,6 +134,23 @@ function mapIssueError(error: unknown): never {
   throw una();
 }
 
+async function hiddenDemoPhone(
+  runtime: OtpAuthRuntime,
+  purpose: OtpPurpose,
+  phone: string,
+): Promise<boolean> {
+  const typ = purpose === 'app' ? 'shopkeeper' : 'staff';
+  try {
+    const found = await runtime.identityPool.query(
+      `SELECT 1 FROM identity.accounts WHERE phone = $1 AND typ = $2 AND is_demo = true`,
+      [phone, typ],
+    );
+    return (found.rowCount ?? 0) > 0;
+  } catch {
+    throw una();
+  }
+}
+
 function mapRedis(error: unknown): never {
   if (error instanceof AppError) throw error;
   throw una();
@@ -200,6 +219,7 @@ export async function sendOtp(
   input: { purpose: OtpPurpose; phone: string; ip: string },
 ): Promise<OtpSendView> {
   await assertRedisForAuthIssuance(runtime.redis);
+  if (await hiddenDemoPhone(runtime, input.purpose, input.phone)) return SEND_BODY;
   let reservation;
   try {
     reservation = await reserveOtpSend(
@@ -334,6 +354,7 @@ export async function verifyAppOtp(
 ): Promise<ShopkeeperSessionView> {
   await assertRedisForAuthIssuance(runtime.redis);
   await consumeOrThrow(runtime, 'app', input);
+  if (await hiddenDemoPhone(runtime, 'app', input.phone)) throw otpInvalid();
   let issued;
   try {
     issued = await issueShopkeeper(runtime, input.phone, input.ip);
@@ -532,7 +553,7 @@ async function issueShopkeeper(
   }
 }
 
-async function rememberOrAbort(runtime: OtpAuthRuntime, sid: string): Promise<void> {
+export async function rememberOrAbort(runtime: OtpAuthRuntime, sid: string): Promise<void> {
   const snap = await new PgSessionStore(runtime.identityPool).lookup(sid);
   if (!snap) throw una();
   try {

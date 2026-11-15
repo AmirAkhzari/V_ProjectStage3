@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../../platform/http/errors.js';
+import { assertEmptyDemoBody, loginDemoStaff } from '../application/demoAuth.js';
 import {
   assertEmptyLogoutBody,
   logoutStaffSid,
@@ -10,7 +11,7 @@ import {
 } from '../application/refreshAuth.js';
 import { otpRoutePlugin } from './otp.routes.js';
 
-/** J-1: B5 is not registered in production. Non-prod keeps a 404 stub (AUTH-DM-01). */
+/** B5 is omitted unless demo login is enabled. ScopeDistributor is not read. */
 export const adminRoutes: FastifyPluginAsync = async (app) => {
   await app.register(otpRoutePlugin('staff', { send: 'B1', verify: 'B2' }));
   app.post('/auth/refresh', { schema: { operationId: 'B3' } }, async (request) => {
@@ -24,7 +25,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     return refreshStaff(
       app.otpAuth,
       token,
-      refreshCallContext(request.ip, request.headers['user-agent']),
+      refreshCallContext(request.ip, request.headers['user-agent'], app.demoLogin),
     );
   });
   app.post('/auth/logout', { schema: { operationId: 'B4' } }, async (request) => {
@@ -39,11 +40,17 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     return logoutStaffSid(
       app.otpAuth,
       sid,
-      refreshCallContext(request.ip, request.headers['user-agent']),
+      refreshCallContext(request.ip, request.headers['user-agent'], app.demoLogin),
     );
   });
-  if (app.nodeEnv === 'production') return;
-  app.post('/auth/demo', { schema: { operationId: 'B5' } }, async () => {
-    throw new AppError('NOT_FOUND', 404, 'Resource not found');
+  if (!app.demoLogin) return;
+  app.post('/auth/demo', { schema: { operationId: 'B5' } }, async (request) => {
+    assertEmptyDemoBody(request.body);
+    if (!app.otpAuth) {
+      throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+        retryAfter: 5,
+      });
+    }
+    return loginDemoStaff(app.otpAuth, request.ip);
   });
 };

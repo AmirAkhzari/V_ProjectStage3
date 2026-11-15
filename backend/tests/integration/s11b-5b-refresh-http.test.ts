@@ -1106,6 +1106,7 @@ describe('S11b-5b A3/A4/B3/B4', () => {
             distributorId: null,
             permissions: [],
             sessionVersion: 0,
+            isDemo: false,
           },
         }),
       logoutPresented: (...args) => real.logoutPresented(...args),

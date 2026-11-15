@@ -215,6 +215,9 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         );
         const row = found.rows[0];
         if (!row) return { result: { status: 'rejected' as const, reason: 'unknown' as const } };
+        if (await this.demoRefreshBlocked(client, row.account_id, context)) {
+          return { result: { status: 'rejected' as const, reason: 'inactive' as const } };
+        }
 
         if (row.typ !== expectedTyp) {
           await insertAudit(client, {
@@ -480,7 +483,8 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
       status: string;
       phone: string | null;
       session_version: number;
-    }>(`SELECT status, phone, session_version FROM identity.accounts WHERE id = $1`, [
+      is_demo: boolean;
+    }>(`SELECT status, phone, session_version, is_demo FROM identity.accounts WHERE id = $1`, [
       row.account_id,
     ]);
     const acc = account.rows[0];
@@ -493,6 +497,7 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         distributorId: null,
         permissions: [],
         sessionVersion: acc.session_version,
+        isDemo: acc.is_demo,
       };
     }
     const membership = await client.query<{
@@ -528,7 +533,21 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         ...new Set(permissionsForRole(role as StaffRole, stored.rows[0]?.permissions ?? [])),
       ],
       sessionVersion: acc.session_version,
+      isDemo: acc.is_demo,
     };
+  }
+
+  /** Demo RT with the flag off: 401 and no rotation, grace mark, or revoke. */
+  private async demoRefreshBlocked(
+    client: pg.PoolClient,
+    accountId: string,
+    context: RefreshCallContext,
+  ): Promise<boolean> {
+    const found = await client.query<{ is_demo: boolean }>(
+      `SELECT is_demo FROM identity.accounts WHERE id = $1`,
+      [accountId],
+    );
+    return found.rows[0]?.is_demo === true && context.demoLogin !== true;
   }
 
   private async revokeOverflowInTx(
