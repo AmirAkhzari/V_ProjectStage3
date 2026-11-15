@@ -520,6 +520,9 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     ) {
       return null;
     }
+    if (mem.distributor_id) {
+      await client.query(`SELECT set_config('app.distributor_id', $1, true)`, [mem.distributor_id]);
+    }
     const stored = await client.query<{ permissions: string[] | null }>(
       `SELECT permissions FROM identity.staff_memberships
         WHERE account_id = $1 AND role = $2`,
