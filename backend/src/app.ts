@@ -26,12 +26,16 @@ import type { HealthCheck } from './platform/health.js';
 import { registerErrorHandling } from './platform/http/errors.js';
 import { generateRequestId, registerRequestContext } from './platform/http/requestContext.js';
 import { demoLoginEnabled } from './platform/auth/demoLogin.js';
+import { demoRateFromConfig } from './modules/identity/application/demoRate.js';
 import { pinoOptions } from './platform/logger.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     nodeEnv: Config['NODE_ENV'];
     demoLogin: boolean;
+    demoRate?: { perIpHour: number; globalDay: number };
+    /** Test-only write probes. Production leaves this false. */
+    demoWriteProbe: boolean;
     driverAuth?: DriverAuthRuntime;
     otpAuth?: OtpAuthRuntime;
   }
@@ -47,6 +51,7 @@ export interface BuildAppOptions {
   otpAuth?: OtpAuthRuntime;
   /** Test capture. Production uses Fastify's default destination. */
   logDestination?: DestinationStream;
+  demoWriteProbe?: boolean;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -70,8 +75,15 @@ export async function buildApp(options: BuildAppOptions) {
   app.decorate('nodeEnv', options.config.NODE_ENV);
   app.decorate(
     'demoLogin',
-    demoLoginEnabled(options.config.NODE_ENV, options.config.DEMO_LOGIN_ENABLED),
+    demoLoginEnabled(
+      options.config.NODE_ENV,
+      options.config.DEPLOY_ENV,
+      options.config.DEMO_LOGIN_ENABLED,
+    ),
   );
+  const demoRate = demoRateFromConfig(options.config);
+  if (demoRate) app.decorate('demoRate', demoRate);
+  app.decorate('demoWriteProbe', options.demoWriteProbe === true);
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { SubjectType } from '../../../../platform/auth/jwt.js';
 import type { SessionReader, SessionSnapshot } from '../../../../platform/auth/sessionAuthority.js';
+import { demoDaPermissions } from '../../domain/demoAccounts.js';
 import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import {
   SESSIONS_REVOKED_EVENT,
@@ -41,6 +42,14 @@ export class PgSessionStore implements SessionReader {
     const row = found.rows[0];
     if (!row) return null;
     const staffRole = asStaffRole(row.staff_role);
+    let permissions = staffRole ? [...permissionsForRole(staffRole, row.permissions ?? [])] : [];
+    if (staffRole) {
+      const demo = await this.pool.query<{ is_demo: boolean }>(
+        `SELECT is_demo FROM identity.accounts WHERE id = $1`,
+        [row.account_id],
+      );
+      if (demo.rows[0]?.is_demo === true) permissions = demoDaPermissions(permissions);
+    }
     return {
       sid: row.sid,
       accountId: row.account_id,
@@ -51,7 +60,7 @@ export class PgSessionStore implements SessionReader {
       revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
       distributorId: row.distributor_id,
       staffRole,
-      permissions: staffRole ? [...permissionsForRole(staffRole, row.permissions ?? [])] : [],
+      permissions,
       mustChangePassword: row.must_change_password,
     };
   }

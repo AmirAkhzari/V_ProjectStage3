@@ -40,11 +40,13 @@ describe('demo login flag', () => {
   });
 
   it('enables routes only for the exact non-prod string true', async () => {
-    expect(demoLoginEnabled('production', 'true')).toBe(false);
-    expect(demoLoginEnabled('test', 'TRUE')).toBe(false);
-    expect(demoLoginEnabled('test', '1')).toBe(false);
-    expect(demoLoginEnabled('test', undefined)).toBe(false);
-    expect(demoLoginEnabled('development', 'true')).toBe(true);
+    expect(demoLoginEnabled('production', 'production', 'true')).toBe(false);
+    expect(demoLoginEnabled('production', 'staging', 'true')).toBe(true);
+    expect(demoLoginEnabled('production', 'Staging', 'true')).toBe(false);
+    expect(demoLoginEnabled('test', undefined, 'TRUE')).toBe(false);
+    expect(demoLoginEnabled('test', undefined, '1')).toBe(false);
+    expect(demoLoginEnabled('test', undefined, undefined)).toBe(false);
+    expect(demoLoginEnabled('development', undefined, 'true')).toBe(true);
     for (const flag of [undefined, 'TRUE', '1', 'false']) {
       app = await buildApp({
         config: testConfig(flag === undefined ? {} : { DEMO_LOGIN_ENABLED: flag }),
@@ -77,6 +79,20 @@ describe('demo login flag', () => {
     expect(() =>
       assertDemoLoginSeed({ NODE_ENV: 'production', DEMO_LOGIN_ENABLED: 'true' }),
     ).toThrow(/production/);
+    expect(() =>
+      assertDemoLoginSeed({
+        NODE_ENV: 'production',
+        DEPLOY_ENV: 'production',
+        DEMO_LOGIN_ENABLED: 'true',
+      }),
+    ).toThrow(/production/);
+    expect(() =>
+      assertDemoLoginSeed({
+        NODE_ENV: 'production',
+        DEPLOY_ENV: 'staging',
+        DEMO_LOGIN_ENABLED: 'true',
+      }),
+    ).not.toThrow();
     expect(() => assertDemoLoginSeed({ NODE_ENV: 'test' })).toThrow(/DEMO_LOGIN_ENABLED/);
     expect(() => assertDemoLoginSeed({ NODE_ENV: 'test', DEMO_LOGIN_ENABLED: 'TRUE' })).toThrow(
       /DEMO_LOGIN_ENABLED/,

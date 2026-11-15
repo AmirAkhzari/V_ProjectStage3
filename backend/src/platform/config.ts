@@ -29,9 +29,7 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || value === '' || value === 'false') continue;
-    if (key.startsWith('DEMO_')) {
-      issues.push({ field: key, message: 'DEMO_* flags are forbidden in production' });
-    }
+    if (key.startsWith('DEMO_')) continue;
     if (key.startsWith('MOCK_')) {
       issues.push({ field: key, message: 'MOCK_* flags are forbidden in production' });
     }
@@ -96,9 +94,57 @@ const processShared = {
    * Production must set this explicitly. The API port is reachable only through the LB.
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
-  /** Exact string `true` plus a non-production NODE_ENV registers A5/B5. */
+  /**
+   * Required when NODE_ENV=production: exactly `production` or `staging`.
+   * Ignored outside production. `prod`, `Staging`, and surrounding space are invalid.
+   */
+  DEPLOY_ENV: z.string().optional(),
+  /** Exact string `true` registers A5/B5 outside production, or on staging. */
   DEMO_LOGIN_ENABLED: z.string().optional(),
+  DEMO_JWT_EDDSA_KID: z.string().optional(),
+  DEMO_JWT_EDDSA_JWKS: z.string().optional(),
+  /** No default. Required on staging. Unset locally means the demo limiter stays off. */
+  RATE_DEMO_PER_IP_HOUR: z.coerce.number().int().min(1).max(100_000).optional(),
+  RATE_DEMO_GLOBAL_DAY: z.coerce.number().int().min(1).max(10_000_000).optional(),
 };
+
+const STAGING_DEMO_KEYS = new Set([
+  'DEMO_LOGIN_ENABLED',
+  'DEMO_JWT_EDDSA_KID',
+  'DEMO_JWT_EDDSA_JWKS',
+]);
+
+function deployAndDemoIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
+  const deploy = env['DEPLOY_ENV'];
+  const issues: ConfigIssue[] = [];
+  if (deploy !== 'production' && deploy !== 'staging') {
+    issues.push({
+      field: 'DEPLOY_ENV',
+      message: "must be exactly 'production' or 'staging'",
+    });
+  }
+  const staging = deploy === 'staging';
+  for (const [key, value] of Object.entries(env)) {
+    if (!key.startsWith('DEMO_') || value === undefined || value === '' || value === 'false') {
+      continue;
+    }
+    if (!staging || !STAGING_DEMO_KEYS.has(key)) {
+      issues.push({
+        field: key,
+        message: staging
+          ? 'not on the staging demo allowlist'
+          : 'DEMO_* flags are forbidden in production',
+      });
+    }
+  }
+  if (!staging) return issues;
+  for (const key of ['RATE_DEMO_PER_IP_HOUR', 'RATE_DEMO_GLOBAL_DAY'] as const) {
+    if (!presentEnv(env, key)) {
+      issues.push({ field: key, message: 'required on staging (no default)' });
+    }
+  }
+  return issues;
+}
 
 function applyProductionShared(
   value: { NODE_ENV: string; OPENAPI_DOCS_ENABLED: boolean; LOG_LEVEL: string; REDIS_URL: string },
@@ -344,6 +390,7 @@ function productionExtras(env: NodeJS.ProcessEnv, forbiddenKeys: readonly string
   if (env['NODE_ENV'] !== 'production') return [];
   return [
     ...productionEnvFlagIssues(env),
+    ...deployAndDemoIssues(env),
     ...forbiddenUrlIssues(env, forbiddenKeys),
     ...auditHashKeyIssues(env),
   ];

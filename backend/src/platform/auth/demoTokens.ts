@@ -44,7 +44,7 @@ export async function createAccessTokensFromEnv(
   now?: Clock,
 ): Promise<DemoAwareTokens> {
   const prod = await createJwtFromEnv(env, now);
-  if (!demoLoginEnabled(env['NODE_ENV'] ?? '', env['DEMO_LOGIN_ENABLED'])) {
+  if (!demoLoginEnabled(env['NODE_ENV'] ?? '', env['DEPLOY_ENV'], env['DEMO_LOGIN_ENABLED'])) {
     return new DemoAwareTokens(prod, null, null);
   }
   const kid = env['DEMO_JWT_EDDSA_KID'];
