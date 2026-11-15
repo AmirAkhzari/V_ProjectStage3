@@ -145,11 +145,11 @@ describe('loadApiConfig', () => {
     expect(() => loadApiConfig({ ...validApiProduction, LOG_LEVEL: 'trace' })).toThrow(ConfigError);
   });
 
-  it('rejects DEMO_* flags in production except the login flag', () => {
-    expect(() =>
-      loadApiConfig({ ...validApiProduction, DEMO_LOGIN_ENABLED: 'true' }),
-    ).not.toThrow();
+  it('rejects DEMO_* flags in production', () => {
     expect(() => loadApiConfig({ ...validApiProduction, DEMO_RESET_ENABLED: 'true' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadApiConfig({ ...validApiProduction, DEMO_LOGIN_ENABLED: 'true' })).toThrow(
       ConfigError,
     );
   });

@@ -80,3 +80,18 @@ describe('eslint restricted syntax (N-1)', () => {
     );
   });
 });
+
+describe('eslint devDependency imports', () => {
+  it('rejects ajv and yaml imports from src', async () => {
+    const eslint = new ESLint({ cwd: backendRoot });
+    const [result] = await eslint.lintText(
+      "import { Ajv2020 } from 'ajv/dist/2020.js';\nimport { parse } from 'yaml';\nexport const x = { Ajv2020, parse };\n",
+      { filePath: join(backendRoot, 'src/modules/identity/application/demoAuth.ts') },
+    );
+    const messages = result?.messages.filter(
+      (message) => message.ruleId === 'no-restricted-imports',
+    );
+    expect(messages?.length).toBeGreaterThanOrEqual(2);
+    expect(messages?.every((message) => message.message.includes('devDependency'))).toBe(true);
+  });
+});

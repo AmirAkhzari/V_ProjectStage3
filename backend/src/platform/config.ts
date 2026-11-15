@@ -29,7 +29,7 @@ function productionEnvFlagIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined || value === '' || value === 'false') continue;
-    if (key.startsWith('DEMO_') && key !== 'DEMO_LOGIN_ENABLED') {
+    if (key.startsWith('DEMO_')) {
       issues.push({ field: key, message: 'DEMO_* flags are forbidden in production' });
     }
     if (key.startsWith('MOCK_')) {

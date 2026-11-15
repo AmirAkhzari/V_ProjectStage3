@@ -3,9 +3,9 @@ import { AppError } from '../../src/platform/http/errors.js';
 import {
   mapRefreshTransport,
   presentedRefreshToken,
-  refreshSchemaValidators,
   requireLogoutToken,
 } from '../../src/modules/identity/application/refreshAuth.js';
+import { refreshSchemaValidators } from '../helpers/frozenSessionSchemas.js';
 
 const base = {
   accessToken: 'a.b.c',

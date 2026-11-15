@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp, type App } from '../../src/app.js';
 import { demoLoginEnabled } from '../../src/platform/auth/demoLogin.js';
 import { assertEmptyDemoBody } from '../../src/modules/identity/application/demoAuth.js';
-import { assertNonProdSeed } from '../../scripts/seed.js';
+import { assertDemoLoginSeed } from '../../scripts/seed-demo.js';
 import { productionApiConfig, testConfig } from '../helpers/config.js';
 
 const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Resource not found' } };
@@ -24,7 +24,7 @@ describe('AUTH-DM-01 demo endpoints in production', () => {
 
   it('keeps A5/B5 hidden when production sets the flag', async () => {
     app = await buildApp({
-      config: productionApiConfig({ DEMO_LOGIN_ENABLED: 'true' }),
+      config: { ...productionApiConfig(), DEMO_LOGIN_ENABLED: 'true' },
       healthChecks: [],
     });
     await expectHidden(app);
@@ -69,12 +69,21 @@ describe('demo login flag', () => {
     expect(() => assertEmptyDemoBody({ refreshToken: 'x' })).toThrow(/validation/i);
   });
 
-  it('refuses the demo seed in production', () => {
+  it('refuses the demo seed in production and without the exact flag', () => {
     const source = readFileSync(join(import.meta.dirname, '../../scripts/seed-demo.ts'), 'utf8');
-    expect(source).toContain('assertNonProdSeed()');
+    expect(source).toContain('assertDemoLoginSeed()');
     expect(source).toContain('DEMO_SHOPKEEPER_PHONE');
     expect(DEMO_PHONE).toBe('+989999999901');
-    expect(() => assertNonProdSeed({ NODE_ENV: 'production' })).toThrow(/production/);
+    expect(() =>
+      assertDemoLoginSeed({ NODE_ENV: 'production', DEMO_LOGIN_ENABLED: 'true' }),
+    ).toThrow(/production/);
+    expect(() => assertDemoLoginSeed({ NODE_ENV: 'test' })).toThrow(/DEMO_LOGIN_ENABLED/);
+    expect(() => assertDemoLoginSeed({ NODE_ENV: 'test', DEMO_LOGIN_ENABLED: 'TRUE' })).toThrow(
+      /DEMO_LOGIN_ENABLED/,
+    );
+    expect(() =>
+      assertDemoLoginSeed({ NODE_ENV: 'test', DEMO_LOGIN_ENABLED: 'true' }),
+    ).not.toThrow();
   });
 });
 

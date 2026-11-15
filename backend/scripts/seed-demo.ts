@@ -14,6 +14,13 @@ import {
 } from '../src/modules/identity/domain/demoAccounts.js';
 import { assertNonProdSeed, assertSeedDatabaseTarget, SeedError } from './seed.js';
 
+export function assertDemoLoginSeed(env: NodeJS.ProcessEnv = process.env): void {
+  assertNonProdSeed(env);
+  if (env['DEMO_LOGIN_ENABLED'] !== 'true') {
+    throw new SeedError('DEMO_LOGIN_ENABLED must be the exact string true');
+  }
+}
+
 export async function seedDemoLogin(pool: pg.Pool): Promise<void> {
   await pool.query(
     `INSERT INTO tenancy.distributors (id, name, status, created_at)
@@ -54,7 +61,7 @@ const isEntrypoint = process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isEntrypoint) {
   try {
-    assertNonProdSeed();
+    assertDemoLoginSeed();
     const ownerUrl = process.env['MIGRATION_DATABASE_URL'];
     if (!ownerUrl) throw new SeedError('MIGRATION_DATABASE_URL is required');
     assertSeedDatabaseTarget(ownerUrl);

@@ -60,8 +60,6 @@ export interface OtpAuthRuntime {
   sleep?: (ms: number) => Promise<void>;
   /** Test hook. Production uses the system clock. */
   clock?: Clock;
-  /** True only when demo routes are registered. Refresh of a demo RT checks this. */
-  demoLogin?: boolean;
 }
 
 export interface ShopkeeperSessionView {

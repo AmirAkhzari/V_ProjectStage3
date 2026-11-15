@@ -1,6 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../../platform/http/errors.js';
-import { assertEmptyDemoBody, loginDemoStaff } from '../application/demoAuth.js';
 import {
   assertEmptyLogoutBody,
   logoutStaffSid,
@@ -44,6 +43,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     );
   });
   if (!app.demoLogin) return;
+  const { assertEmptyDemoBody, loginDemoStaff } = await import('../application/demoAuth.js');
   app.post('/auth/demo', { schema: { operationId: 'B5' } }, async (request) => {
     assertEmptyDemoBody(request.body);
     if (!app.otpAuth) {
