@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyPluginAsync } from 'fastify';
 import swagger from '@fastify/swagger';
 import type { DestinationStream } from 'pino';
 import {
@@ -26,12 +26,14 @@ import type { HealthCheck } from './platform/health.js';
 import { registerErrorHandling } from './platform/http/errors.js';
 import { generateRequestId, registerRequestContext } from './platform/http/requestContext.js';
 import { demoLoginEnabled } from './platform/auth/demoLogin.js';
+import { demoRateFromConfig } from './modules/identity/application/demoRate.js';
 import { pinoOptions } from './platform/logger.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     nodeEnv: Config['NODE_ENV'];
     demoLogin: boolean;
+    demoRate?: { perIpHour: number; globalDay: number };
     driverAuth?: DriverAuthRuntime;
     otpAuth?: OtpAuthRuntime;
   }
@@ -47,6 +49,8 @@ export interface BuildAppOptions {
   otpAuth?: OtpAuthRuntime;
   /** Test capture. Production uses Fastify's default destination. */
   logDestination?: DestinationStream;
+  /** Test-only plugin mounted inside `/v1/admin` before the catch-all. */
+  adminTestRoutes?: FastifyPluginAsync;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -70,8 +74,14 @@ export async function buildApp(options: BuildAppOptions) {
   app.decorate('nodeEnv', options.config.NODE_ENV);
   app.decorate(
     'demoLogin',
-    demoLoginEnabled(options.config.NODE_ENV, options.config.DEMO_LOGIN_ENABLED),
+    demoLoginEnabled(
+      options.config.NODE_ENV,
+      options.config.DEPLOY_ENV,
+      options.config.DEMO_LOGIN_ENABLED,
+    ),
   );
+  const demoRate = demoRateFromConfig(options.config);
+  if (demoRate) app.decorate('demoRate', demoRate);
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
 
@@ -114,7 +124,11 @@ export async function buildApp(options: BuildAppOptions) {
     assertIssuance,
   };
   await app.register(appGroup, { prefix: appGroupSpec.prefix, ...groupOpts });
-  await app.register(adminGroup, { prefix: adminGroupSpec.prefix, ...groupOpts });
+  await app.register(adminGroup, {
+    prefix: adminGroupSpec.prefix,
+    ...groupOpts,
+    ...(options.adminTestRoutes ? { extraRoutes: options.adminTestRoutes } : {}),
+  });
   await app.register(driverGroup, { prefix: driverGroupSpec.prefix, ...groupOpts });
 
   const bus = new InProcessEventBus(new InMemoryInboxStore());

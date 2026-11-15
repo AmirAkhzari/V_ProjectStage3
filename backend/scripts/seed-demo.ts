@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
- * Non-prod demo shopkeeper and distributor_admin. Refuses NODE_ENV=production.
+ * Demo shopkeeper and distributor_admin. Production is allowed only when
+ * DEPLOY_ENV=staging and DEMO_LOGIN_ENABLED is the exact string true.
  * Does not insert the real seed distributors, staff, or drivers.
  */
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import {
+  DEMO_DA_PERMISSIONS,
   DEMO_DISTRIBUTOR_ID,
   DEMO_SHOPKEEPER_ID,
   DEMO_SHOPKEEPER_PHONE,
@@ -15,10 +17,16 @@ import {
 import { assertNonProdSeed, assertSeedDatabaseTarget, SeedError } from './seed.js';
 
 export function assertDemoLoginSeed(env: NodeJS.ProcessEnv = process.env): void {
-  assertNonProdSeed(env);
   if (env['DEMO_LOGIN_ENABLED'] !== 'true') {
     throw new SeedError('DEMO_LOGIN_ENABLED must be the exact string true');
   }
+  if (env['NODE_ENV'] === 'production') {
+    if (env['DEPLOY_ENV'] !== 'staging') {
+      throw new SeedError('production demo seed requires DEPLOY_ENV=staging');
+    }
+    return;
+  }
+  assertNonProdSeed(env);
 }
 
 export async function seedDemoLogin(pool: pg.Pool): Promise<void> {
@@ -51,9 +59,12 @@ export async function seedDemoLogin(pool: pg.Pool): Promise<void> {
   );
   await pool.query(
     `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
-     VALUES ($1, 'distributor_admin', $2, ARRAY['dashboard.view']::text[])
-     ON CONFLICT (account_id) DO NOTHING`,
-    [DEMO_STAFF_ID, DEMO_DISTRIBUTOR_ID],
+     VALUES ($1, 'distributor_admin', $2, $3::text[])
+     ON CONFLICT (account_id) DO UPDATE
+       SET role = EXCLUDED.role,
+           distributor_id = EXCLUDED.distributor_id,
+           permissions = EXCLUDED.permissions`,
+    [DEMO_STAFF_ID, DEMO_DISTRIBUTOR_ID, [...DEMO_DA_PERMISSIONS]],
   );
 }
 

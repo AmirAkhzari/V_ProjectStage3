@@ -8,6 +8,7 @@ import {
   refreshUnauthenticated,
   requireLogoutToken,
 } from '../application/refreshAuth.js';
+import { guardDemoLoginRate } from '../application/demoRate.js';
 import { otpRoutePlugin } from './otp.routes.js';
 
 /** A5 is omitted unless demo login is enabled, so the catch-all 404 matches an unknown route. */
@@ -43,6 +44,7 @@ export const appRoutes: FastifyPluginAsync = async (app) => {
   const { assertEmptyDemoBody, loginDemoShopkeeper } = await import('../application/demoAuth.js');
   app.post('/auth/demo', { schema: { operationId: 'A5' } }, async (request) => {
     assertEmptyDemoBody(request.body);
+    await guardDemoLoginRate(app.otpAuth?.redis, request.ip, app.demoRate);
     if (!app.otpAuth) {
       throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
         retryAfter: 5,

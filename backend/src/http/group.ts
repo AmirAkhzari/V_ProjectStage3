@@ -13,6 +13,8 @@ export interface RouteGroupOptions {
   verifier: AccessTokenVerifier;
   sessionAuthority: SessionAuthority;
   assertIssuance: () => Promise<void>;
+  /** Registered inside this group, before the catch-all. Tests use it for probes. */
+  extraRoutes?: FastifyPluginAsync;
 }
 
 export interface RouteGroupSpec {
@@ -32,7 +34,7 @@ function requestPathOf(request: FastifyRequest): string {
  * The guard runs before every route in the group and fails closed with the deny-all verifier.
  */
 export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<RouteGroupOptions> {
-  return async (group, { modules, verifier, sessionAuthority, assertIssuance }) => {
+  return async (group, { modules, verifier, sessionAuthority, assertIssuance, extraRoutes }) => {
     const guard = subjectGuard(spec.subject, verifier, {
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
@@ -63,6 +65,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       const routes = mod.routes[spec.group];
       if (routes) await group.register(routes);
     }
+    if (extraRoutes) await group.register(extraRoutes);
 
     // Keep empty groups addressable so typ-guard behaviour is testable without domain routes.
     group.all('/*', async () => {

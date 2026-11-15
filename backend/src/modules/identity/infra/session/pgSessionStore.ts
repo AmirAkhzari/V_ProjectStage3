@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { SubjectType } from '../../../../platform/auth/jwt.js';
 import type { SessionReader, SessionSnapshot } from '../../../../platform/auth/sessionAuthority.js';
+import { demoDaPermissions, permissionList } from '../../domain/demoAccounts.js';
 import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import {
   SESSIONS_REVOKED_EVENT,
@@ -26,6 +27,7 @@ interface LookupRow {
   staff_role: string | null;
   permissions: string[] | null;
   must_change_password: boolean;
+  is_demo: boolean | null;
 }
 
 export class PgSessionStore implements SessionReader {
@@ -33,14 +35,21 @@ export class PgSessionStore implements SessionReader {
 
   async lookup(sid: string): Promise<SessionSnapshot | null> {
     const found = await this.pool.query<LookupRow>(
-      `SELECT sid, account_id, typ, family_id, revoked_at, session_version,
-              account_status, distributor_id, staff_role, permissions, must_change_password
-         FROM identity.lookup_session($1)`,
+      `SELECT s.sid, s.account_id, s.typ, s.family_id, s.revoked_at, s.session_version,
+              s.account_status, s.distributor_id, s.staff_role, s.permissions,
+              s.must_change_password, a.is_demo
+         FROM identity.lookup_session($1) AS s
+         LEFT JOIN identity.accounts AS a ON a.id = s.account_id`,
       [sid],
     );
     const row = found.rows[0];
     if (!row) return null;
     const staffRole = asStaffRole(row.staff_role);
+    let permissions = staffRole
+      ? [...permissionsForRole(staffRole, permissionList(row.permissions))]
+      : [];
+    // Missing or null is_demo is treated as demo so a hidden row cannot widen the session.
+    if (staffRole && row.is_demo !== false) permissions = demoDaPermissions(permissions);
     return {
       sid: row.sid,
       accountId: row.account_id,
@@ -51,7 +60,7 @@ export class PgSessionStore implements SessionReader {
       revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
       distributorId: row.distributor_id,
       staffRole,
-      permissions: staffRole ? [...permissionsForRole(staffRole, row.permissions ?? [])] : [],
+      permissions,
       mustChangePassword: row.must_change_password,
     };
   }

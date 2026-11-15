@@ -8,6 +8,7 @@ import {
   refreshStaff,
   refreshUnauthenticated,
 } from '../application/refreshAuth.js';
+import { guardDemoLoginRate } from '../application/demoRate.js';
 import { otpRoutePlugin } from './otp.routes.js';
 
 /** B5 is omitted unless demo login is enabled. ScopeDistributor is not read. */
@@ -46,6 +47,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
   const { assertEmptyDemoBody, loginDemoStaff } = await import('../application/demoAuth.js');
   app.post('/auth/demo', { schema: { operationId: 'B5' } }, async (request) => {
     assertEmptyDemoBody(request.body);
+    await guardDemoLoginRate(app.otpAuth?.redis, request.ip, app.demoRate);
     if (!app.otpAuth) {
       throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
         retryAfter: 5,

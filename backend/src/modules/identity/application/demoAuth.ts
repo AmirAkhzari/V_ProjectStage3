@@ -3,7 +3,7 @@ import { AppError } from '../../../platform/http/errors.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../../../platform/auth/jwt.js';
 import { assertRedisForAuthIssuance } from '../../../platform/auth/failClosed.js';
 import { systemClock } from '../../../platform/lib/clock.js';
-import { permissionsForRole } from '../domain/permissions.js';
+import { demoDaPermissions } from '../domain/demoAccounts.js';
 import { DEMO_SHOPKEEPER_PHONE, DEMO_STAFF_PHONE } from '../domain/demoAccounts.js';
 import { maskIranMobile } from '../domain/otpPolicy.js';
 import { PgSessionStore } from '../infra/session/pgSessionStore.js';
@@ -117,7 +117,7 @@ export async function loginDemoStaff(
   await rememberOrAbort(runtime, sid);
   const snap = await new PgSessionStore(runtime.identityPool).lookup(sid);
   if (!snap) throw unavailable();
-  const permissions = [...permissionsForRole('distributor_admin', staff.permissions)];
+  const permissions = demoDaPermissions(staff.permissions);
   const body: StaffSessionView = {
     accessToken: await runtime.jwt.sign({
       sub: staff.id,

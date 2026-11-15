@@ -37,6 +37,7 @@ const validApiProduction = {
   KAVENEGAR_API_KEY: PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
   KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
   OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
+  DEPLOY_ENV: 'production',
 };
 
 const validWorkerProduction = {
@@ -47,6 +48,7 @@ const validWorkerProduction = {
   LOG_LEVEL: 'info',
   OPENAPI_DOCS_ENABLED: 'false',
   TRUST_PROXY_HOPS: '1',
+  DEPLOY_ENV: 'production',
 };
 
 describe('loadApiConfig', () => {
@@ -152,6 +154,37 @@ describe('loadApiConfig', () => {
     expect(() => loadApiConfig({ ...validApiProduction, DEMO_LOGIN_ENABLED: 'true' })).toThrow(
       ConfigError,
     );
+  });
+
+  it('requires production|staging and allowlists three DEMO_* keys on staging', () => {
+    for (const deploy of ['', 'prod', 'Staging', ' staging']) {
+      expect(() => loadApiConfig({ ...validApiProduction, DEPLOY_ENV: deploy })).toThrow(
+        /DEPLOY_ENV/,
+      );
+    }
+    const { DEPLOY_ENV: _omit, ...unset } = validApiProduction;
+    expect(() => loadApiConfig(unset)).toThrow(/DEPLOY_ENV/);
+    expect(loadApiConfig(validApiProduction).DEPLOY_ENV).toBe('production');
+    expect(() =>
+      loadApiConfig({ ...validApiProduction, DEMO_LOGIN_ENABLED: 'false' }),
+    ).not.toThrow();
+    expect(() =>
+      loadApiConfig({ ...validApiProduction, DEPLOY_ENV: 'staging', DEMO_RESET_ENABLED: 'true' }),
+    ).toThrow(/allowlist/);
+    const staging = {
+      ...validApiProduction,
+      DEPLOY_ENV: 'staging',
+      DEMO_LOGIN_ENABLED: 'true',
+      DEMO_JWT_EDDSA_KID: 'kid',
+      DEMO_JWT_EDDSA_JWKS: '{"keys":[]}',
+      RATE_DEMO_PER_IP_HOUR: '10',
+      RATE_DEMO_GLOBAL_DAY: '200',
+    };
+    expect(loadApiConfig(staging).RATE_DEMO_PER_IP_HOUR).toBe(10);
+    expect(loadApiConfig(staging).RATE_DEMO_GLOBAL_DAY).toBe(200);
+    const { RATE_DEMO_PER_IP_HOUR: _ip, ...noRate } = staging;
+    expect(() => loadApiConfig(noRate)).toThrow(/RATE_DEMO_PER_IP_HOUR/);
+    expect(loadApiConfig({ ...validApi, DEPLOY_ENV: 'prod' }).NODE_ENV).toBe('test');
   });
 
   it('rejects MOCK_* flags in production', () => {

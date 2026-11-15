@@ -10,6 +10,7 @@ import {
   isIdleExpired,
   sessionWindows,
 } from '../../domain/sessionTtl.js';
+import { demoDaPermissions, permissionList } from '../../domain/demoAccounts.js';
 import { permissionsForRole, type StaffRole } from '../../domain/permissions.js';
 import type {
   RefreshCallContext,
@@ -519,19 +520,25 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
     ) {
       return null;
     }
+    if (mem.distributor_id) {
+      await client.query(`SELECT set_config('app.distributor_id', $1, true)`, [mem.distributor_id]);
+    }
     const stored = await client.query<{ permissions: string[] | null }>(
       `SELECT permissions FROM identity.staff_memberships
         WHERE account_id = $1 AND role = $2`,
       [row.account_id, role],
     );
+    const issued = [
+      ...new Set(
+        permissionsForRole(role as StaffRole, permissionList(stored.rows[0]?.permissions)),
+      ),
+    ];
     return {
       phone: acc.phone,
       isNewAccount: false,
       staffRole: role,
       distributorId: mem.distributor_id,
-      permissions: [
-        ...new Set(permissionsForRole(role as StaffRole, stored.rows[0]?.permissions ?? [])),
-      ],
+      permissions: acc.is_demo ? demoDaPermissions(issued) : issued,
       sessionVersion: acc.session_version,
       isDemo: acc.is_demo,
     };
@@ -703,16 +710,21 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
 
   private async withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    let discard: Error | undefined;
     try {
       await client.query('BEGIN');
       const result = await fn(client);
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => {});
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        discard = rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 }

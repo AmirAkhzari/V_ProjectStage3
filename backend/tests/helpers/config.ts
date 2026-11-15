@@ -37,6 +37,7 @@ export function productionApiConfig(overrides: Record<string, string | undefined
     KAVENEGAR_API_KEY: PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
     KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
     OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
+    DEPLOY_ENV: 'production',
     ...overrides,
   });
 }
