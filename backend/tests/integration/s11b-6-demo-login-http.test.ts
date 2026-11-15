@@ -294,36 +294,38 @@ describe('S11b-6 demo login HTTP', () => {
 
   it('mints only the seeded distributor admin and ignores the scope header', async () => {
     const sms = fake.outbox.length;
-    const scope = randomUUID();
-    const ok = await post('/v1/admin/auth/demo', {}, { 'x-scope-distributor': scope });
-    expect(ok.statusCode).toBe(200);
-    expect(demoSessionValidators().staff(ok.json())).toBe(true);
-    expect(ok.json().staff.role).toBe('distributor_admin');
-    expect(ok.json().staff.distributorId).toBe(DEMO_DISTRIBUTOR_ID);
-    expect(claims(ok.json().accessToken).did).toBe(DEMO_DISTRIBUTOR_ID);
-    expect(fake.outbox.length).toBe(sms);
-    const client = await appPool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.distributor_id', $1, true)`, [
-        DEMO_DISTRIBUTOR_ID,
-      ]);
-      const real = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
-        REAL_DIST,
-      ]);
-      const other = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
-        scope,
-      ]);
-      const demo = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
-        DEMO_DISTRIBUTOR_ID,
-      ]);
-      expect(real.rowCount).toBe(0);
-      expect(other.rowCount).toBe(0);
-      expect(demo.rowCount).toBe(1);
-      await client.query('ROLLBACK');
-    } finally {
-      client.release();
+    let issued!: Awaited<ReturnType<typeof post>>;
+    for (const scope of [REAL_DIST, randomUUID()]) {
+      issued = await post('/v1/admin/auth/demo', {}, { 'x-scope-distributor': scope });
+      expect(issued.statusCode).toBe(200);
+      expect(demoSessionValidators().staff(issued.json())).toBe(true);
+      expect(issued.json().staff.role).toBe('distributor_admin');
+      expect(issued.json().staff.distributorId).toBe(DEMO_DISTRIBUTOR_ID);
+      expect(claims(issued.json().accessToken).did).toBe(DEMO_DISTRIBUTOR_ID);
+      const client = await appPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.distributor_id', $1, true)`, [
+          DEMO_DISTRIBUTOR_ID,
+        ]);
+        const real = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
+          REAL_DIST,
+        ]);
+        const other = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
+          scope,
+        ]);
+        const demo = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
+          DEMO_DISTRIBUTOR_ID,
+        ]);
+        expect(real.rowCount).toBe(0);
+        expect(other.rowCount).toBe(0);
+        expect(demo.rowCount).toBe(1);
+        await client.query('ROLLBACK');
+      } finally {
+        client.release();
+      }
     }
+    expect(fake.outbox.length).toBe(sms);
     const live = await post('/v1/admin/auth/demo', {});
     expect(
       (
@@ -334,7 +336,7 @@ describe('S11b-6 demo login HTTP', () => {
         )
       ).statusCode,
     ).toBe(200);
-    const at = ok.json().accessToken as string;
+    const at = issued.json().accessToken as string;
     expect(
       (
         await app.inject({
