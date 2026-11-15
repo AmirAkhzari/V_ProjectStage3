@@ -16,6 +16,7 @@ import { FakeSmsProvider } from '../../src/modules/notification/infra/sms/fakeSm
 import { DEMO_AUD, DEMO_ISS } from '../../src/platform/auth/demoLogin.js';
 import { DemoAwareTokens } from '../../src/platform/auth/demoTokens.js';
 import { EddsaAccessTokenService, generateEd25519Key } from '../../src/platform/auth/eddsa.js';
+import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.js';
 import { RedisPgSessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
 import { TEST_OTP_HMAC_KEY } from '../../src/platform/config.js';
 import { pinoOptions } from '../../src/platform/logger.js';
@@ -86,6 +87,7 @@ describe('V11-DM-05 staging demo login', () => {
       healthChecks: [],
       verifier: tokens,
       sessionAuthority: authority,
+      assertIssuance: () => assertRedisForAuthIssuance(redis),
       otpAuth: otp,
       demoWriteProbe: true,
     });
@@ -198,6 +200,7 @@ describe('V11-DM-05 staging demo login', () => {
         RATE_DEMO_GLOBAL_DAY: '200',
       }),
       healthChecks: [],
+      assertIssuance: async () => {},
       otpAuth: {
         redis: { eval: () => Promise.reject(new Error('down')) } as unknown as Redis,
       } as OtpAuthRuntime,
