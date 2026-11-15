@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Writable } from 'node:stream';
 import { SignJWT } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
@@ -20,19 +21,34 @@ import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgR
 import { PgSessionStore } from '../../src/modules/identity/infra/session/pgSessionStore.js';
 import { FakeSmsProvider } from '../../src/modules/notification/infra/sms/fakeSmsProvider.js';
 import { DEMO_AUD, DEMO_ISS } from '../../src/platform/auth/demoLogin.js';
-import { DemoAwareTokens } from '../../src/platform/auth/demoTokens.js';
+import { DemoAwareTokens, createAccessTokensFromEnv } from '../../src/platform/auth/demoTokens.js';
 import {
   EddsaAccessTokenService,
+  exportPrivateJwk,
   generateEd25519Key,
   type Ed25519SigningKey,
 } from '../../src/platform/auth/eddsa.js';
 import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.js';
 import { JWT_ALG, JWT_TYP } from '../../src/platform/auth/jwt.js';
 import { RedisPgSessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
-import { TEST_AUDIT_HASH_KEY, TEST_OTP_HMAC_KEY } from '../../src/platform/config.js';
+import {
+  ConfigError,
+  TEST_AUDIT_HASH_KEY,
+  TEST_OTP_HMAC_KEY,
+  loadApiConfig,
+  PROD_FIXTURE_AUDIT_HASH_KEY,
+  PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+  PROD_FIXTURE_OTP_HMAC_KEY,
+  PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
+} from '../../src/platform/config.js';
 import { pinoOptions } from '../../src/platform/logger.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { productionApiConfig, testConfig } from '../helpers/config.js';
+import { demoSessionValidators } from '../helpers/frozenSessionSchemas.js';
+import {
+  newOtpIssuanceId,
+  putOtpChallenge,
+} from '../../src/modules/identity/infra/otp/redisOtpStore.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
@@ -41,7 +57,36 @@ import {
 
 const REAL_DIST = '44444444-4444-4444-8444-444444444444';
 const DEMO_DRIVER = '03000000-0000-4000-8000-000000000099';
+const DEMO_DRIVER_PASSWORD = 'correct-horse';
+const REAL_PHONE = '+989121110099';
 const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Resource not found' } };
+
+describe('V11-DM-03 production loader', () => {
+  it('loadApiConfig rejects production when DEMO_LOGIN_ENABLED is set', () => {
+    expect(() =>
+      loadApiConfig({
+        NODE_ENV: 'production',
+        LOG_LEVEL: 'silent',
+        DATABASE_URL_APP:
+          'postgres://vproject_app:vproject@db.example.ir:5432/vproject?sslmode=require',
+        DATABASE_URL_IDENTITY:
+          'postgres://vproject_identity:vproject@db.example.ir:5432/vproject?sslmode=require',
+        REDIS_URL: 'rediss://cache.example.ir:6379',
+        OPENAPI_DOCS_ENABLED: 'false',
+        TRUST_PROXY_HOPS: '1',
+        AUDIT_HASH_KEY: PROD_FIXTURE_AUDIT_HASH_KEY,
+        SMS_PROVIDER: 'kavenegar',
+        SMS_LIVE_SEND: 'true',
+        SMS_BUDGET_HOUR: '100',
+        SMS_BUDGET_DAY: '1000',
+        KAVENEGAR_API_KEY: PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,
+        KAVENEGAR_TEMPLATE: PROD_FIXTURE_KAVENEGAR_TEMPLATE,
+        OTP_HMAC_KEY: PROD_FIXTURE_OTP_HMAC_KEY,
+        DEMO_LOGIN_ENABLED: 'true',
+      }),
+    ).toThrow(ConfigError);
+  });
+});
 
 describe('S11b-6 demo login HTTP', () => {
   let pgRoles: StartedPostgresRoles;
@@ -100,7 +145,6 @@ describe('S11b-6 demo login HTTP', () => {
       log,
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
-      demoLogin: true,
       runAfterRespond: (fn) => {
         afterRespond = Promise.resolve(fn());
       },
@@ -130,8 +174,12 @@ describe('S11b-6 demo login HTTP', () => {
     );
     await ownerPool.query(
       `INSERT INTO identity.driver_credentials (account_id, distributor_id, password_hash)
-       VALUES ($1, $2, 'not-a-real-hash')`,
-      [DEMO_DRIVER, DEMO_DISTRIBUTOR_ID],
+       VALUES ($1, $2, $3)`,
+      [
+        DEMO_DRIVER,
+        DEMO_DISTRIBUTOR_ID,
+        await new Argon2idPasswordHasher().hash(DEMO_DRIVER_PASSWORD),
+      ],
     );
     app = await buildApp({
       config: testConfig({
@@ -169,24 +217,27 @@ describe('S11b-6 demo login HTTP', () => {
     return response;
   };
 
-  it('hides A5/B5 in production even when the flag is set', async () => {
-    for (const flag of [undefined, 'true'] as const) {
-      const hidden = await buildApp({
-        config: productionApiConfig(flag === undefined ? {} : { DEMO_LOGIN_ENABLED: flag }),
-        healthChecks: [],
-      });
-      try {
-        const unknown = await hidden.inject({ method: 'POST', url: '/no-such-demo-route' });
-        const a5 = await hidden.inject({ method: 'POST', url: '/v1/app/auth/demo' });
-        const b5 = await hidden.inject({ method: 'POST', url: '/v1/admin/auth/demo' });
-        expect(a5.statusCode).toBe(404);
-        expect(a5.body).toBe(unknown.body);
-        expect(b5.body).toBe(unknown.body);
-        expect(a5.json()).toEqual(NOT_FOUND);
-        expect(hidden.printRoutes()).not.toMatch(/demo \(POST\)/);
-      } finally {
-        await hidden.close();
-      }
+  it('hides A5/B5 in production even when the flag is set on the config object', async () => {
+    const hidden = await buildApp({
+      config: { ...productionApiConfig(), DEMO_LOGIN_ENABLED: 'true' },
+      healthChecks: [],
+    });
+    try {
+      const headers = { 'x-request-id': 'prod-demo-404', 'content-type': 'application/json' };
+      const unknown = await hidden.inject({ method: 'POST', url: '/no-such-demo-route', headers });
+      const a5 = await hidden.inject({ method: 'POST', url: '/v1/app/auth/demo', headers });
+      const b5 = await hidden.inject({ method: 'POST', url: '/v1/admin/auth/demo', headers });
+      expect(a5.statusCode).toBe(unknown.statusCode);
+      expect(b5.statusCode).toBe(unknown.statusCode);
+      expect(a5.headers).toEqual(unknown.headers);
+      expect(b5.headers).toEqual(unknown.headers);
+      expect(a5.body).toBe(unknown.body);
+      expect(b5.body).toBe(unknown.body);
+      expect(a5.json()).toEqual(NOT_FOUND);
+      expect(hidden.printRoutes()).not.toMatch(/demo \(POST\)/);
+      expect(hidden.hasRoute({ method: 'POST', url: '/v1/app/auth/demo' })).toBe(false);
+    } finally {
+      await hidden.close();
     }
   });
 
@@ -218,6 +269,7 @@ describe('S11b-6 demo login HTTP', () => {
     expect(await sessionCount(ownerPool, DEMO_SHOPKEEPER_ID)).toBe(before);
     const ok = await post('/v1/app/auth/demo', {});
     expect(ok.statusCode).toBe(200);
+    expect(demoSessionValidators().shopkeeper(ok.json())).toBe(true);
     expect(ok.json().user.isNewAccount).toBe(false);
     expect(ok.json().user.phone).toBe(DEMO_SHOPKEEPER_PHONE);
     expect(ok.json().tokenType).toBe('Bearer');
@@ -242,8 +294,10 @@ describe('S11b-6 demo login HTTP', () => {
 
   it('mints only the seeded distributor admin and ignores the scope header', async () => {
     const sms = fake.outbox.length;
-    const ok = await post('/v1/admin/auth/demo', {}, { 'x-scope-distributor': REAL_DIST });
+    const scope = randomUUID();
+    const ok = await post('/v1/admin/auth/demo', {}, { 'x-scope-distributor': scope });
     expect(ok.statusCode).toBe(200);
+    expect(demoSessionValidators().staff(ok.json())).toBe(true);
     expect(ok.json().staff.role).toBe('distributor_admin');
     expect(ok.json().staff.distributorId).toBe(DEMO_DISTRIBUTOR_ID);
     expect(claims(ok.json().accessToken).did).toBe(DEMO_DISTRIBUTOR_ID);
@@ -257,15 +311,29 @@ describe('S11b-6 demo login HTTP', () => {
       const real = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
         REAL_DIST,
       ]);
+      const other = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
+        scope,
+      ]);
       const demo = await client.query(`SELECT id FROM tenancy.distributors WHERE id = $1`, [
         DEMO_DISTRIBUTOR_ID,
       ]);
       expect(real.rowCount).toBe(0);
+      expect(other.rowCount).toBe(0);
       expect(demo.rowCount).toBe(1);
       await client.query('ROLLBACK');
     } finally {
       client.release();
     }
+    const live = await post('/v1/admin/auth/demo', {});
+    expect(
+      (
+        await post(
+          '/v1/admin/auth/logout',
+          {},
+          { authorization: `Bearer ${live.json().accessToken as string}` },
+        )
+      ).statusCode,
+    ).toBe(200);
     const at = ok.json().accessToken as string;
     expect(
       (
@@ -295,27 +363,40 @@ describe('S11b-6 demo login HTTP', () => {
     const logged = await post('/v1/app/auth/logout', { refreshToken: successor });
     expect(logged.statusCode).toBe(200);
     expect((await post('/v1/app/auth/refresh', { refreshToken: successor })).statusCode).toBe(401);
-    const again = await post('/v1/app/auth/demo', {});
-    const held = again.json().refreshToken as string;
-    const before = await tokenCount(ownerPool, DEMO_SHOPKEEPER_ID);
+    const staff = await post('/v1/admin/auth/demo', {});
+    const staffRefresh = await post('/v1/admin/auth/refresh', {
+      refreshToken: staff.json().refreshToken as string,
+    });
+    expect(staffRefresh.statusCode).toBe(200);
+    expect(claims(staffRefresh.json().accessToken).iss).toBe(DEMO_ISS);
+    expect(claims(staffRefresh.json().accessToken).aud).toBe(DEMO_AUD);
+    expect(claims(staffRefresh.json().accessToken).did).toBe(DEMO_DISTRIBUTOR_ID);
+    const held = (await post('/v1/app/auth/demo', {})).json().refreshToken as string;
+    const heldStaff = (await post('/v1/admin/auth/demo', {})).json().refreshToken as string;
+    const before = await writeCounts(ownerPool);
     const off = await buildApp({
       config: testConfig({ TRUST_PROXY_HOPS: '1' }),
       healthChecks: [],
       verifier: tokens,
       sessionAuthority: otp.authority,
       assertIssuance: () => assertRedisForAuthIssuance(redis),
-      otpAuth: { ...otp, demoLogin: false },
+      otpAuth: otp,
     });
     try {
-      const denied = await off.inject({
-        method: 'POST',
-        url: '/v1/app/auth/refresh',
-        headers: { 'content-type': 'application/json' },
-        payload: { refreshToken: held },
-      });
-      expect(denied.statusCode).toBe(401);
-      expect(denied.json().error.code).toBe('UNAUTHENTICATED');
-      expect(await tokenCount(ownerPool, DEMO_SHOPKEEPER_ID)).toBe(before);
+      for (const [url, refreshToken] of [
+        ['/v1/app/auth/refresh', held],
+        ['/v1/admin/auth/refresh', heldStaff],
+      ] as const) {
+        const denied = await off.inject({
+          method: 'POST',
+          url,
+          headers: { 'content-type': 'application/json' },
+          payload: { refreshToken },
+        });
+        expect(denied.statusCode).toBe(401);
+        expect(denied.json().error.code).toBe('UNAUTHENTICATED');
+      }
+      expect(await writeCounts(ownerPool)).toEqual(before);
     } finally {
       await off.close();
     }
@@ -385,30 +466,73 @@ describe('S11b-6 demo login HTTP', () => {
     expect(b1.statusCode).toBe(200);
     expect(a1.json()).toEqual(b1.json());
     expect(fake.outbox.length).toBe(sms);
-    const a2 = await post('/v1/app/auth/otp/verify', {
+    const shopBefore = await sessionCount(ownerPool, DEMO_SHOPKEEPER_ID);
+    const staffBefore = await sessionCount(ownerPool, DEMO_STAFF_ID);
+    await putOtpChallenge(redis, {
+      pepper: TEST_OTP_HMAC_KEY,
+      purpose: 'app',
       phone: DEMO_SHOPKEEPER_PHONE,
-      code: '000000',
+      code: '246810',
+      issuanceId: newOtpIssuanceId(),
     });
-    const unknown = await post('/v1/app/auth/otp/verify', {
-      phone: '+989111111111',
-      code: '000000',
+    await putOtpChallenge(redis, {
+      pepper: TEST_OTP_HMAC_KEY,
+      purpose: 'staff',
+      phone: DEMO_STAFF_PHONE,
+      code: '246810',
+      issuanceId: newOtpIssuanceId(),
+    });
+    const headers = { 'content-type': 'application/json', 'x-request-id': 'demo-otp-hide' };
+    const a2 = await app.inject({
+      method: 'POST',
+      url: '/v1/app/auth/otp/verify',
+      headers,
+      payload: { phone: DEMO_SHOPKEEPER_PHONE, code: '246810' },
+    });
+    const unknown = await app.inject({
+      method: 'POST',
+      url: '/v1/app/auth/otp/verify',
+      headers,
+      payload: { phone: '+989111111111', code: '246810' },
     });
     expect(a2.statusCode).toBe(unknown.statusCode);
-    expect(a2.json()).toEqual(unknown.json());
-    const b2 = await post('/v1/admin/auth/otp/verify', { phone: DEMO_STAFF_PHONE, code: '000000' });
-    const unknownStaff = await post('/v1/admin/auth/otp/verify', {
-      phone: '+989111111112',
-      code: '000000',
+    expect(a2.headers).toEqual(unknown.headers);
+    expect(a2.body).toBe(unknown.body);
+    const b2 = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/auth/otp/verify',
+      headers,
+      payload: { phone: DEMO_STAFF_PHONE, code: '246810' },
+    });
+    const unknownStaff = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/auth/otp/verify',
+      headers,
+      payload: { phone: '+989111111112', code: '246810' },
     });
     expect(b2.statusCode).toBe(unknownStaff.statusCode);
-    expect(b2.json()).toEqual(unknownStaff.json());
-    const demoDriver = await post('/v1/driver/auth/login', {
-      username: 'demodriver',
-      password: 'nope',
+    expect(b2.headers).toEqual(unknownStaff.headers);
+    expect(b2.body).toBe(unknownStaff.body);
+    expect(await sessionCount(ownerPool, DEMO_SHOPKEEPER_ID)).toBe(shopBefore);
+    expect(await sessionCount(ownerPool, DEMO_STAFF_ID)).toBe(staffBefore);
+    const driverBefore = await sessionCount(ownerPool, DEMO_DRIVER);
+    const driverHeaders = { 'content-type': 'application/json', 'x-request-id': 'demo-c1-hide' };
+    const demoDriver = await app.inject({
+      method: 'POST',
+      url: '/v1/driver/auth/login',
+      headers: driverHeaders,
+      payload: { username: 'demodriver', password: DEMO_DRIVER_PASSWORD },
     });
-    const missing = await post('/v1/driver/auth/login', { username: 'nobody', password: 'nope' });
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/v1/driver/auth/login',
+      headers: driverHeaders,
+      payload: { username: 'nobody', password: DEMO_DRIVER_PASSWORD },
+    });
     expect(demoDriver.statusCode).toBe(401);
-    expect(demoDriver.json()).toEqual(missing.json());
+    expect(demoDriver.headers).toEqual(missing.headers);
+    expect(demoDriver.body).toBe(missing.body);
+    expect(await sessionCount(ownerPool, DEMO_DRIVER)).toBe(driverBefore);
   });
 
   it('fails closed with no new session when the seed is missing, Postgres fails, or Redis fails', async () => {
@@ -465,6 +589,140 @@ describe('S11b-6 demo login HTTP', () => {
       redis.ping = ping;
     }
   });
+
+  it('reuses a demo family once across 10 parallel refreshes', async () => {
+    const issued = await post('/v1/app/auth/demo', {});
+    const parent = issued.json().refreshToken as string;
+    expect((await post('/v1/app/auth/refresh', { refreshToken: parent })).statusCode).toBe(200);
+    const raced = await Promise.all(
+      Array.from({ length: 10 }, () => post('/v1/app/auth/refresh', { refreshToken: parent })),
+    );
+    expect(raced.filter((row) => row.statusCode === 200 && !row.json().refreshToken)).toHaveLength(
+      1,
+    );
+    expect(raced.filter((row) => row.statusCode === 200 && row.json().refreshToken)).toHaveLength(
+      0,
+    );
+    const family = await ownerPool.query<{ revoke_reason: string }>(
+      `SELECT revoke_reason FROM identity.sessions WHERE family_id = (
+         SELECT family_id FROM identity.sessions WHERE sid = $1)`,
+      [claims(issued.json().accessToken as string).sid],
+    );
+    expect(family.rows.every((row) => row.revoke_reason === 'refresh_reuse')).toBe(true);
+    const audit = await ownerPool.query(
+      `SELECT 1 FROM platform.audit_log
+        WHERE actor_id = $1 AND action = 'refresh_reuse'`,
+      [DEMO_SHOPKEEPER_ID],
+    );
+    expect(audit.rowCount).toBe(1);
+    const events = await ownerPool.query(
+      `SELECT 1 FROM platform.outbox_events
+        WHERE payload->>'accountId' = $1 AND payload->>'reason' = 'refresh_reuse'`,
+      [DEMO_SHOPKEEPER_ID],
+    );
+    expect(events.rowCount).toBe(1);
+  });
+
+  it('keeps a real shopkeeper family on the production audience', async () => {
+    await putOtpChallenge(redis, {
+      pepper: TEST_OTP_HMAC_KEY,
+      purpose: 'app',
+      phone: REAL_PHONE,
+      code: '135790',
+      issuanceId: newOtpIssuanceId(),
+    });
+    const issued = await post('/v1/app/auth/otp/verify', { phone: REAL_PHONE, code: '135790' });
+    expect(issued.statusCode).toBe(200);
+    expect(claims(issued.json().accessToken).iss).not.toBe(DEMO_ISS);
+    const refreshed = await post('/v1/app/auth/refresh', {
+      refreshToken: issued.json().refreshToken as string,
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(claims(refreshed.json().accessToken).iss).not.toBe(DEMO_ISS);
+    expect(claims(refreshed.json().accessToken).aud).not.toBe(DEMO_AUD);
+    const row = await ownerPool.query<{ is_demo: boolean }>(
+      `SELECT is_demo FROM identity.accounts WHERE phone = $1 AND typ = 'shopkeeper'`,
+      [REAL_PHONE],
+    );
+    expect(row.rows[0]?.is_demo).toBe(false);
+  });
+
+  it('rejects a demo access token when createAccessTokensFromEnv has the flag off', async () => {
+    const issued = await post('/v1/app/auth/demo', {});
+    const off = await createAccessTokensFromEnv({
+      NODE_ENV: 'test',
+      JWT_ISS: 'vproject',
+      JWT_EDDSA_ACTIVE_KID: 'k-prod',
+      JWT_EDDSA_JWKS: JSON.stringify({ keys: [await exportPrivateJwk(prodKey)] }),
+    });
+    const offApp = await buildApp({
+      config: testConfig({ TRUST_PROXY_HOPS: '1' }),
+      healthChecks: [],
+      verifier: off,
+      sessionAuthority: otp.authority,
+      assertIssuance: () => assertRedisForAuthIssuance(redis),
+      otpAuth: otp,
+    });
+    try {
+      const response = await offApp.inject({
+        method: 'GET',
+        url: '/v1/app/still-there',
+        headers: { authorization: `Bearer ${issued.json().accessToken as string}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error.code).toBe('UNAUTHENTICATED');
+    } finally {
+      await offApp.close();
+    }
+  });
+
+  it('does not log demo tokens or the demo private key', async () => {
+    const chunks: string[] = [];
+    const logged = await buildApp({
+      config: testConfig({
+        TRUST_PROXY_HOPS: '1',
+        DEMO_LOGIN_ENABLED: 'true',
+        LOG_LEVEL: 'info',
+      }),
+      healthChecks: [],
+      verifier: tokens,
+      sessionAuthority: otp.authority,
+      assertIssuance: () => assertRedisForAuthIssuance(redis),
+      otpAuth: otp,
+      logDestination: new Writable({
+        write(chunk, _encoding, callback) {
+          chunks.push(chunk.toString());
+          callback();
+        },
+      }),
+    });
+    try {
+      const shop = await logged.inject({
+        method: 'POST',
+        url: '/v1/app/auth/demo',
+        headers: { 'content-type': 'application/json' },
+        payload: {},
+      });
+      const staff = await logged.inject({
+        method: 'POST',
+        url: '/v1/admin/auth/demo',
+        headers: { 'content-type': 'application/json' },
+        payload: {},
+      });
+      const blob = chunks.join('\n');
+      expect(blob).toContain('auth/demo');
+      const secret = await exportPrivateJwk(demoKey);
+      expect(blob).not.toContain(shop.json().accessToken as string);
+      expect(blob).not.toContain(shop.json().refreshToken as string);
+      expect(blob).not.toContain(staff.json().accessToken as string);
+      expect(blob).not.toContain(staff.json().refreshToken as string);
+      expect(blob).not.toContain(String(secret['d']));
+      expect(blob).not.toContain(DEMO_SHOPKEEPER_PHONE);
+      expect(blob).not.toContain(DEMO_STAFF_PHONE);
+    } finally {
+      await logged.close();
+    }
+  });
 });
 
 function claims(token: string): { iss?: string; aud?: string; did?: string; sid: string } {
@@ -484,13 +742,20 @@ async function sessionCount(pool: pg.Pool, accountId: string): Promise<number> {
   return Number(row.rows[0]?.c ?? 0);
 }
 
-async function tokenCount(pool: pg.Pool, accountId: string): Promise<number> {
-  const row = await pool.query<{ c: string }>(
-    `SELECT count(*)::text AS c FROM identity.refresh_tokens t
-       JOIN identity.sessions s ON s.sid = t.sid WHERE s.account_id = $1`,
-    [accountId],
+async function writeCounts(pool: pg.Pool): Promise<{
+  sessions: string;
+  tokens: string;
+  audit: string;
+  outbox: string;
+}> {
+  const row = await pool.query<{ sessions: string; tokens: string; audit: string; outbox: string }>(
+    `SELECT
+       (SELECT count(*) FROM identity.sessions)::text AS sessions,
+       (SELECT count(*) FROM identity.refresh_tokens)::text AS tokens,
+       (SELECT count(*) FROM platform.audit_log)::text AS audit,
+       (SELECT count(*) FROM platform.outbox_events)::text AS outbox`,
   );
-  return Number(row.rows[0]?.c ?? 0);
+  return row.rows[0] as { sessions: string; tokens: string; audit: string; outbox: string };
 }
 
 function signRaw(
