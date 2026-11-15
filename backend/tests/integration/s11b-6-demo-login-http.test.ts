@@ -223,7 +223,7 @@ describe('S11b-6 demo login HTTP', () => {
       healthChecks: [],
     });
     try {
-      const headers = { 'x-request-id': 'prod-demo-404', 'content-type': 'application/json' };
+      const headers = { 'x-request-id': 'prod-demo-404' };
       const unknown = await hidden.inject({ method: 'POST', url: '/no-such-demo-route', headers });
       const a5 = await hidden.inject({ method: 'POST', url: '/v1/app/auth/demo', headers });
       const b5 = await hidden.inject({ method: 'POST', url: '/v1/admin/auth/demo', headers });
@@ -710,7 +710,9 @@ describe('S11b-6 demo login HTTP', () => {
         payload: {},
       });
       const blob = chunks.join('\n');
-      expect(blob).toContain('auth/demo');
+      expect(shop.statusCode).toBe(200);
+      expect(staff.statusCode).toBe(200);
+      expect(blob).toContain('request completed');
       const secret = await exportPrivateJwk(demoKey);
       expect(blob).not.toContain(shop.json().accessToken as string);
       expect(blob).not.toContain(shop.json().refreshToken as string);
