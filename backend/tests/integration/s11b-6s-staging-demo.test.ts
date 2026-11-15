@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
+import type { FastifyPluginAsync } from 'fastify';
 import type { Redis } from 'ioredis';
 import pg from 'pg';
 import { pino } from 'pino';
@@ -8,8 +10,11 @@ import { seedDemoLogin } from '../../scripts/seed-demo.js';
 import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpAuth.js';
 import {
   DEMO_DA_PERMISSIONS,
+  DEMO_DISTRIBUTOR_ID,
   DEMO_STAFF_ID,
 } from '../../src/modules/identity/domain/demoAccounts.js';
+import { SUPER_ADMIN_PERMISSIONS } from '../../src/modules/identity/domain/permissions.js';
+import { AppError } from '../../src/platform/http/errors.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from '../../src/modules/identity/infra/session/pgSessionStore.js';
 import { FakeSmsProvider } from '../../src/modules/notification/infra/sms/fakeSmsProvider.js';
@@ -30,6 +35,23 @@ import {
 
 const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Resource not found' } };
 const WRITES = ['/v1/admin/orders', '/v1/admin/stock', '/v1/admin/staff'] as const;
+/** Seed DA base is `drivers.manage`. This is wider, and wider than the demo allowlist. */
+const WIDE_DA = ['drivers.manage', 'dashboard.view', 'orders.update', 'staff.manage'] as const;
+
+const demoWriteProbes: FastifyPluginAsync = async (probe) => {
+  for (const [path, permission] of [
+    ['/orders', 'orders.update'],
+    ['/stock', 'stock.manage'],
+    ['/staff', 'staff.manage'],
+  ] as const) {
+    probe.post(path, async (request) => {
+      if (!request.permissions?.includes(permission)) {
+        throw new AppError('FORBIDDEN', 403, 'Forbidden');
+      }
+      return { ok: true };
+    });
+  }
+};
 
 describe('V11-DM-05 staging demo login', () => {
   let pgRoles: StartedPostgresRoles;
@@ -37,6 +59,7 @@ describe('V11-DM-05 staging demo login', () => {
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
+  let fake: FakeSmsProvider;
   let app: App;
 
   beforeAll(async () => {
@@ -62,6 +85,7 @@ describe('V11-DM-05 staging demo login', () => {
     );
     const authority = new RedisPgSessionAuthority(redis, new PgSessionStore(identityPool));
     const log = pino(pinoOptions({ LOG_LEVEL: 'silent' }));
+    fake = new FakeSmsProvider({ capture: true });
     const otp: OtpAuthRuntime = {
       identityPool,
       redis,
@@ -71,7 +95,7 @@ describe('V11-DM-05 staging demo login', () => {
         onSidsRevoked: (sids) => authority.deny(sids),
         log,
       }),
-      sms: new FakeSmsProvider({ capture: true }),
+      sms: fake,
       log,
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
@@ -89,7 +113,7 @@ describe('V11-DM-05 staging demo login', () => {
       sessionAuthority: authority,
       assertIssuance: () => assertRedisForAuthIssuance(redis),
       otpAuth: otp,
-      demoWriteProbe: true,
+      adminTestRoutes: demoWriteProbes,
     });
   }, 120_000);
 
@@ -231,6 +255,30 @@ describe('V11-DM-05 staging demo login', () => {
     expect(await counts()).toEqual(afterSecond);
   });
 
+  it('does not cap a real DA or a super_admin on B3 refresh', async () => {
+    const daLogin = await loginStaff({
+      phone: '+989121199001',
+      role: 'distributor_admin',
+      distributorId: DEMO_DISTRIBUTOR_ID,
+      permissions: WIDE_DA,
+    });
+    expect(daLogin.permissions).toEqual([...WIDE_DA]);
+    const daRefresh = await post('/v1/admin/auth/refresh', { refreshToken: daLogin.refreshToken });
+    expect(daRefresh.statusCode, JSON.stringify(daRefresh.json())).toBe(200);
+    expect(daRefresh.json().staff.permissions).toEqual(daLogin.permissions);
+
+    const saLogin = await loginStaff({
+      phone: '+989121199002',
+      role: 'super_admin',
+      distributorId: null,
+      permissions: [],
+    });
+    expect(saLogin.permissions).toEqual([...SUPER_ADMIN_PERMISSIONS]);
+    const saRefresh = await post('/v1/admin/auth/refresh', { refreshToken: saLogin.refreshToken });
+    expect(saRefresh.statusCode, JSON.stringify(saRefresh.json())).toBe(200);
+    expect(saRefresh.json().staff.permissions).toEqual([...SUPER_ADMIN_PERMISSIONS]);
+  });
+
   async function post(url: string, payload: object, headers: Record<string, string> = {}) {
     return app.inject({
       method: 'POST',
@@ -238,6 +286,33 @@ describe('V11-DM-05 staging demo login', () => {
       headers: { 'content-type': 'application/json', ...headers },
       payload,
     });
+  }
+
+  async function loginStaff(input: {
+    phone: string;
+    role: 'distributor_admin' | 'super_admin';
+    distributorId: string | null;
+    permissions: readonly string[];
+  }) {
+    const accountId = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO identity.accounts
+         (id, typ, phone, status, session_version, must_change_password, is_demo, created_at)
+       VALUES ($1, 'staff', $2, 'active', 0, false, false, now())`,
+      [accountId, input.phone],
+    );
+    await ownerPool.query(
+      `INSERT INTO identity.staff_memberships (account_id, role, distributor_id, permissions)
+       VALUES ($1, $2, $3, $4::text[])`,
+      [accountId, input.role, input.distributorId, input.permissions],
+    );
+    const sent = await post('/v1/admin/auth/otp/send', { phone: input.phone });
+    expect(sent.statusCode, JSON.stringify(sent.json())).toBe(200);
+    const code = fake.outbox.at(-1)?.code;
+    const verified = await post('/v1/admin/auth/otp/verify', { phone: input.phone, code });
+    expect(verified.statusCode, JSON.stringify(verified.json())).toBe(200);
+    const body = verified.json() as { refreshToken: string; staff: { permissions: string[] } };
+    return { refreshToken: body.refreshToken, permissions: body.staff.permissions };
   }
 
   async function counts() {

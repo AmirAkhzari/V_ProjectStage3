@@ -55,17 +55,4 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     }
     return loginDemoStaff(app.otpAuth, request.ip);
   });
-  if (!app.demoWriteProbe) return;
-  for (const [path, permission] of [
-    ['/orders', 'orders.update'],
-    ['/stock', 'stock.manage'],
-    ['/staff', 'staff.manage'],
-  ] as const) {
-    app.post(path, async (request) => {
-      if (!request.permissions?.includes(permission)) {
-        throw new AppError('FORBIDDEN', 403, 'Forbidden');
-      }
-      return { ok: true };
-    });
-  }
 };

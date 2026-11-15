@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyPluginAsync } from 'fastify';
 import swagger from '@fastify/swagger';
 import type { DestinationStream } from 'pino';
 import {
@@ -34,8 +34,6 @@ declare module 'fastify' {
     nodeEnv: Config['NODE_ENV'];
     demoLogin: boolean;
     demoRate?: { perIpHour: number; globalDay: number };
-    /** Test-only write probes. Production leaves this false. */
-    demoWriteProbe: boolean;
     driverAuth?: DriverAuthRuntime;
     otpAuth?: OtpAuthRuntime;
   }
@@ -51,7 +49,8 @@ export interface BuildAppOptions {
   otpAuth?: OtpAuthRuntime;
   /** Test capture. Production uses Fastify's default destination. */
   logDestination?: DestinationStream;
-  demoWriteProbe?: boolean;
+  /** Test-only plugin mounted inside `/v1/admin` before the catch-all. */
+  adminTestRoutes?: FastifyPluginAsync;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -83,7 +82,6 @@ export async function buildApp(options: BuildAppOptions) {
   );
   const demoRate = demoRateFromConfig(options.config);
   if (demoRate) app.decorate('demoRate', demoRate);
-  app.decorate('demoWriteProbe', options.demoWriteProbe === true);
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
 
@@ -126,7 +124,11 @@ export async function buildApp(options: BuildAppOptions) {
     assertIssuance,
   };
   await app.register(appGroup, { prefix: appGroupSpec.prefix, ...groupOpts });
-  await app.register(adminGroup, { prefix: adminGroupSpec.prefix, ...groupOpts });
+  await app.register(adminGroup, {
+    prefix: adminGroupSpec.prefix,
+    ...groupOpts,
+    ...(options.adminTestRoutes ? { extraRoutes: options.adminTestRoutes } : {}),
+  });
   await app.register(driverGroup, { prefix: driverGroupSpec.prefix, ...groupOpts });
 
   const bus = new InProcessEventBus(new InMemoryInboxStore());

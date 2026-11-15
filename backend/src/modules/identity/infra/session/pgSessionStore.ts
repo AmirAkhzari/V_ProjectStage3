@@ -27,6 +27,7 @@ interface LookupRow {
   staff_role: string | null;
   permissions: string[] | null;
   must_change_password: boolean;
+  is_demo: boolean | null;
 }
 
 export class PgSessionStore implements SessionReader {
@@ -34,9 +35,11 @@ export class PgSessionStore implements SessionReader {
 
   async lookup(sid: string): Promise<SessionSnapshot | null> {
     const found = await this.pool.query<LookupRow>(
-      `SELECT sid, account_id, typ, family_id, revoked_at, session_version,
-              account_status, distributor_id, staff_role, permissions, must_change_password
-         FROM identity.lookup_session($1)`,
+      `SELECT s.sid, s.account_id, s.typ, s.family_id, s.revoked_at, s.session_version,
+              s.account_status, s.distributor_id, s.staff_role, s.permissions,
+              s.must_change_password, a.is_demo
+         FROM identity.lookup_session($1) AS s
+         LEFT JOIN identity.accounts AS a ON a.id = s.account_id`,
       [sid],
     );
     const row = found.rows[0];
@@ -45,13 +48,8 @@ export class PgSessionStore implements SessionReader {
     let permissions = staffRole
       ? [...permissionsForRole(staffRole, permissionList(row.permissions))]
       : [];
-    if (staffRole) {
-      const demo = await this.pool.query<{ is_demo: boolean }>(
-        `SELECT is_demo FROM identity.accounts WHERE id = $1`,
-        [row.account_id],
-      );
-      if (demo.rows[0]?.is_demo === true) permissions = demoDaPermissions(permissions);
-    }
+    // Missing or null is_demo is treated as demo so a hidden row cannot widen the session.
+    if (staffRole && row.is_demo !== false) permissions = demoDaPermissions(permissions);
     return {
       sid: row.sid,
       accountId: row.account_id,
