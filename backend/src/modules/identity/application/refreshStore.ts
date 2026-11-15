@@ -18,6 +18,8 @@ export type RefreshRejectReason =
 export interface RefreshCallContext {
   ip?: string | null;
   userAgent?: string | null;
+  /** When false, a demo account RT is rejected with no write. */
+  demoLogin?: boolean;
 }
 
 /** Server snapshot read inside the rotate transaction. Not taken from the presented RT. */
@@ -28,6 +30,7 @@ export interface RefreshSubjectProfile {
   distributorId: string | null;
   permissions: string[];
   sessionVersion: number;
+  isDemo: boolean;
 }
 
 export interface RefreshIssueInput {

@@ -146,6 +146,9 @@ describe('loadApiConfig', () => {
   });
 
   it('rejects DEMO_* flags in production', () => {
+    expect(() => loadApiConfig({ ...validApiProduction, DEMO_RESET_ENABLED: 'true' })).toThrow(
+      ConfigError,
+    );
     expect(() => loadApiConfig({ ...validApiProduction, DEMO_LOGIN_ENABLED: 'true' })).toThrow(
       ConfigError,
     );

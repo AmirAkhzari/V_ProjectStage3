@@ -43,7 +43,9 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
         ? registered
         : `${spec.prefix}${registered}`;
       const requestPath = requestPathOf(request);
-      if (isAuthIssuanceRoute(request.method, requestPath, spec.group)) {
+      const registeredPath = request.routeOptions.url ?? '';
+      const unregisteredDemo = registeredPath.endsWith('/*') && requestPath.endsWith('/auth/demo');
+      if (!unregisteredDemo && isAuthIssuanceRoute(request.method, requestPath, spec.group)) {
         await assertIssuance();
       }
       if (

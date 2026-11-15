@@ -38,6 +38,8 @@ export interface EddsaJwtOptions {
   activeKid: string;
   keys: readonly Ed25519KeyPair[];
   now?: Clock;
+  /** When set, every token uses this aud. typ/group check still applies. */
+  audience?: string;
 }
 
 export interface AccessTokenSigner {
@@ -174,7 +176,7 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
       .setProtectedHeader({ alg: JWT_ALG, kid: key.kid, typ: JWT_TYP })
       .setSubject(subject.sub)
       .setIssuer(this.options.iss)
-      .setAudience(JWT_AUDIENCE[subject.typ])
+      .setAudience(this.options.audience ?? JWT_AUDIENCE[subject.typ])
       .setIssuedAt(issuedAt)
       .setNotBefore(issuedAt)
       .setExpirationTime(issuedAt + ACCESS_TOKEN_TTL_SECONDS)
@@ -200,7 +202,7 @@ export class EddsaAccessTokenService implements AccessTokenVerifier, AccessToken
     const key = this.keys.get(header.kid);
     if (!key) throw new TokenVerificationError('unknown kid');
 
-    const expectedAud = JWT_AUDIENCE[expectedGroup];
+    const expectedAud = this.options.audience ?? JWT_AUDIENCE[expectedGroup];
     let payload: JWTPayload;
     try {
       const verified = await jwtVerify(token, key.publicKey, {

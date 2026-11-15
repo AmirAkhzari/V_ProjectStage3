@@ -6,7 +6,7 @@ import { pino } from 'pino';
 import { buildApp, type App } from '../../src/app.js';
 import type { DriverAuthRuntime } from '../../src/modules/identity/application/driverAuth.js';
 import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpAuth.js';
-import { refreshSchemaValidators } from '../../src/modules/identity/application/refreshAuth.js';
+import { refreshSchemaValidators } from '../helpers/frozenSessionSchemas.js';
 import { Argon2idPasswordHasher } from '../../src/modules/identity/infra/crypto/argon2Hasher.js';
 import { hashRefreshToken } from '../../src/modules/identity/infra/crypto/refreshHash.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
@@ -1106,6 +1106,7 @@ describe('S11b-5b A3/A4/B3/B4', () => {
             distributorId: null,
             permissions: [],
             sessionVersion: 0,
+            isDemo: false,
           },
         }),
       logoutPresented: (...args) => real.logoutPresented(...args),

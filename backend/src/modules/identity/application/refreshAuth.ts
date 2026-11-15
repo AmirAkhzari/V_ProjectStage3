@@ -1,8 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
-import { parse } from 'yaml';
 import { AppError } from '../../../platform/http/errors.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../../../platform/auth/jwt.js';
 import { systemClock } from '../../../platform/lib/clock.js';
@@ -90,9 +85,10 @@ export function assertEmptyLogoutBody(body: unknown): void {
 export function refreshCallContext(
   ip: string,
   userAgent: string | string[] | undefined,
+  demoLogin = false,
 ): RefreshCallContext {
   const ua = Array.isArray(userAgent) ? userAgent[0] : userAgent;
-  return { ip, ...(ua ? { userAgent: ua.slice(0, 200) } : {}) };
+  return { ip, demoLogin, ...(ua ? { userAgent: ua.slice(0, 200) } : {}) };
 }
 
 export interface ShopkeeperRefreshBody {
@@ -138,7 +134,6 @@ export async function refreshShopkeeper(
     ...refreshPair(result),
   };
   if (result.status === 'rotated' && !body.refreshToken) internal(runtime, 'dependentRequired');
-  assertRefreshShape(runtime, 'ShopkeeperRefreshSession', body);
   return body;
 }
 
@@ -165,7 +160,6 @@ export async function refreshStaff(
     ...refreshPair(result),
   };
   if (result.status === 'rotated' && !body.refreshToken) internal(runtime, 'dependentRequired');
-  assertRefreshShape(runtime, 'StaffRefreshSession', body);
   return body;
 }
 
@@ -249,6 +243,7 @@ async function sign(
     sid: result.sid,
     sv: profile.sessionVersion,
     ...(typ === 'staff' && profile.distributorId ? { did: profile.distributorId } : {}),
+    ...(profile.isDemo ? { demo: true as const } : {}),
   });
 }
 
@@ -262,57 +257,4 @@ function refreshPair(result: {
     refreshToken: result.refreshToken,
     refreshExpiresAt: result.refreshExpiresAt.toISOString(),
   };
-}
-
-let validators: { shopkeeper: ValidateFunction; staff: ValidateFunction } | undefined;
-
-export function refreshSchemaValidators(): {
-  shopkeeper: ValidateFunction;
-  staff: ValidateFunction;
-} {
-  if (validators) return validators;
-  const yamlPath = join(
-    dirname(fileURLToPath(import.meta.url)),
-    '../../../../openapi/openapi-v1.2.0.yaml',
-  );
-  const doc = parse(readFileSync(yamlPath, 'utf8'), { maxAliasCount: -1 }) as {
-    components: { schemas: Record<string, object> };
-  };
-  const ajv = new Ajv2020({ allErrors: true, strict: false });
-  ajv.addFormat('date-time', true);
-  ajv.addFormat('uuid', true);
-  ajv.addFormat('email', true);
-  for (const [name, schema] of Object.entries(doc.components.schemas)) {
-    ajv.addSchema(schema, `#/components/schemas/${name}`);
-  }
-  const shopkeeper = ajv.getSchema('#/components/schemas/ShopkeeperRefreshSession');
-  const staff = ajv.getSchema('#/components/schemas/StaffRefreshSession');
-  if (!shopkeeper || !staff) throw new Error('refresh schemas missing');
-  validators = { shopkeeper, staff };
-  return validators;
-}
-
-// Fail at import if the frozen schema file is missing, before a rotation can commit (P20-9).
-refreshSchemaValidators();
-
-function assertRefreshShape(
-  runtime: OtpAuthRuntime,
-  name: 'ShopkeeperRefreshSession' | 'StaffRefreshSession',
-  body: unknown,
-): void {
-  let validator: ValidateFunction;
-  try {
-    const loaded = refreshSchemaValidators();
-    validator = name === 'ShopkeeperRefreshSession' ? loaded.shopkeeper : loaded.staff;
-  } catch {
-    internal(runtime);
-  }
-  if (!validator(body)) {
-    const keywords = validator.errors?.map((entry) => entry.keyword).join(',') ?? 'invalid';
-    internal(runtime, keywords);
-  }
-  const record = body as { refreshToken?: unknown; refreshExpiresAt?: unknown };
-  if ((record.refreshToken === undefined) !== (record.refreshExpiresAt === undefined)) {
-    internal(runtime, 'dependentRequired');
-  }
 }

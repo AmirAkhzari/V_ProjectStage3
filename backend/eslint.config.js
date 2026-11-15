@@ -1,8 +1,16 @@
+import { readFileSync } from 'node:fs';
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
 import boundaries from 'eslint-plugin-boundaries';
 import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
+
+const devDependencyImports = Object.keys(
+  JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).devDependencies,
+).map((name) => ({
+  group: [name, `${name}/*`],
+  message: `${name} is a devDependency and must not be imported from src`,
+}));
 
 const IDENTITY_URL_MESSAGE =
   'only identity code and the composition root may use DATABASE_URL_IDENTITY (AppSec 7-6)';
@@ -183,6 +191,13 @@ export default defineConfig(
     ],
     rules: {
       'no-restricted-syntax': ['error', ...isPlatformSelectors],
+    },
+  },
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: devDependencyImports }],
     },
   },
 );

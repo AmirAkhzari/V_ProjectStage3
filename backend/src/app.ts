@@ -25,11 +25,13 @@ import { InMemoryInboxStore } from './platform/events/inbox.js';
 import type { HealthCheck } from './platform/health.js';
 import { registerErrorHandling } from './platform/http/errors.js';
 import { generateRequestId, registerRequestContext } from './platform/http/requestContext.js';
+import { demoLoginEnabled } from './platform/auth/demoLogin.js';
 import { pinoOptions } from './platform/logger.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     nodeEnv: Config['NODE_ENV'];
+    demoLogin: boolean;
     driverAuth?: DriverAuthRuntime;
     otpAuth?: OtpAuthRuntime;
   }
@@ -66,6 +68,10 @@ export async function buildApp(options: BuildAppOptions) {
   registerRequestContext(app);
   registerErrorHandling(app);
   app.decorate('nodeEnv', options.config.NODE_ENV);
+  app.decorate(
+    'demoLogin',
+    demoLoginEnabled(options.config.NODE_ENV, options.config.DEMO_LOGIN_ENABLED),
+  );
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
 

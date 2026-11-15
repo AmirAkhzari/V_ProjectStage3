@@ -17,6 +17,8 @@ export interface AccessClaims {
   sid: string;
   sv: number;
   did?: string;
+  /** Sign-time only. Not written into the JWT. */
+  demo?: boolean;
 }
 
 /**
