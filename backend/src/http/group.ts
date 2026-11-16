@@ -15,8 +15,9 @@ import {
   routeAccessError,
 } from '../platform/http/routeAccess.js';
 import {
-  CATCH_ALL,
+  catchAllRouteConfig,
   installRouteRegistryHook,
+  isCatchAllRoute,
   isPublicRegistryRoute,
   type RouteRegistry,
 } from '../platform/http/routeRegistry.js';
@@ -62,6 +63,15 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
     });
+    // A7 carries PII: no-store must also cover guard (401/403) and handler (404) responses,
+    // so it is set before the guard and before the handler.
+    group.addHook('onRequest', async function noStoreAppMe(request, reply) {
+      const url = request.routeOptions.url ?? '';
+      const autoHead = request.method === 'HEAD' && url.endsWith('/me');
+      if (routeOperationId(request) === 'A7' || autoHead) {
+        void reply.header('cache-control', 'no-store');
+      }
+    });
     group.addHook('onRequest', async function skipPublicThenGuard(request, reply) {
       const registered = request.routeOptions.url ?? '';
       const routePath = registered.startsWith(spec.prefix)
@@ -91,7 +101,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       if (operationId === undefined) {
         const config = request.routeOptions.config as unknown as
           Record<string | symbol, unknown> | undefined;
-        if (config?.[CATCH_ALL] === true) return;
+        if (isCatchAllRoute(config, routePath)) return;
         throw new AppError('FORBIDDEN', 403, 'Forbidden');
       }
       const decision = decideRouteAccess(
@@ -117,7 +127,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
     if (extraRoutes) await group.register(extraRoutes);
 
     // Keep empty groups addressable so typ-guard behaviour is testable without domain routes.
-    group.all('/*', { config: { [CATCH_ALL]: true } }, async () => {
+    group.all('/*', catchAllRouteConfig(), async () => {
       throw new AppError('NOT_FOUND', 404, 'Resource not found');
     });
   };
