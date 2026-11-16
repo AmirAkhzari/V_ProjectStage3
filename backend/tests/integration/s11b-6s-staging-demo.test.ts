@@ -15,6 +15,7 @@ import {
 } from '../../src/modules/identity/domain/demoAccounts.js';
 import { SUPER_ADMIN_PERMISSIONS } from '../../src/modules/identity/domain/permissions.js';
 import { AppError } from '../../src/platform/http/errors.js';
+import type { RouteRegistryRow } from '../../src/platform/http/routeRegistry.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from '../../src/modules/identity/infra/session/pgSessionStore.js';
 import { FakeSmsProvider } from '../../src/modules/notification/infra/sms/fakeSmsProvider.js';
@@ -38,14 +39,23 @@ const WRITES = ['/v1/admin/orders', '/v1/admin/stock', '/v1/admin/staff'] as con
 /** Seed DA base is `drivers.manage`. This is wider, and wider than the demo allowlist. */
 const WIDE_DA = ['drivers.manage', 'dashboard.view', 'orders.update', 'staff.manage'] as const;
 
+const DEMO_WRITE_PROBES = [
+  { path: '/orders', permission: 'orders.update', operationId: 'TEST_DEMO_ORDERS' },
+  { path: '/stock', permission: 'stock.manage', operationId: 'TEST_DEMO_STOCK' },
+  { path: '/staff', permission: 'staff.manage', operationId: 'TEST_DEMO_STAFF' },
+] as const;
+
+const demoWriteRegistryRows: readonly RouteRegistryRow[] = DEMO_WRITE_PROBES.map((row) => ({
+  operationId: row.operationId,
+  method: 'POST',
+  path: `/v1/admin${row.path}`,
+  access: { kind: 'permission', allOf: [row.permission] },
+}));
+
 const demoWriteProbes: FastifyPluginAsync = async (probe) => {
-  for (const [path, permission] of [
-    ['/orders', 'orders.update'],
-    ['/stock', 'stock.manage'],
-    ['/staff', 'staff.manage'],
-  ] as const) {
-    probe.post(path, async (request) => {
-      if (!request.permissions?.includes(permission)) {
+  for (const row of DEMO_WRITE_PROBES) {
+    probe.post(row.path, { schema: { operationId: row.operationId } }, async (request) => {
+      if (!request.permissions?.includes(row.permission)) {
         throw new AppError('FORBIDDEN', 403, 'Forbidden');
       }
       return { ok: true };
@@ -118,6 +128,7 @@ describe('V11-DM-05 staging demo login', () => {
       assertIssuance: () => assertRedisForAuthIssuance(redis),
       otpAuth: otp,
       adminTestRoutes: demoWriteProbes,
+      testRegistryRows: demoWriteRegistryRows,
     });
   }, 120_000);
 
