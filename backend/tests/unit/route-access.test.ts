@@ -2,12 +2,16 @@ import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyPluginAsync, LightMyRequestResponse } from 'fastify';
 import { z } from 'zod';
+import Fastify from 'fastify';
 import { buildApp, type App } from '../../src/app.js';
+import { createRouteGroup } from '../../src/http/group.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import {
   createRouteRegistry,
   type RouteRegistryRow,
 } from '../../src/platform/http/routeRegistry.js';
+import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpAuth.js';
+import { registerErrorHandling } from '../../src/platform/http/errors.js';
 import { decideRouteAccess } from '../../src/platform/http/routeAccess.js';
 import { testConfig } from '../helpers/config.js';
 import { allowAllSessionAuthority, type AllowAllOptions } from '../helpers/sessionAuthority.js';
@@ -82,23 +86,26 @@ const PROBES: { plugin: FastifyPluginAsync; rows: readonly RouteRegistryRow[] } 
 
 const DRIVER_PROBES: { plugin: FastifyPluginAsync; rows: readonly RouteRegistryRow[] } = {
   plugin: async (app) => {
-    app.post('/auth/password', { schema: { operationId: 'TEST_C11' } }, async () => ({ ok: true }));
+    app.post('/auth/password', { schema: { operationId: 'C11' } }, async () => ({ ok: true }));
     app.get('/test/payouts', { schema: { operationId: 'TEST_DRIVER_PROBE' } }, async () => ({
+      ok: true,
+    }));
+    app.get('/test/perm', { schema: { operationId: 'TEST_DRIVER_PERM' } }, async () => ({
       ok: true,
     }));
   },
   rows: [
     {
-      operationId: 'TEST_C11',
-      method: 'POST',
-      path: '/v1/driver/auth/password',
-      access: { kind: 'authenticated', subject: 'driver', allowMustChangePassword: true },
-    },
-    {
       operationId: 'TEST_DRIVER_PROBE',
       method: 'GET',
       path: '/v1/driver/test/payouts',
       access: { kind: 'authenticated', subject: 'driver' },
+    },
+    {
+      operationId: 'TEST_DRIVER_PERM',
+      method: 'GET',
+      path: '/v1/driver/test/perm',
+      access: { kind: 'permission', allOf: ['drivers.view'] },
     },
   ],
 };
@@ -405,6 +412,262 @@ describe('must_change_password (C11 exception)', () => {
     expect(blocked.json()).toMatchObject({ error: { code: 'PASSWORD_CHANGE_REQUIRED' } });
     const allowed = await request(app, 'POST', '/v1/driver/auth/password');
     expect(allowed.statusCode).toBe(200);
+  });
+});
+
+describe('slice 1b build-time contract checks', () => {
+  it('P3-3: authenticated subject must match the path group', () => {
+    expect(() =>
+      createRouteRegistry([
+        {
+          operationId: 'TEST_BAD_SUBJECT',
+          method: 'GET',
+          path: '/v1/admin/x',
+          access: { kind: 'authenticated', subject: 'shopkeeper' },
+        },
+      ]),
+    ).toThrow(/TEST_BAD_SUBJECT/);
+    expect(() =>
+      createRouteRegistry([
+        {
+          operationId: 'TEST_NO_GROUP',
+          method: 'GET',
+          path: '/v1/x',
+          access: { kind: 'authenticated', subject: 'shopkeeper' },
+        },
+      ]),
+    ).toThrow(/TEST_NO_GROUP/);
+  });
+
+  it('P3-6a/P3-6d: only C11 and B4 may allow must-change-password', () => {
+    expect(() =>
+      createRouteRegistry([
+        {
+          operationId: 'C11',
+          method: 'POST',
+          path: '/v1/driver/auth/password',
+          access: { kind: 'authenticated', subject: 'driver', allowMustChangePassword: true },
+        },
+        {
+          operationId: 'B4',
+          method: 'POST',
+          path: '/v1/admin/auth/logout',
+          access: { kind: 'authenticated', subject: 'staff', allowMustChangePassword: true },
+        },
+      ]),
+    ).not.toThrow();
+    for (const operationId of ['C3', 'TEST_MCP']) {
+      expect(() =>
+        createRouteRegistry([
+          {
+            operationId,
+            method: 'POST',
+            path: operationId === 'C3' ? '/v1/driver/auth/logout' : '/v1/driver/test/mcp',
+            access: { kind: 'authenticated', subject: 'driver', allowMustChangePassword: true },
+          },
+        ]),
+      ).toThrow(new RegExp(operationId));
+    }
+  });
+
+  it('P3-2b: a non-public row outside an API group is refused at boot', async () => {
+    await expect(
+      buildApp({
+        config: testConfig(),
+        healthChecks: [],
+        testRegistryRows: [
+          {
+            operationId: 'TEST_ROOT',
+            method: 'GET',
+            path: '/test/root',
+            access: { kind: 'permission', allOf: ['distributors.view'] },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/TEST_ROOT/);
+  });
+});
+
+describe('P3-4: per-group authentication and authorization', () => {
+  const forbidden = { error: { code: 'FORBIDDEN', message: 'Forbidden' } };
+
+  it('admin: 401 no token, 401 bad token, 403 wrong permission', async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: verifierOf('staff'),
+      sessionAuthority: allowAllSessionAuthority('staff', { permissions: [] }),
+    });
+    const url = '/v1/admin/distributors/01000000-0000-4000-8000-000000000001';
+    try {
+      const noToken = await app.inject({ method: 'GET', url });
+      expect(noToken.statusCode).toBe(401);
+      expect(noToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      const badToken = await request(app, 'GET', url, {
+        headers: { authorization: 'Bearer bad-token' },
+      });
+      expect(badToken.statusCode).toBe(401);
+      expect(badToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      const denied = await request(app, 'GET', url);
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json()).toEqual(forbidden);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('app: 401 no token, 401 bad token, 403 wrong permission', async () => {
+    const plugin = createRouteGroup({ group: 'app', prefix: '/v1/app', subject: 'shopkeeper' });
+    const isolated = Fastify();
+    registerErrorHandling(isolated);
+    await isolated.register(plugin, {
+      prefix: '/v1/app',
+      modules: [],
+      verifier: verifierOf('shopkeeper'),
+      sessionAuthority: allowAllSessionAuthority('shopkeeper', { permissions: [] }),
+      assertIssuance: async () => undefined,
+      registry: createRouteRegistry([
+        {
+          operationId: 'TEST_APP_ME',
+          method: 'GET',
+          path: '/v1/app/test/me',
+          access: { kind: 'authenticated', subject: 'shopkeeper' },
+        },
+        {
+          operationId: 'TEST_APP_PERM',
+          method: 'GET',
+          path: '/v1/app/test/perm',
+          access: { kind: 'permission', allOf: ['distributors.view'] },
+        },
+      ]),
+      extraRoutes: async (probes) => {
+        probes.get('/test/me', { schema: { operationId: 'TEST_APP_ME' } }, async () => ({
+          ok: true,
+        }));
+        probes.get('/test/perm', { schema: { operationId: 'TEST_APP_PERM' } }, async () => ({
+          ok: true,
+        }));
+      },
+    });
+    try {
+      const noToken = await isolated.inject({ method: 'GET', url: '/v1/app/test/me' });
+      expect(noToken.statusCode).toBe(401);
+      expect(noToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      const badToken = await isolated.inject({
+        method: 'GET',
+        url: '/v1/app/test/me',
+        headers: { authorization: 'Bearer bad-token' },
+      });
+      expect(badToken.statusCode).toBe(401);
+      expect(badToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      const denied = await isolated.inject({
+        method: 'GET',
+        url: '/v1/app/test/perm',
+        headers: AUTH,
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json()).toEqual(forbidden);
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('driver: 401 no token, 401 bad token, 403 wrong permission', async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: verifierOf('driver'),
+      sessionAuthority: allowAllSessionAuthority('driver', { permissions: [] }),
+      driverTestRoutes: DRIVER_PROBES.plugin,
+      testRegistryRows: DRIVER_PROBES.rows,
+      assertIssuance: async () => undefined,
+    });
+    try {
+      const noToken = await app.inject({ method: 'GET', url: '/v1/driver/test/me' });
+      expect(noToken.statusCode).toBe(401);
+      const badToken = await request(app, 'GET', '/v1/driver/test/me', {
+        headers: { authorization: 'Bearer bad-token' },
+      });
+      expect(badToken.statusCode).toBe(401);
+      expect(badToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      const denied = await request(app, 'GET', '/v1/driver/test/perm');
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json()).toEqual(forbidden);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('shopkeeper token on /v1/admin and /v1/driver is TOKEN_TYPE_MISMATCH', async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: verifierOf('shopkeeper'),
+      sessionAuthority: allowAllSessionAuthority('shopkeeper'),
+    });
+    try {
+      for (const url of ['/v1/admin/anything', '/v1/driver/anything']) {
+        const response = await request(app, 'GET', url);
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ error: { code: 'TOKEN_TYPE_MISMATCH' } });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('HEAD B25: 401 without a token, 403 without distributors.view', async () => {
+    const app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: verifierOf('staff'),
+      sessionAuthority: allowAllSessionAuthority('staff', { permissions: [] }),
+    });
+    const url = '/v1/admin/distributors/01000000-0000-4000-8000-000000000001';
+    try {
+      const noToken = await app.inject({ method: 'HEAD', url });
+      expect(noToken.statusCode).toBe(401);
+      const denied = await app.inject({ method: 'HEAD', url, headers: AUTH });
+      expect(denied.statusCode).toBe(403);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('P3-6b: must-change staff logout exception', () => {
+  it('POST B4 is 200 while GET B25 is PASSWORD_CHANGE_REQUIRED', async () => {
+    const otpAuth = {
+      store: { logoutSid: async () => undefined },
+    } as unknown as OtpAuthRuntime;
+    const app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: verifierOf('staff'),
+      sessionAuthority: allowAllSessionAuthority('staff', {
+        mustChangePassword: true,
+        staffRole: 'distributor_admin',
+        permissions: ['distributors.view'],
+      }),
+      otpAuth,
+    });
+    try {
+      const logout = await app.inject({
+        method: 'POST',
+        url: '/v1/admin/auth/logout',
+        headers: AUTH,
+      });
+      expect(logout.statusCode).toBe(200);
+      const blocked = await request(
+        app,
+        'GET',
+        '/v1/admin/distributors/01000000-0000-4000-8000-000000000001',
+      );
+      expect(blocked.statusCode).toBe(403);
+      expect(blocked.json()).toMatchObject({ error: { code: 'PASSWORD_CHANGE_REQUIRED' } });
+    } finally {
+      await app.close();
+    }
   });
 });
 

@@ -38,12 +38,34 @@ export interface RouteRegistry {
   readonly byOperationId: ReadonlyMap<string, RouteRegistryRow>;
 }
 
+/** Marks a group catch-all. The exemption is this config symbol, not a path string alone. */
+export const CATCH_ALL: unique symbol = Symbol.for('vproject.catchAll');
+
 /** The only routes allowed to register without an operationId (three group catch-alls). */
 export const INFRA_CATCH_ALL_PATHS: ReadonlySet<string> = new Set([
   '/v1/app/*',
   '/v1/admin/*',
   '/v1/driver/*',
 ]);
+
+/** P3-6a: Amir approved B4 as the single second must-change exception (DECISION_LOG §I). */
+export const MUST_CHANGE_PASSWORD_OPS = ['C11', 'B4'] as const;
+
+/** Subject bound to each API surface (L-3-3 / P3-3). */
+const GROUP_SUBJECTS: Readonly<Record<string, RouteSubject>> = {
+  '/v1/app': 'shopkeeper',
+  '/v1/admin': 'staff',
+  '/v1/driver': 'driver',
+};
+
+/** Only system routes may sit outside a group (P3-2b). S3 is the public callback. */
+export const UNGROUPED_OPERATION_IDS: ReadonlySet<string> = new Set(['S1', 'S2', 'S3']);
+
+function pathGroup(path: string): string | undefined {
+  return Object.keys(GROUP_SUBJECTS).find(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+}
 
 /** Fastify `/distributors/:id` → OpenAPI `/distributors/{id}`. */
 export function toOpenApiPath(fastifyPath: string): string {
@@ -81,6 +103,37 @@ export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteReg
         `route registry: ${row.operationId} has a permission rule with no usable anyOf/allOf codes`,
       );
     }
+    const group = pathGroup(row.path);
+    if (row.access.kind === 'authenticated') {
+      // L-3-3: an authenticated subject must match the path group, and system routes have none.
+      if (group === undefined) {
+        throw new Error(
+          `route registry: ${row.operationId} is authenticated but has no API group path`,
+        );
+      }
+      if (row.access.subject !== GROUP_SUBJECTS[group]) {
+        throw new Error(
+          `route registry: ${row.operationId} subject ${row.access.subject} does not match ${group}`,
+        );
+      }
+    } else if (
+      row.access.kind !== 'public' &&
+      group === undefined &&
+      !UNGROUPED_OPERATION_IDS.has(row.operationId)
+    ) {
+      throw new Error(
+        `route registry: ${row.operationId} is not public and must live under an API group`,
+      );
+    }
+    if (
+      row.access.kind === 'authenticated' &&
+      row.access.allowMustChangePassword === true &&
+      !(MUST_CHANGE_PASSWORD_OPS as readonly string[]).includes(row.operationId)
+    ) {
+      throw new Error(
+        `route registry: ${row.operationId} may not allow must-change-password access`,
+      );
+    }
     byOperationId.set(row.operationId, row);
     byRoute.add(routeKey);
   }
@@ -91,7 +144,28 @@ export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteReg
 export interface OnRoutePayload {
   method: string | string[];
   url: string;
+  prefix?: string | undefined;
+  config?: Record<string | symbol, unknown> | undefined;
   schema?: { operationId?: unknown } | undefined;
+}
+
+/** Prefix the route hook omitted from `url` (Fastify varies by encapsulation). */
+function fullRoutePath(payload: OnRoutePayload): string {
+  const url = toOpenApiPath(payload.url);
+  const prefix = payload.prefix ?? '';
+  return prefix !== '' && !url.startsWith(prefix) ? toOpenApiPath(`${prefix}${url}`) : url;
+}
+
+/** L-3-4: the public skip reads the registry row, not a module flag. */
+export function isPublicRegistryRoute(
+  registry: RouteRegistry,
+  method: string,
+  path: string,
+): boolean {
+  const normalized = toOpenApiPath(path);
+  return registry.rows.some(
+    (row) => row.method === method && row.path === normalized && row.access.kind === 'public',
+  );
 }
 
 function methodMatches(registered: string, rowMethod: HttpMethod): boolean {
@@ -106,12 +180,15 @@ function methodMatches(registered: string, rowMethod: HttpMethod): boolean {
  */
 export function assertRouteRegistered(payload: OnRoutePayload, registry: RouteRegistry): void {
   const methods = Array.isArray(payload.method) ? payload.method : [payload.method];
-  const path = toOpenApiPath(payload.url);
+  const path = fullRoutePath(payload);
   const rawOperationId = payload.schema?.operationId;
   const operationId = typeof rawOperationId === 'string' ? rawOperationId : undefined;
 
   if (operationId === undefined || operationId.length === 0) {
-    if (INFRA_CATCH_ALL_PATHS.has(path)) return;
+    // P3-2c: the config symbol identifies the group's own catch-all; the path set is a
+    // belt-and-braces check. Any other operationId-less route fails closed at boot.
+    const isCatchAll = payload.config?.[CATCH_ALL] === true;
+    if (isCatchAll || INFRA_CATCH_ALL_PATHS.has(path)) return;
     throw new Error(
       `route registry: ${methods.join(',')} ${path} is registered without an operationId`,
     );
@@ -132,6 +209,15 @@ export function assertRouteRegistered(payload: OnRoutePayload, registry: RouteRe
     if (!methodMatches(method, row.method)) {
       throw new Error(
         `route registry: ${operationId} registered as ${method} ${path} but the registry row is ${row.method}`,
+      );
+    }
+  }
+  // P3-2b: a non-public row must actually register under its group prefix.
+  if (row.access.kind !== 'public' && !UNGROUPED_OPERATION_IDS.has(operationId)) {
+    const group = pathGroup(row.path);
+    if (group === undefined || !path.startsWith(`${group}/`)) {
+      throw new Error(
+        `route registry: ${operationId} is non-public and must register under an API group prefix`,
       );
     }
   }
