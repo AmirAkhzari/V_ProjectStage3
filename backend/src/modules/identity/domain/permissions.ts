@@ -1,37 +1,16 @@
+import {
+  STAFF_PERMISSION_CODES,
+  type PermissionCode,
+} from '../../../platform/auth/permissionCodes.js';
+
+export type { PermissionCode };
+
 /**
  * SA permissions are derived from role, not `staff_memberships.permissions`
- * (Architect note on the empty seed column / SCOPE-SA-01).
+ * (Architect note on the empty seed column / SCOPE-SA-01). The single source of truth for
+ * the 28 codes is `src/platform/auth/permissionCodes.ts` so registry rows cannot typo one.
  */
-export const SUPER_ADMIN_PERMISSIONS = [
-  'dashboard.view',
-  'orders.view',
-  'orders.update',
-  'orders.cancel',
-  'orders.deliver_manual',
-  'products.view',
-  'products.manage',
-  'stock.view',
-  'stock.manage',
-  'distributors.view',
-  'distributors.manage',
-  'retailers.view',
-  'retailers.manage',
-  'coupons.view',
-  'coupons.manage',
-  'banners.manage',
-  'messages.send',
-  'finance.view',
-  'finance.adjust',
-  'delivery.manage',
-  'settings.manage',
-  'staff.manage',
-  'audit.view',
-  'subscriptions.manage',
-  'drivers.view',
-  'drivers.manage',
-  'deliveries.assign',
-  'deliveries.confirm',
-] as const;
+export const SUPER_ADMIN_PERMISSIONS: readonly PermissionCode[] = STAFF_PERMISSION_CODES;
 
 export type StaffRole = 'super_admin' | 'distributor_admin';
 

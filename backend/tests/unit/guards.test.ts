@@ -5,6 +5,7 @@ import { createRouteGroup } from '../../src/http/group.js';
 import { subjectGuard } from '../../src/platform/auth/guards.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import type { SessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
+import { createRouteRegistry } from '../../src/platform/http/routeRegistry.js';
 import { testConfig } from '../helpers/config.js';
 import { allowAllSessionAuthority } from '../helpers/sessionAuthority.js';
 
@@ -135,6 +136,7 @@ describe('route group guards', () => {
       verifier: verifierOf('driver'),
       sessionAuthority: authority,
       assertIssuance: async () => undefined,
+      registry: createRouteRegistry([]),
     });
     try {
       const response = await isolated.inject({

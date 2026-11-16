@@ -10,6 +10,7 @@ import {
 import { adminGroup, adminGroupSpec } from './http/admin.group.js';
 import { appGroup, appGroupSpec } from './http/app.group.js';
 import { driverGroup, driverGroupSpec } from './http/driver.group.js';
+import { buildRouteRegistry } from './http/routeRegistry.js';
 import { systemRoutes } from './http/system.routes.js';
 import { allModules } from './modules/register.js';
 import { denyAllVerifier, type AccessTokenVerifier } from './platform/auth/jwt.js';
@@ -18,6 +19,7 @@ import {
   type SessionAuthority,
 } from './platform/auth/sessionAuthority.js';
 import { AppError } from './platform/http/errors.js';
+import { installRouteRegistryHook, type RouteRegistryRow } from './platform/http/routeRegistry.js';
 import type { DriverAuthRuntime } from './modules/identity/application/driverAuth.js';
 import type { OtpAuthRuntime } from './modules/identity/application/otpAuth.js';
 import type { Config } from './platform/config.js';
@@ -55,6 +57,10 @@ export interface BuildAppOptions {
   logDestination?: DestinationStream;
   /** Test-only plugin mounted inside `/v1/admin` before the catch-all. */
   adminTestRoutes?: FastifyPluginAsync;
+  /** Test-only plugin mounted inside `/v1/driver` before the catch-all (C11-shaped probe). */
+  driverTestRoutes?: FastifyPluginAsync;
+  /** Test-only registry rows for probe routes. Production never passes any. */
+  testRegistryRows?: readonly RouteRegistryRow[];
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -90,6 +96,8 @@ export async function buildApp(options: BuildAppOptions) {
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
   if (options.appDb) app.decorate('appDb', options.appDb);
 
+  const routeRegistry = buildRouteRegistry(options.testRegistryRows ?? []);
+
   if (options.config.OPENAPI_DOCS_ENABLED) {
     await app.register(swagger, {
       openapi: {
@@ -104,6 +112,9 @@ export async function buildApp(options: BuildAppOptions) {
       transform: jsonSchemaTransform,
     });
   }
+
+  // Installed after the docs plugin has loaded: documentation routes are not contract routes.
+  installRouteRegistryHook(app, routeRegistry);
 
   await app.register(systemRoutes, {
     healthChecks: options.healthChecks,
@@ -127,6 +138,7 @@ export async function buildApp(options: BuildAppOptions) {
     verifier,
     sessionAuthority: options.sessionAuthority ?? failClosedSessionAuthority,
     assertIssuance,
+    registry: routeRegistry,
   };
   await app.register(appGroup, { prefix: appGroupSpec.prefix, ...groupOpts });
   await app.register(adminGroup, {
@@ -134,7 +146,11 @@ export async function buildApp(options: BuildAppOptions) {
     ...groupOpts,
     ...(options.adminTestRoutes ? { extraRoutes: options.adminTestRoutes } : {}),
   });
-  await app.register(driverGroup, { prefix: driverGroupSpec.prefix, ...groupOpts });
+  await app.register(driverGroup, {
+    prefix: driverGroupSpec.prefix,
+    ...groupOpts,
+    ...(options.driverTestRoutes ? { extraRoutes: options.driverTestRoutes } : {}),
+  });
 
   const bus = new InProcessEventBus(new InMemoryInboxStore());
   for (const mod of allModules) {
