@@ -1,11 +1,20 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { subjectGuard } from '../platform/auth/guards.js';
-import type { SessionAuthority } from '../platform/auth/sessionAuthority.js';
 import type { AccessTokenVerifier, SubjectType } from '../platform/auth/jwt.js';
+import { routeOperationId } from '../platform/auth/sensitiveRoutes.js';
+import type { SessionAuthority } from '../platform/auth/sessionAuthority.js';
 import { AppError } from '../platform/http/errors.js';
 import { isAuthIssuanceRoute, isListedPublicRoute } from '../platform/http/publicRoutes.js';
 import { rejectClientIdentity } from '../platform/http/rejectClientIdentity.js';
 import { rejectClientPrice } from '../platform/http/rejectClientPrice.js';
+import {
+  decideRouteAccess,
+  logGuardFailure,
+  logRouteDeny,
+  principalOf,
+  routeAccessError,
+} from '../platform/http/routeAccess.js';
+import { installRouteRegistryHook, type RouteRegistry } from '../platform/http/routeRegistry.js';
 import type { ModuleDefinition, RouteGroup } from '../platform/modules.js';
 
 export interface RouteGroupOptions {
@@ -13,6 +22,8 @@ export interface RouteGroupOptions {
   verifier: AccessTokenVerifier;
   sessionAuthority: SessionAuthority;
   assertIssuance: () => Promise<void>;
+  /** Default-deny registry for build-time binding and the onRequest access check. */
+  registry: RouteRegistry;
   /** Registered inside this group, before the catch-all. Tests use it for probes. */
   extraRoutes?: FastifyPluginAsync;
 }
@@ -32,9 +43,16 @@ function requestPathOf(request: FastifyRequest): string {
 /**
  * A route group only sets prefix, guard and registration (§9.3 rule 4); routes come from modules.
  * The guard runs before every route in the group and fails closed with the deny-all verifier.
+ *
+ * Order is onRequest: authenticate (typ + session snapshot) → access from the registry row.
+ * onRoute already refused to boot any route whose operationId is missing or unmapped.
  */
 export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<RouteGroupOptions> {
-  return async (group, { modules, verifier, sessionAuthority, assertIssuance, extraRoutes }) => {
+  return async (
+    group,
+    { modules, verifier, sessionAuthority, assertIssuance, registry, extraRoutes },
+  ) => {
+    installRouteRegistryHook(group, registry);
     const guard = subjectGuard(spec.subject, verifier, {
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
@@ -56,7 +74,27 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       ) {
         return;
       }
-      await guard.call(this, request, reply);
+      const operationId = routeOperationId(request);
+      try {
+        await guard.call(this, request, reply);
+      } catch (error) {
+        logGuardFailure(request, error, operationId);
+        throw error;
+      }
+      // The group catch-alls have no operationId; they must stay the byte-identical 404.
+      if (operationId === undefined) return;
+      const decision = decideRouteAccess(
+        registry.byOperationId.get(operationId),
+        principalOf(request),
+      );
+      if (!decision.allow) {
+        logRouteDeny(request, {
+          operationId,
+          reasonCode: decision.reason,
+          statusCode: 403,
+        });
+        throw routeAccessError(decision);
+      }
     });
     group.addHook('preValidation', rejectClientIdentity);
     group.addHook('preValidation', rejectClientPrice);

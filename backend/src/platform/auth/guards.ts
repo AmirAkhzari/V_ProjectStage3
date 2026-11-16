@@ -3,7 +3,7 @@ import { AppError } from '../http/errors.js';
 import type { TenantContext } from '../db/tenant.js';
 import type { AccessClaims, AccessTokenVerifier, SubjectType } from './jwt.js';
 import { requiresFreshSession, routeOperationId } from './sensitiveRoutes.js';
-import type { SessionAuthority } from './sessionAuthority.js';
+import type { SessionAuthority, StaffRole } from './sessionAuthority.js';
 import { principalToTenant } from './tenantPrincipal.js';
 
 declare module 'fastify' {
@@ -11,6 +11,8 @@ declare module 'fastify' {
     subject?: AccessClaims;
     tenant?: TenantContext;
     permissions?: readonly string[];
+    staffRole?: StaffRole | null;
+    mustChangePassword?: boolean;
   }
   interface FastifyContextConfig {
     sensitive?: boolean;
@@ -95,5 +97,7 @@ export function subjectGuard(
     request.tenant = resolved.tenant;
     request.permissions = resolved.permissions;
     request.subject = claims;
+    request.staffRole = decision.row.staffRole;
+    request.mustChangePassword = decision.row.mustChangePassword;
   };
 }

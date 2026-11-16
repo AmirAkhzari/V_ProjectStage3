@@ -97,6 +97,9 @@ export default defineConfig(
       ],
       'boundaries/files': [
         { pattern: 'src/app.ts', category: 'bootstrap' },
+        // Composition root for the route registry: the only src/http file that may read
+        // module-owned rows (same role as app.ts for plugins).
+        { pattern: 'src/http/routeRegistry.ts', category: 'route-registry' },
         { pattern: 'src/main.ts', category: 'bootstrap' },
         { pattern: 'src/worker.ts', category: 'bootstrap' },
         { pattern: 'src/modules/register.ts', category: 'module-register' },
@@ -117,6 +120,10 @@ export default defineConfig(
             {
               from: { element: { type: 'platform' } },
               allow: { to: { element: { type: 'platform' } } },
+            },
+            {
+              from: { file: { categories: 'route-registry' } },
+              allow: { to: { element: { type: ['http', 'platform', 'module'] } } },
             },
             {
               from: { element: { type: 'http' } },
