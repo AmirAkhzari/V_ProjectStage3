@@ -35,14 +35,18 @@ import {
 } from '../helpers/containers.js';
 
 const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Resource not found' } };
-const WRITES = ['/v1/admin/orders', '/v1/admin/stock', '/v1/admin/staff'] as const;
+const WRITES = [
+  '/v1/admin/test/demo-orders',
+  '/v1/admin/test/demo-stock',
+  '/v1/admin/test/demo-staff',
+] as const;
 /** Seed DA base is `drivers.manage`. This is wider, and wider than the demo allowlist. */
 const WIDE_DA = ['drivers.manage', 'dashboard.view', 'orders.update', 'staff.manage'] as const;
 
 const DEMO_WRITE_PROBES = [
-  { path: '/orders', permission: 'orders.update', operationId: 'TEST_DEMO_ORDERS' },
-  { path: '/stock', permission: 'stock.manage', operationId: 'TEST_DEMO_STOCK' },
-  { path: '/staff', permission: 'staff.manage', operationId: 'TEST_DEMO_STAFF' },
+  { path: '/test/demo-orders', permission: 'orders.update', operationId: 'TEST_DEMO_ORDERS' },
+  { path: '/test/demo-stock', permission: 'stock.manage', operationId: 'TEST_DEMO_STOCK' },
+  { path: '/test/demo-staff', permission: 'staff.manage', operationId: 'TEST_DEMO_STAFF' },
 ] as const;
 
 const demoWriteRegistryRows: readonly RouteRegistryRow[] = DEMO_WRITE_PROBES.map((row) => ({

@@ -29,10 +29,10 @@ describe('route registry vs PUBLIC_ROUTES', () => {
     expect(ROUTE_REGISTRY.byOperationId.size).toBe(ROUTE_REGISTRY.rows.length);
   });
 
-  it('slice 1a rows cover the live operations plus the frozen public S3 callback', () => {
-    const live = ['A1', 'A2', 'A3', 'A4', 'A5', 'B1', 'B2', 'B3', 'B4', 'B5', 'C1', 'C2', 'B25'];
-    expect([...ROUTE_REGISTRY.byOperationId.keys()].sort()).toEqual(
-      [...live, 'S1', 'S2', 'S3'].sort(),
-    );
+  it('slice 1b maps all 139 frozen v1.2.0 operations', () => {
+    expect(ROUTE_REGISTRY.byOperationId.size).toBe(139);
+    for (const operationId of ['S1', 'S2', 'S3', 'A5', 'B5', 'C11', 'B79', 'B80']) {
+      expect(ROUTE_REGISTRY.byOperationId.has(operationId)).toBe(true);
+    }
   });
 });

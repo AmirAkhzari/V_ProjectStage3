@@ -4,7 +4,7 @@ import type { AccessTokenVerifier, SubjectType } from '../platform/auth/jwt.js';
 import { routeOperationId } from '../platform/auth/sensitiveRoutes.js';
 import type { SessionAuthority } from '../platform/auth/sessionAuthority.js';
 import { AppError } from '../platform/http/errors.js';
-import { isAuthIssuanceRoute, isListedPublicRoute } from '../platform/http/publicRoutes.js';
+import { isAuthIssuanceRoute } from '../platform/http/publicRoutes.js';
 import { rejectClientIdentity } from '../platform/http/rejectClientIdentity.js';
 import { rejectClientPrice } from '../platform/http/rejectClientPrice.js';
 import {
@@ -14,7 +14,12 @@ import {
   principalOf,
   routeAccessError,
 } from '../platform/http/routeAccess.js';
-import { installRouteRegistryHook, type RouteRegistry } from '../platform/http/routeRegistry.js';
+import {
+  CATCH_ALL,
+  installRouteRegistryHook,
+  isPublicRegistryRoute,
+  type RouteRegistry,
+} from '../platform/http/routeRegistry.js';
 import type { ModuleDefinition, RouteGroup } from '../platform/modules.js';
 
 export interface RouteGroupOptions {
@@ -68,9 +73,10 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       if (!unregisteredDemo && isAuthIssuanceRoute(request.method, requestPath, spec.group)) {
         await assertIssuance();
       }
+      // L-3-4: the public skip is the registry row, not a module-settable flag.
       if (
-        isListedPublicRoute(request.method, requestPath) ||
-        isListedPublicRoute(request.method, routePath)
+        isPublicRegistryRoute(registry, request.method, requestPath) ||
+        isPublicRegistryRoute(registry, request.method, routePath)
       ) {
         return;
       }
@@ -81,8 +87,13 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
         logGuardFailure(request, error, operationId);
         throw error;
       }
-      // The group catch-alls have no operationId; they must stay the byte-identical 404.
-      if (operationId === undefined) return;
+      // P3-2a: after auth, only the group's own catch-all may lack an operationId.
+      if (operationId === undefined) {
+        const config = request.routeOptions.config as unknown as
+          Record<string | symbol, unknown> | undefined;
+        if (config?.[CATCH_ALL] === true) return;
+        throw new AppError('FORBIDDEN', 403, 'Forbidden');
+      }
       const decision = decideRouteAccess(
         registry.byOperationId.get(operationId),
         principalOf(request),
@@ -106,7 +117,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
     if (extraRoutes) await group.register(extraRoutes);
 
     // Keep empty groups addressable so typ-guard behaviour is testable without domain routes.
-    group.all('/*', async () => {
+    group.all('/*', { config: { [CATCH_ALL]: true } }, async () => {
       throw new AppError('NOT_FOUND', 404, 'Resource not found');
     });
   };

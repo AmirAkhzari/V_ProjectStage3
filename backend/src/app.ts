@@ -19,7 +19,11 @@ import {
   type SessionAuthority,
 } from './platform/auth/sessionAuthority.js';
 import { AppError } from './platform/http/errors.js';
-import { installRouteRegistryHook, type RouteRegistryRow } from './platform/http/routeRegistry.js';
+import {
+  installRouteRegistryHook,
+  type OnRoutePayload,
+  type RouteRegistryRow,
+} from './platform/http/routeRegistry.js';
 import type { DriverAuthRuntime } from './modules/identity/application/driverAuth.js';
 import type { OtpAuthRuntime } from './modules/identity/application/otpAuth.js';
 import type { Config } from './platform/config.js';
@@ -61,6 +65,8 @@ export interface BuildAppOptions {
   driverTestRoutes?: FastifyPluginAsync;
   /** Test-only registry rows for probe routes. Production never passes any. */
   testRegistryRows?: readonly RouteRegistryRow[];
+  /** Test-only route capture for the contract coverage check. */
+  onRoute?: (route: OnRoutePayload) => void;
 }
 
 export async function buildApp(options: BuildAppOptions) {
@@ -115,6 +121,9 @@ export async function buildApp(options: BuildAppOptions) {
 
   // Installed after the docs plugin has loaded: documentation routes are not contract routes.
   installRouteRegistryHook(app, routeRegistry);
+  if (options.onRoute) {
+    app.addHook('onRoute', (route) => options.onRoute?.(route as unknown as OnRoutePayload));
+  }
 
   await app.register(systemRoutes, {
     healthChecks: options.healthChecks,
