@@ -1,4 +1,4 @@
-import type { onRequestAsyncHookHandler } from 'fastify';
+import type { FastifyRequest, onRequestAsyncHookHandler } from 'fastify';
 import { AppError } from '../http/errors.js';
 import type { TenantContext } from '../db/tenant.js';
 import type { AccessClaims, AccessTokenVerifier, SubjectType } from './jwt.js';
@@ -26,6 +26,13 @@ export function assertRouteGroupTyp(actual: string, expected: string): void {
 
 export function tokenTypeMismatch(): AppError {
   return new AppError('TOKEN_TYPE_MISMATCH', 401, 'Token type not accepted on this route group');
+}
+
+/** Route-level permission gate for a `x-permission` in the frozen contract. */
+export function requirePermission(request: FastifyRequest, permission: string): void {
+  if (!request.permissions?.includes(permission)) {
+    throw new AppError('FORBIDDEN', 403, 'Forbidden');
+  }
 }
 
 function bearerToken(header: string | undefined): string | undefined {

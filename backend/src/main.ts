@@ -115,6 +115,7 @@ const app = await buildApp({
       ? { spikeBaselineHour: config.SMS_SPIKE_BASELINE_HOUR }
       : {}),
   },
+  appDb: db.pool,
   healthChecks: [
     postgresHealthCheck(db.pool),
     postgresHealthCheck(identityDb.pool, 'postgres_identity'),

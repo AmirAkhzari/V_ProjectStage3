@@ -1,6 +1,7 @@
 import Fastify, { type FastifyPluginAsync } from 'fastify';
 import swagger from '@fastify/swagger';
 import type { DestinationStream } from 'pino';
+import type pg from 'pg';
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -36,6 +37,7 @@ declare module 'fastify' {
     demoRate?: { perIpHour: number; globalDay: number };
     driverAuth?: DriverAuthRuntime;
     otpAuth?: OtpAuthRuntime;
+    appDb?: pg.Pool;
   }
 }
 
@@ -47,6 +49,8 @@ export interface BuildAppOptions {
   assertIssuance?: () => Promise<void>;
   driverAuth?: DriverAuthRuntime;
   otpAuth?: OtpAuthRuntime;
+  /** App-role pool for tenant-scoped reads (RLS). Absent means those routes 503. */
+  appDb?: pg.Pool;
   /** Test capture. Production uses Fastify's default destination. */
   logDestination?: DestinationStream;
   /** Test-only plugin mounted inside `/v1/admin` before the catch-all. */
@@ -84,6 +88,7 @@ export async function buildApp(options: BuildAppOptions) {
   if (demoRate) app.decorate('demoRate', demoRate);
   if (options.driverAuth) app.decorate('driverAuth', options.driverAuth);
   if (options.otpAuth) app.decorate('otpAuth', options.otpAuth);
+  if (options.appDb) app.decorate('appDb', options.appDb);
 
   if (options.config.OPENAPI_DOCS_ENABLED) {
     await app.register(swagger, {
