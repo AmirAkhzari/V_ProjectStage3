@@ -1,6 +1,6 @@
 import type { RouteRegistryRow } from '../../../platform/http/routeRegistry.js';
 
-/** Identity surface. A5/B5 are registered only when demo login is enabled (`non-prod`). */
+/** Identity surface. A5/B5 are registered only when demo login is enabled (`demoLoginEnabled()`). */
 export const identityRouteRegistry: readonly RouteRegistryRow[] = [
   { operationId: 'A1', method: 'POST', path: '/v1/app/auth/otp/send', access: { kind: 'public' } },
   {
@@ -16,7 +16,7 @@ export const identityRouteRegistry: readonly RouteRegistryRow[] = [
     method: 'POST',
     path: '/v1/app/auth/demo',
     access: { kind: 'public' },
-    env: 'non-prod',
+    demo: true,
   },
   {
     operationId: 'B1',
@@ -35,14 +35,16 @@ export const identityRouteRegistry: readonly RouteRegistryRow[] = [
     operationId: 'B4',
     method: 'POST',
     path: '/v1/admin/auth/logout',
-    access: { kind: 'authenticated', subject: 'staff' },
+    // Architect L-3-2: logout must always work. B4 is an explicit second exception to the
+    // must-change-password block; the contract's exception is otherwise C11-only (AppSec P3-3).
+    access: { kind: 'authenticated', subject: 'staff', allowMustChangePassword: true },
   },
   {
     operationId: 'B5',
     method: 'POST',
     path: '/v1/admin/auth/demo',
     access: { kind: 'public' },
-    env: 'non-prod',
+    demo: true,
   },
   {
     operationId: 'C1',

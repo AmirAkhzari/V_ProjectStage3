@@ -163,6 +163,34 @@ describe('default-deny route registry (build time)', () => {
       }),
     ).rejects.toThrow(/TEST_SA_ONLY registered as POST/);
   });
+
+  it('A-3-1: throws for a permission row with no usable anyOf/allOf codes', () => {
+    const malformed: RouteRegistryRow[] = [
+      {
+        operationId: 'TEST_NO_RULE',
+        method: 'GET',
+        path: '/v1/x1',
+        access: { kind: 'permission' },
+      },
+      {
+        operationId: 'TEST_EMPTY_ANY',
+        method: 'GET',
+        path: '/v1/x2',
+        access: { kind: 'permission', anyOf: [] },
+      },
+      {
+        operationId: 'TEST_EMPTY_ALL',
+        method: 'GET',
+        path: '/v1/x3',
+        access: { kind: 'permission', allOf: [] },
+      },
+    ];
+    for (const malformedRow of malformed) {
+      expect(() => createRouteRegistry([malformedRow])).toThrow(
+        new RegExp(malformedRow.operationId),
+      );
+    }
+  });
 });
 
 describe('decideRouteAccess', () => {
@@ -204,6 +232,27 @@ describe('decideRouteAccess', () => {
         principal({ permissions: ['distributors.view', 'distributors.manage'] }),
       ).allow,
     ).toBe(true);
+  });
+
+  it('A-3-1: malformed permission rules deny even when the principal has permissions', () => {
+    const granted = principal({ permissions: ['staff.manage', 'distributors.view'] });
+    const malformed: RouteRegistryRow['access'][] = [
+      { kind: 'permission' },
+      { kind: 'permission', anyOf: [] },
+      { kind: 'permission', allOf: [] },
+    ];
+    for (const access of malformed) {
+      expect(decideRouteAccess(row(access), granted)).toEqual({
+        allow: false,
+        reason: 'missing_permission',
+        code: 'FORBIDDEN',
+      });
+    }
+  });
+
+  it('L-3-2: a B4-shaped staff row allows a must-change principal', () => {
+    const b4 = row({ kind: 'authenticated', subject: 'staff', allowMustChangePassword: true });
+    expect(decideRouteAccess(b4, principal({ mustChangePassword: true })).allow).toBe(true);
   });
 
   it('super_admin passes the role rule with no permission codes', () => {

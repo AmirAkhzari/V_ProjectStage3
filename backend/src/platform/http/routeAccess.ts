@@ -1,7 +1,7 @@
 import type { FastifyRequest } from 'fastify';
 import type { StaffRole } from '../auth/sessionAuthority.js';
 import { AppError } from './errors.js';
-import type { RouteRegistryRow } from './routeRegistry.js';
+import { isUsablePermissionRule, type RouteRegistryRow } from './routeRegistry.js';
 
 export type AccessDenyReason =
   'unmapped_route' | 'missing_permission' | 'not_super_admin' | 'password_change_required';
@@ -49,6 +49,10 @@ export function decideRouteAccess(
       // The group already bound `typ`; the snapshot typ was checked against the claims.
       return { allow: true };
     case 'permission': {
+      // Malformed rule (no non-empty anyOf/allOf) fails closed instead of passing vacuously.
+      if (!isUsablePermissionRule(access)) {
+        return { allow: false, reason: 'missing_permission', code: 'FORBIDDEN' };
+      }
       const has = (code: string): boolean => principal.permissions.includes(code);
       if (access.allOf !== undefined && !access.allOf.every(has)) {
         return { allow: false, reason: 'missing_permission', code: 'FORBIDDEN' };

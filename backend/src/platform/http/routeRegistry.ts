@@ -26,8 +26,11 @@ export interface RouteRegistryRow {
   /** OpenAPI path template, e.g. `/v1/admin/distributors/{id}`. */
   path: string;
   access: RouteAccess;
-  /** A5/B5 and the other dev-only ops are `non-prod`. */
-  env?: 'all' | 'non-prod';
+  /**
+   * Informational only (L-3-1): marks the A5/B5 demo-login ops. Not enforced by the registry;
+   * registration stays gated at boot by `demoLoginEnabled()`.
+   */
+  demo?: true;
 }
 
 export interface RouteRegistry {
@@ -47,7 +50,18 @@ export function toOpenApiPath(fastifyPath: string): string {
   return fastifyPath.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
 }
 
-/** Fails closed on duplicates; called when the registry is assembled and by tests. */
+/**
+ * A permission rule is usable only when at least one of `anyOf` / `allOf` is present and
+ * non-empty; otherwise it would be vacuous (empty `allOf` passes `[].every`).
+ */
+export function isUsablePermissionRule(access: RouteAccess): boolean {
+  if (access.kind !== 'permission') return true;
+  const anyOf = access.anyOf !== undefined && access.anyOf.length > 0;
+  const allOf = access.allOf !== undefined && access.allOf.length > 0;
+  return anyOf || allOf;
+}
+
+/** Fails closed on duplicates and vacuous permission rules; called at assembly and by tests. */
 export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteRegistry {
   const byOperationId = new Map<string, RouteRegistryRow>();
   const byRoute = new Set<string>();
@@ -61,6 +75,11 @@ export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteReg
     const routeKey = `${row.method} ${row.path}`;
     if (byRoute.has(routeKey)) {
       throw new Error(`route registry: duplicate route ${routeKey}`);
+    }
+    if (!isUsablePermissionRule(row.access)) {
+      throw new Error(
+        `route registry: ${row.operationId} has a permission rule with no usable anyOf/allOf codes`,
+      );
     }
     byOperationId.set(row.operationId, row);
     byRoute.add(routeKey);
