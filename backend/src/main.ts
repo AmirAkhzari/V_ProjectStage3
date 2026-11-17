@@ -35,6 +35,18 @@ configureSessionTtl({
   driverAbsoluteMs: config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS * 60 * 60 * 1000,
 });
 const log = pino(pinoOptions(config));
+// P6-4/P6-8: fail boot on a sha256 mismatch; the list is embedded (no file read) and the
+// log line is emitted before any DB/Redis await so a smoke of main.js can observe it.
+const breachedList = (() => {
+  try {
+    const list = loadBreachedPasswordList();
+    logBreachedListBoot(log, list);
+    return list;
+  } catch (error) {
+    log.error({ err: error }, 'api refused breached-password list');
+    process.exit(1);
+  }
+})();
 const db = createDb(config.DATABASE_URL_APP, { log });
 const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
 const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_IDENTITY));
@@ -79,17 +91,6 @@ try {
   await assertRuntimeDbRole(identityDb.pool, DB_ROLE_NAMES.identity);
 } catch (error) {
   log.error({ err: error }, 'api refused unsafe database role');
-  await closeInfra();
-  process.exit(1);
-}
-
-// P6-4: fail boot on a sha256 mismatch; no network fetch (offline list only).
-let breachedList: ReturnType<typeof loadBreachedPasswordList>;
-try {
-  breachedList = loadBreachedPasswordList();
-  logBreachedListBoot(log, breachedList);
-} catch (error) {
-  log.error({ err: error }, 'api refused breached-password list');
   await closeInfra();
   process.exit(1);
 }

@@ -70,6 +70,15 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(options: BuildAppOptions) {
+  // Test-only surface must never reach a production build (P6-8 cheap low).
+  if (options.config.NODE_ENV === 'production') {
+    const leaked = (
+      ['adminTestRoutes', 'driverTestRoutes', 'testRegistryRows', 'onRoute'] as const
+    ).filter((key) => options[key] !== undefined);
+    if (leaked.length > 0) {
+      throw new Error(`buildApp refused test-only options in production: ${leaked.join(', ')}`);
+    }
+  }
   const hops = options.config.TRUST_PROXY_HOPS;
   const app = Fastify({
     logger: options.logDestination

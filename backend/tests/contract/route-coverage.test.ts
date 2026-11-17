@@ -170,8 +170,10 @@ async function captureRoutes(config: ReturnType<typeof productionApiConfig>): Pr
   captured: CapturedRoute[];
 }> {
   const captured: CapturedRoute[] = [];
+  // buildApp refuses test-only options (onRoute) under NODE_ENV=production, so the
+  // production-shaped fixture boots as test: route gating depends on DEPLOY_ENV, not NODE_ENV.
   const app = await buildApp({
-    config,
+    config: { ...config, NODE_ENV: 'test' },
     healthChecks: [],
     appDb: {} as pg.Pool,
     onRoute: (route) => {

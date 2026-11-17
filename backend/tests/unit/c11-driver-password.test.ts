@@ -1,12 +1,17 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
 import type { DriverAuthRuntime } from '../../src/modules/identity/application/driverAuth.js';
 import { passwordChangeKey } from '../../src/modules/identity/application/loginLimiter.js';
 import {
+  BREACHED_LIST_SHA256,
+  BREACHED_LIST_VERSION,
   loadBreachedPasswordList,
   logBreachedListBoot,
 } from '../../src/modules/identity/infra/crypto/breachedPasswords.js';
+import { BREACHED_LIST_BODY } from '../../src/modules/identity/infra/crypto/breachedPasswordsData.js';
 import { testConfig } from '../helpers/config.js';
 import { allowAllSessionAuthority } from '../helpers/sessionAuthority.js';
 
@@ -109,15 +114,29 @@ const change = (payload: object) =>
     payload,
   });
 describe('C11 breach list boot', () => {
-  it('P6-4: loads the offline list and logs version + sha256', () => {
+  it('P6-4/P6-8: loads the embedded offline list and logs version + pinned sha256', () => {
     const lines: Record<string, unknown>[] = [];
     const list = loadBreachedPasswordList();
     logBreachedListBoot({ info: (bindings) => lines.push(bindings) }, list);
+    expect(BREACHED_LIST_VERSION).toBe('2026-10-15.1');
+    expect(BREACHED_LIST_SHA256).toBe(
+      '510841f72880b13988200c81408f928c617559b3bb25ed900a9d2d3678a368dc',
+    );
     expect(list.has('password123')).toBe(true);
+    expect(list).toMatchObject({ version: BREACHED_LIST_VERSION, sha256: BREACHED_LIST_SHA256 });
     expect(lines[0]).toMatchObject({
-      breachedListVersion: list.version,
-      breachedListSha256: list.sha256,
+      breachedListVersion: BREACHED_LIST_VERSION,
+      breachedListSha256: BREACHED_LIST_SHA256,
     });
+  });
+
+  it('P6-8: embedded body and the human-readable .txt copy cannot drift', () => {
+    const fileBody = readFileSync(
+      new URL('../../src/modules/identity/infra/crypto/breached-passwords.txt', import.meta.url),
+    );
+    const sha = (body: string | Uint8Array) => createHash('sha256').update(body).digest('hex');
+    expect(sha(BREACHED_LIST_BODY)).toBe(BREACHED_LIST_SHA256);
+    expect(sha(fileBody)).toBe(BREACHED_LIST_SHA256);
   });
 });
 
@@ -194,6 +213,14 @@ describe('C11 POST /v1/driver/auth/password', () => {
     expect(response.json()).toMatchObject({ error: { code: 'too_many_attempts' } });
     expect(response.headers['retry-after']).toBe('900');
     expect(h.verified()).toBe(0);
+  });
+
+  it('prod-safe wiring: no fs read in dist (embedded body only)', () => {
+    const source = readFileSync(
+      new URL('../../src/modules/identity/infra/crypto/breachedPasswords.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).not.toMatch(/node:fs|readFileSync/);
   });
 
   it('staff and shopkeeper tokens on C11 are 401', async () => {

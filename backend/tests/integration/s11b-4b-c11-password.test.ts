@@ -315,25 +315,102 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
     expect(login.statusCode, login.body).toBe(200);
   });
 
+  it('C11-03: wrong current passwords count toward C1, not only LIM-C11-01', async () => {
+    const seeded = await seedDriver(true, FUTURE);
+    const token = (seeded.session as { accessToken: string }).accessToken;
+    const username = await ownerPool.query<{ username_norm: string }>(
+      `SELECT username_norm FROM identity.accounts WHERE id = $1`,
+      [seeded.accountId],
+    );
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const wrong = await change(token, { currentPassword: 'pw-wrong-cccccc', newPassword: NEW });
+      expect(wrong.statusCode, wrong.body).toBe(422);
+      expect(wrong.json()).toMatchObject({ error: { code: 'CURRENT_PASSWORD_INVALID' } });
+    }
+    const login = await app.inject({
+      method: 'POST',
+      url: '/v1/driver/auth/login',
+      payload: { username: username.rows[0]!.username_norm, password: TEMP },
+    });
+    expect(login.statusCode, login.body).toBe(429);
+    expect(login.json()).toMatchObject({ error: { code: 'too_many_attempts' } });
+  });
+
   it('P6-3: no egress, no secret leakage, and a failed audit insert rolls back', async () => {
     const seeded = await seedDriver(true, FUTURE);
     const before = seeded.session as { accessToken: string; refreshToken: string };
+    const readCredential = async () =>
+      (
+        await ownerPool.query<{
+          password_hash: string;
+          must_change_password: boolean;
+          temp_expires_at: Date | null;
+        }>(
+          `SELECT c.password_hash, a.must_change_password, c.temp_expires_at
+             FROM identity.accounts a JOIN identity.driver_credentials c ON c.account_id = a.id
+            WHERE a.id = $1`,
+          [seeded.accountId],
+        )
+      ).rows[0]!;
+    const readLiveSids = async () =>
+      (
+        await ownerPool.query<{ sid: string }>(
+          `SELECT sid FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL
+            ORDER BY sid`,
+          [seeded.accountId],
+        )
+      ).rows.map((r) => r.sid);
+    const original = await readCredential();
+    const liveBefore = await readLiveSids();
+    logLines.length = 0;
+
+    // Rollback FIRST, while the driver is still flagged and the temp credential still lives.
+    await ownerPool.query(`
+      CREATE OR REPLACE FUNCTION platform.c11_audit_fail() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.action = 'driver_password_changed' THEN RAISE EXCEPTION 'c11 audit fail'; END IF; RETURN NEW; END $$`);
+    await ownerPool.query(`CREATE TRIGGER c11_audit_fail BEFORE INSERT ON platform.audit_log
+      FOR EACH ROW EXECUTE FUNCTION platform.c11_audit_fail()`);
+    try {
+      const failed = await change(before.accessToken, { currentPassword: TEMP, newPassword: NEW });
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      const row = await readCredential();
+      expect(row.password_hash).toBe(original.password_hash);
+      expect(row.must_change_password).toBe(true);
+      expect(row.temp_expires_at?.getTime()).toBe(FUTURE.getTime());
+      expect(await readLiveSids()).toEqual(liveBefore);
+      const audit = await ownerPool.query(
+        `SELECT 1 FROM platform.audit_log WHERE actor_id = $1 AND action = 'driver_password_changed'`,
+        [seeded.accountId],
+      );
+      expect(audit.rows).toHaveLength(0);
+      const failScan = `${failed.body}\n${logLines.join('')}`;
+      for (const secret of [
+        TEMP,
+        NEW,
+        original.password_hash,
+        before.accessToken,
+        before.refreshToken,
+      ]) {
+        expect(failScan).not.toContain(secret);
+      }
+    } finally {
+      await ownerPool.query(`DROP TRIGGER IF EXISTS c11_audit_fail ON platform.audit_log`);
+      await ownerPool.query(`DROP FUNCTION IF EXISTS platform.c11_audit_fail()`);
+    }
+
+    // Egress stubs count calls: a successful C11 must make none.
     const realFetch = globalThis.fetch;
     const realHttp = http.request;
     const realHttps = https.request;
+    let calls = 0;
     const block = () => {
+      calls += 1;
       throw new Error('egress blocked');
     };
     globalThis.fetch = (async () => block()) as typeof fetch;
     http.request = block as typeof http.request;
     https.request = block as typeof https.request;
-    const tempHash = (
-      await ownerPool.query<{ password_hash: string }>(
-        `SELECT password_hash FROM identity.driver_credentials WHERE account_id = $1`,
-        [seeded.accountId],
-      )
-    ).rows[0]!.password_hash;
-    logLines.length = 0;
+    const tempHash = original.password_hash;
     let okBody: string | undefined;
     try {
       const ok = await change(before.accessToken, { currentPassword: TEMP, newPassword: NEW });
@@ -342,6 +419,17 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
       expect(ok.body).not.toContain(TEMP);
       expect(ok.body).not.toContain(NEW);
       expect(ok.body).not.toContain(tempHash);
+      // 422 error bodies are scanned for secrets too.
+      const afterOk = JSON.parse(ok.body) as { accessToken: string };
+      const rejected = await change(afterOk.accessToken, {
+        currentPassword: 'pw-wrong-cccccc',
+        newPassword: NEW,
+      });
+      expect(rejected.statusCode).toBe(422);
+      for (const secret of [TEMP, NEW, tempHash, before.accessToken, before.refreshToken]) {
+        expect(rejected.body).not.toContain(secret);
+      }
+      expect(calls).toBe(0);
     } finally {
       globalThis.fetch = realFetch;
       http.request = realHttp;
@@ -366,56 +454,40 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
     ).rows
       .map((r) => r.data)
       .join('');
-    const secrets = [TEMP, NEW, tempHash, newHash, before.accessToken, before.refreshToken];
+    const secrets = [
+      TEMP,
+      NEW,
+      tempHash,
+      newHash,
+      before.accessToken,
+      before.refreshToken,
+      after.accessToken,
+      after.refreshToken,
+    ];
     const scanned = `${logLines.join('')}\n${auditText}`;
     for (const secret of secrets) expect(scanned).not.toContain(secret);
-    // Rollback: a failing audit insert must undo credential/session changes.
-    await ownerPool.query(`
-      CREATE OR REPLACE FUNCTION platform.c11_audit_fail() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF NEW.action = 'driver_password_changed' THEN RAISE EXCEPTION 'c11 audit fail'; END IF; RETURN NEW; END $$`);
-    await ownerPool.query(`CREATE TRIGGER c11_audit_fail BEFORE INSERT ON platform.audit_log
-      FOR EACH ROW EXECUTE FUNCTION platform.c11_audit_fail()`);
-    try {
-      const failed = await change(after.accessToken, {
-        currentPassword: NEW,
-        newPassword: 'pw-new-eeeeeeee',
-      });
-      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
-      const failScan = `${failed.body}\n${logLines.join('')}`;
-      for (const secret of [...secrets, 'pw-new-eeeeeeee', after.accessToken, after.refreshToken]) {
-        expect(failScan).not.toContain(secret);
-      }
-      const row = await ownerPool.query<{
-        password_hash: string;
-        must_change_password: boolean;
-        temp_expires_at: Date | null;
-      }>(
-        `SELECT c.password_hash, a.must_change_password, c.temp_expires_at
-           FROM identity.accounts a JOIN identity.driver_credentials c ON c.account_id = a.id
-          WHERE a.id = $1`,
+    // E3 outbox payloads are scanned too.
+    const outboxPayloads = (
+      await ownerPool.query<{ payload: string }>(
+        `SELECT payload::text AS payload FROM platform.outbox_events
+          WHERE event_type = 'identity.sessions_revoked' AND payload->>'accountId' = $1`,
         [seeded.accountId],
-      );
-      expect(row.rows[0]).toMatchObject({
-        password_hash: newHash,
-        must_change_password: false,
-        temp_expires_at: null,
-      });
-      const stillLive = await ownerPool.query<{ sid: string }>(
-        `SELECT sid FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL ORDER BY sid`,
-        [seeded.accountId],
-      );
-      expect(stillLive.rows.map((r) => r.sid).sort()).toEqual(
-        liveSids.rows.map((r) => r.sid).sort(),
-      );
-      const audit = await ownerPool.query(
-        `SELECT 1 FROM platform.audit_log WHERE actor_id = $1 AND action = 'driver_password_changed'`,
-        [seeded.accountId],
-      );
-      expect(audit.rows).toHaveLength(1);
-    } finally {
-      await ownerPool.query(`DROP TRIGGER IF EXISTS c11_audit_fail ON platform.audit_log`);
-      await ownerPool.query(`DROP FUNCTION IF EXISTS platform.c11_audit_fail()`);
-    }
+      )
+    ).rows.map((r) => r.payload);
+    expect(outboxPayloads.length).toBeGreaterThan(0);
+    for (const secret of secrets) expect(outboxPayloads.join('')).not.toContain(secret);
+    // The success path really committed: new hash, flag cleared, one audit row.
+    expect(await readCredential()).toMatchObject({
+      password_hash: newHash,
+      must_change_password: false,
+      temp_expires_at: null,
+    });
+    const auditAfter = await ownerPool.query(
+      `SELECT 1 FROM platform.audit_log WHERE actor_id = $1 AND action = 'driver_password_changed'`,
+      [seeded.accountId],
+    );
+    expect(auditAfter.rows).toHaveLength(1);
+    expect(liveSids.rows.length).toBeGreaterThan(0);
     const login = await ownerPool.query<{ username_norm: string }>(
       `SELECT username_norm FROM identity.accounts WHERE id = $1`,
       [seeded.accountId],
