@@ -78,6 +78,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       log: silentDrainLog,
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
+      runAfterRespond: (fn) => void fn(),
     };
     const driverAuth: DriverAuthRuntime = {
       ...shared,
