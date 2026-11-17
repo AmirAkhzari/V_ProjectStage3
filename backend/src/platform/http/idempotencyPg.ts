@@ -113,8 +113,9 @@ export class PgIdempotencyStore implements IdempotencyStore {
   }
 
   async abandon(scope: string, subjectId: string, key: string): Promise<void> {
+    // P7-3: 0011 grants no DELETE; '-infinity' makes the next claim take the row over now.
     await this.pool.query(
-      `DELETE FROM platform.idempotency_keys
+      `UPDATE platform.idempotency_keys SET created_at = '-infinity'
         WHERE scope = $1 AND subject_id = $2 AND key = $3 AND status_code IS NULL`,
       [scope, subjectId, key],
     );

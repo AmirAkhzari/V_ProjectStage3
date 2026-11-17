@@ -366,6 +366,13 @@ export async function reserveDriverUnlock(
   return { allowed: true, driverCount };
 }
 
+/** L-7-1: DECR only live keys; a DECR after expiry would recreate a key with no EXPIRE. */
+export async function refundDriverUnlock(redis: Redis, staffId: string, driverId: string) {
+  for (const key of [unlockStaffKey(staffId), unlockDriverKey(driverId)]) {
+    if ((await redis.ttl(key)) > 0) await redis.decr(key);
+  }
+}
+
 /**
  * AUTH-B83-03: clear only username+IP and username-global counters and locks.
  * Never the per-IP counter, tarpit, or LIM-C11-01 `pwd:change:sub:*`.

@@ -11,6 +11,7 @@ import type { DrainLog } from '../infra/session/pgSessionStore.js';
 import {
   clearDriverLockout,
   driverLockedUntil,
+  refundDriverUnlock,
   reserveDriverUnlock,
   UNLOCK_DRIVER_MAX_PER_HOUR,
 } from './loginLimiter.js';
@@ -138,23 +139,21 @@ export async function unlockDriver(
   const claim = await store.claim(scope, input.staffId, key, requestHash);
   if (claim.status === 'completed') {
     if (claim.record.requestHash !== requestHash) throw reuse();
-    // A previous successful clear may have failed after commit: always retry the DEL,
-    // then replay the stored 200 with no second audit and no second limit hit.
-    await redisOr503(async () => {
-      await assertRedisForAuthIssuance(runtime.redis);
-      await clearDriverLockout(runtime.redis, driver.username);
-    });
+    // P7-1: pure replay of the committed 200. No Redis, limit or audit — a re-locked driver
+    // stays locked; recovery from a failed post-commit DEL is a new key (counted + audited).
     return claim.record.response as DriverUnlockView;
   }
   if (claim.status === 'in_progress') throw inProgress(claim.retryAfter);
 
   let committed = false;
+  let reserved = false;
   try {
     await assertRedisForAuthIssuance(runtime.redis);
     const limit = await redisOr503(() =>
       reserveDriverUnlock(runtime.redis, input.staffId, input.driverId),
     );
     if (!limit.allowed) throw rateLimited(limit.retryAfter);
+    reserved = true;
     if (limit.driverCount === UNLOCK_DRIVER_MAX_PER_HOUR) {
       // Stable alert message; no username or IP in clear.
       runtime.log.info?.(
@@ -203,9 +202,22 @@ export async function unlockDriver(
       );
     });
     committed = true;
-    await redisOr503(() => clearDriverLockout(runtime.redis, driver.username));
+    try {
+      await clearDriverLockout(runtime.redis, driver.username);
+    } catch (error) {
+      // L-7-2: the commit stands (the audit row exists); only the Redis DEL is lost.
+      runtime.log.error(
+        { driverId: input.driverId, staffId: input.staffId },
+        'driver_unlock_redis_clear_failed',
+      );
+      throw error instanceof AppError ? error : unavailable();
+    }
     return view;
   } catch (error) {
+    // L-7-1: refund only a slot this attempt reserved; a 429 past the cap stays counted.
+    if (!committed && reserved) {
+      await refundDriverUnlock(runtime.redis, input.staffId, input.driverId).catch(() => {});
+    }
     if (!committed) await store.abandon(scope, input.staffId, key).catch(() => {});
     throw error;
   }
