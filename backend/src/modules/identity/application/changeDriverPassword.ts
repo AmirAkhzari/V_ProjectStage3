@@ -90,7 +90,7 @@ async function loadCurrentCredential(pool: pg.Pool, accountId: string, sid: stri
 }
 // C11 (AUTH-PW-04): Redis gate → limiters → argon2 → policy → one transaction + NEW session
 export async function changeDriverPassword(
-  runtime: DriverAuthRuntime & { breachedPassword?: (normalized: string) => boolean },
+  runtime: DriverAuthRuntime,
   input: {
     /** From the verified access token only; never from the body. */
     accountId: string;
@@ -102,6 +102,7 @@ export async function changeDriverPassword(
   clock: Clock = systemClock,
 ): Promise<DriverSessionView> {
   await assertRedisForAuthIssuance(runtime.redis);
+  if (!runtime.breachedPassword) throw unavailable(5);
   const credential = await loadCurrentCredential(runtime.identityPool, input.accountId, input.sid);
   const now = clock();
   if (now.getTime() >= absoluteExpiresAt('driver', credential.authTime).getTime()) {
@@ -146,23 +147,31 @@ export async function changeDriverPassword(
     const tempExpired =
       credential.tempExpiresAt !== null && credential.tempExpiresAt.getTime() <= now.getTime();
     if (!currentOk || tempExpired) {
-      // No dedicated expired-temp code exists; CURRENT_PASSWORD_INVALID is the stand-in.
+      // v1.2.0 contract carry (L-6-3): AUTH-PW-03 has no dedicated code, so an expired temp
+      // returns the same 422 CURRENT_PASSWORD_INVALID body as a wrong current (next contract).
       await applyLoginTarpit(reserved, runtime.limiter);
       throw badCurrent();
     }
-    const normalizedNew = normalizePassword(input.newPassword);
-    if (normalizedNew.length < PASSWORD_MIN_LENGTH) throw policyError('PASSWORD_TOO_SHORT');
-    if (normalizedNew.length > PASSWORD_MAX_LENGTH) {
-      throw new AppError('VALIDATION_FAILED', 400, 'Request could not be processed');
+    let nextHash: string;
+    try {
+      // P6-2: current password verified, so a policy reject must not count toward C1.
+      const normalizedNew = normalizePassword(input.newPassword);
+      if (normalizedNew.length < PASSWORD_MIN_LENGTH) throw policyError('PASSWORD_TOO_SHORT');
+      if (normalizedNew.length > PASSWORD_MAX_LENGTH) {
+        throw new AppError('VALIDATION_FAILED', 400, 'Request could not be processed');
+      }
+      if (normalizePassword(input.currentPassword) === normalizedNew) {
+        throw policyError('PASSWORD_REUSED');
+      }
+      const policy = evaluateNewPassword(normalizedNew, runtime.breachedPassword, {
+        username: credential.username,
+      });
+      if (!policy.ok) throw policyError(policy.code);
+      nextHash = await runtime.hasher.hash(policy.normalized);
+    } catch (error) {
+      await refund();
+      throw error;
     }
-    if (normalizePassword(input.currentPassword) === normalizedNew) {
-      throw policyError('PASSWORD_REUSED');
-    }
-    const policy = evaluateNewPassword(normalizedNew, runtime.breachedPassword ?? (() => false), {
-      username: credential.username,
-    });
-    if (!policy.ok) throw policyError(policy.code);
-    const nextHash = await runtime.hasher.hash(policy.normalized);
     const newSid = randomUUID();
     let issued;
     try {
@@ -178,7 +187,9 @@ export async function changeDriverPassword(
           // CAS: under the issue lock the hash must still be the one we verified.
           verifiedPasswordHash: credential.passwordHash,
           authTime: credential.authTime,
-          beforeCommit: async (rawClient) => {
+          // Prior families are revoked before the new row is inserted, so the new sid is not
+          // a revoke victim; E3/audit cover prior families only.
+          beforeInsert: async (rawClient) => {
             const client = rawClient as unknown as pg.PoolClient;
             await client.query(
               `UPDATE identity.driver_credentials SET password_hash = $2, temp_expires_at = NULL
@@ -191,7 +202,6 @@ export async function changeDriverPassword(
                 WHERE id = $1`,
               [input.accountId],
             );
-            // Revoke every prior family here; the new session is inserted after this callback.
             await revokeAccountSessionsInTx(client, {
               accountId: input.accountId,
               reason: 'password_change',

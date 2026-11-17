@@ -2,6 +2,10 @@ import { buildApp } from './app.js';
 import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
 import { Argon2idPasswordHasher } from './modules/identity/infra/crypto/argon2Hasher.js';
+import {
+  loadBreachedPasswordList,
+  logBreachedListBoot,
+} from './modules/identity/infra/crypto/breachedPasswords.js';
 import { createSmsProvider } from './modules/notification/api.js';
 import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
@@ -79,6 +83,17 @@ try {
   process.exit(1);
 }
 
+// P6-4: fail boot on a sha256 mismatch; no network fetch (offline list only).
+let breachedList: ReturnType<typeof loadBreachedPasswordList>;
+try {
+  breachedList = loadBreachedPasswordList();
+  logBreachedListBoot(log, breachedList);
+} catch (error) {
+  log.error({ err: error }, 'api refused breached-password list');
+  await closeInfra();
+  process.exit(1);
+}
+
 const app = await buildApp({
   config,
   verifier,
@@ -93,6 +108,7 @@ const app = await buildApp({
     hasher,
     log,
     auditHashKey: config.AUDIT_HASH_KEY,
+    breachedPassword: (normalized) => breachedList.has(normalized),
   },
   otpAuth: {
     identityPool: identityDb.pool,

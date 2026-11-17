@@ -157,6 +157,8 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
           }
         }
       }
+      // C11: prior families are revoked here, before the new session row exists.
+      if (input.beforeInsert) await input.beforeInsert(client);
       await client.query(
         `INSERT INTO identity.sessions
            (sid, account_id, typ, family_id, created_at, last_used_at, absolute_expires_at)

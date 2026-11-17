@@ -52,11 +52,15 @@ export interface RefreshIssueInput {
    * the absolute expiry) is pinned to this instant instead of `now`.
    */
   authTime?: Date;
+  /** C11: runs after locks/CAS but BEFORE the new session/RT INSERT (revoke prior families). */
+  beforeInsert?: IssueTxHook;
   /** N18-5: run inside the issue transaction before COMMIT (OTP login audit). */
-  beforeCommit?: (client: {
-    query: (queryText: string, values?: unknown[]) => Promise<unknown>;
-  }) => Promise<void>;
+  beforeCommit?: IssueTxHook;
 }
+
+export type IssueTxHook = (client: {
+  query: (queryText: string, values?: unknown[]) => Promise<unknown>;
+}) => Promise<void>;
 
 export interface RefreshIssueResult {
   refreshToken: string;

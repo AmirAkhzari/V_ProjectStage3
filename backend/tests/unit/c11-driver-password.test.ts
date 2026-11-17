@@ -3,6 +3,10 @@ import type pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
 import type { DriverAuthRuntime } from '../../src/modules/identity/application/driverAuth.js';
 import { passwordChangeKey } from '../../src/modules/identity/application/loginLimiter.js';
+import {
+  loadBreachedPasswordList,
+  logBreachedListBoot,
+} from '../../src/modules/identity/infra/crypto/breachedPasswords.js';
 import { testConfig } from '../helpers/config.js';
 import { allowAllSessionAuthority } from '../helpers/sessionAuthority.js';
 
@@ -104,6 +108,19 @@ const change = (payload: object) =>
     headers: { authorization: 'Bearer tok' },
     payload,
   });
+describe('C11 breach list boot', () => {
+  it('P6-4: loads the offline list and logs version + sha256', () => {
+    const lines: Record<string, unknown>[] = [];
+    const list = loadBreachedPasswordList();
+    logBreachedListBoot({ info: (bindings) => lines.push(bindings) }, list);
+    expect(list.has('password123')).toBe(true);
+    expect(lines[0]).toMatchObject({
+      breachedListVersion: list.version,
+      breachedListSha256: list.sha256,
+    });
+  });
+});
+
 describe('C11 POST /v1/driver/auth/password', () => {
   const cases: [string, object, number, string][] = [
     [

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
 import { changeDriverPassword } from '../application/changeDriverPassword.js';
 import { loginDriver, refreshDriver, type DriverAuthRuntime } from '../application/driverAuth.js';
-import { loadBreachedPasswordList } from '../infra/crypto/breachedPasswords.js';
 import {
   presentedRefreshToken,
   refreshCallContext,
@@ -60,12 +59,6 @@ const passwordChangeBody = z
   })
   .strict();
 
-let breachedList: ReturnType<typeof loadBreachedPasswordList> | undefined;
-function breachedCheck(): (normalized: string) => boolean {
-  breachedList ??= loadBreachedPasswordList();
-  return (normalized) => breachedList?.has(normalized) ?? false;
-}
-
 function runtimeOf(app: { driverAuth?: DriverAuthRuntime }): DriverAuthRuntime {
   if (!app.driverAuth) {
     throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
@@ -105,10 +98,12 @@ export const driverRoutes: FastifyPluginAsync = async (app) => {
       try {
         // Identity comes from the token only; a body `driverId` fails `.strict()` first.
         return driverAuthSession.parse(
-          await changeDriverPassword(
-            { ...runtimeOf(app), breachedPassword: breachedCheck() },
-            { accountId: subject.sub, sid: subject.sid, ...body, ip: request.ip },
-          ),
+          await changeDriverPassword(runtimeOf(app), {
+            accountId: subject.sub,
+            sid: subject.sid,
+            ...body,
+            ip: request.ip,
+          }),
         );
       } catch (error) {
         outcome = error instanceof AppError ? error.code : 'error';
