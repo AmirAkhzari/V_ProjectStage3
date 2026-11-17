@@ -7,6 +7,7 @@ import type { DriverAuthRuntime } from '../../src/modules/identity/application/d
 import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpAuth.js';
 import {
   ipFailKey,
+  limiterKeyPart,
   passwordChangeKey,
   unlockStaffKey,
   uipIndexKey,
@@ -175,7 +176,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     }
     await redis.set(ipFailKey(ip), '4', 'EX', 900);
     await redis.set(passwordChangeKey(accountId), '2', 'EX', 900);
-    await redis.sadd(uipIndexKey(u), userIpLockKey(u, ip).split(':')[3]!);
+    await redis.sadd(uipIndexKey(u), limiterKeyPart(ip));
     await redis.expire(uipIndexKey(u), 3600);
     return ip;
   }
@@ -190,6 +191,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
 
   it('B83-01/02/06: clears only username/uip state; replay free; reuse 422; reason codes', async () => {
     const staff = await seedStaff('distributor_admin', DIST, ['drivers.manage']);
+    const token = staff.accessToken;
     const driver = await seedDriver();
     const u = driver.username;
     expect((await login(u)).statusCode).toBe(200);
@@ -198,7 +200,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       [driver.accountId],
     );
     const ip = await lockState(u, driver.accountId);
-    const first = await unlock(staff.accessToken, driver.accountId);
+    const first = await unlock(token, driver.accountId);
     expect(first.statusCode, first.body).toBe(200);
     expect(first.headers['cache-control']).toBe('no-store');
     const body = first.json();
@@ -228,13 +230,13 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     expect((await login(u)).statusCode).toBe(200);
     // B83-02: a no-op is audited and counted; replay and reuse of one key.
     const key = keyOf();
-    const noop = await unlock(staff.accessToken, driver.accountId, { key });
+    const noop = await unlock(token, driver.accountId, { key });
     expect(noop.json()).toMatchObject({ wasLocked: false, lockedUntilBefore: null, active: true });
     expect([await redis.get(limitKey), await auditCount(driver.accountId)]).toEqual(['2', '2']);
-    const replay = await unlock(staff.accessToken, driver.accountId, { key });
+    const replay = await unlock(token, driver.accountId, { key });
     expect(replay.json()).toEqual(noop.json());
     expect([await redis.get(limitKey), await auditCount(driver.accountId)]).toEqual(['2', '2']);
-    const reuse = await unlock(staff.accessToken, driver.accountId, { key, body: { reason: 'x' } });
+    const reuse = await unlock(token, driver.accountId, { key, body: { reason: 'typo again' } });
     expect(reuse.statusCode).toBe(422);
     expect(reuse.json()).toMatchObject({ error: { code: 'IDEMPOTENCY_KEY_REUSE' } });
     const cases: [object, string][] = [
@@ -243,13 +245,11 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       [{ reason: 'a'.repeat(501) }, 'REASON_TOO_LONG'],
     ];
     for (const [payload, code] of cases) {
-      const response = await unlock(staff.accessToken, driver.accountId, { body: payload });
+      const response = await unlock(token, driver.accountId, { body: payload });
       expect(response.statusCode, response.body).toBe(422);
       expect(response.json()).toMatchObject({ error: { code } });
     }
-    const tooLong = await unlock(staff.accessToken, driver.accountId, {
-      body: { reason: 'a'.repeat(501) },
-    });
+    const tooLong = await unlock(token, driver.accountId, { body: { reason: 'a'.repeat(501) } });
     expect(tooLong.json()).toMatchObject({ error: { details: { max: 500 } } });
   });
 
