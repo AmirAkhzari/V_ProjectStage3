@@ -82,7 +82,9 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
 
   async issue(input: RefreshIssueInput, clock: Clock = systemClock): Promise<RefreshIssueResult> {
     const now = clock();
-    const windows = sessionWindows(input.typ, now, now);
+    // C11: `authTime` pins the absolute window to the original login (no reset on change).
+    const createdAt = input.authTime ?? now;
+    const windows = sessionWindows(input.typ, createdAt, now);
     const refreshToken = generateRefreshToken();
     const hash = hashRefreshToken(refreshToken);
     const extraSids = await this.withTx(async (client) => {
@@ -159,7 +161,14 @@ export class PgRefreshTokenStore implements RefreshTokenStore {
         `INSERT INTO identity.sessions
            (sid, account_id, typ, family_id, created_at, last_used_at, absolute_expires_at)
          VALUES ($1, $2, $3, $4, $5, $5, $6)`,
-        [input.sid, input.accountId, input.typ, input.familyId, now, windows.absoluteExpiresAt],
+        [
+          input.sid,
+          input.accountId,
+          input.typ,
+          input.familyId,
+          createdAt,
+          windows.absoluteExpiresAt,
+        ],
       );
       await client.query(
         `INSERT INTO identity.refresh_tokens

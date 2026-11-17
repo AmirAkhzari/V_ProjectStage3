@@ -238,7 +238,11 @@ export function assertRouteRegistered(payload: OnRoutePayload, registry: RouteRe
   }
 }
 
-const HOOK_INSTALLED = Symbol.for('vproject.routeRegistryHook');
+/**
+ * P5-5: module-private marker. Deliberately NOT `Symbol.for` (a global registry key any caller
+ * can preset to skip this hook) and deliberately not exported.
+ */
+const HOOK_INSTALLED: unique symbol = Symbol('vproject.routeRegistryHook');
 
 /**
  * Installs the onRoute check. Idempotent: a Fastify child instance inherits the marker

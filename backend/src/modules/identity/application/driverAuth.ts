@@ -344,7 +344,8 @@ async function requireUsername(pool: pg.Pool, accountId: string): Promise<string
   return username;
 }
 
-function sessionBody(input: {
+/** Shared with C11 so both issuance paths return the identical `DriverSession` body. */
+export function sessionBody(input: {
   accessToken: string;
   absolute: Date;
   mustChangePassword: boolean;

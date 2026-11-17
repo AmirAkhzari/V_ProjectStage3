@@ -7,6 +7,7 @@ import type {
   SessionAuthority,
   SessionSnapshot,
 } from '../../src/platform/auth/sessionAuthority.js';
+import { withTenant } from '../../src/platform/db/tenant.js';
 import { testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
@@ -181,5 +182,34 @@ describe('A7 /v1/app/me tenant isolation', () => {
     const scoped = await get('tok-a', { 'x-scope-distributor': randomUUID() });
     expect(scoped.statusCode).toBe(200);
     expect(scoped.json()).toEqual(plain.json());
+  });
+
+  it('P5-2: RLS itself hides shopkeeper B from tenant A (not only the handler WHERE)', async () => {
+    // A shares DIST_1 with B, so this proves the row-level policy, not distributor scoping.
+    const asA = await withTenant(
+      appPool,
+      { subjectType: 'shopkeeper', shopkeeperId: SHOP_A, distributorId: DIST_1 },
+      (tx) =>
+        tx.client.query<{ id: string }>('SELECT id FROM customers.shopkeepers WHERE id = $1', [
+          SHOP_B,
+        ]),
+    );
+    expect(asA.rows).toHaveLength(0);
+    // No tenant GUC at all is also zero rows, never a cross-tenant read.
+    const noTenant = await appPool.query<{ id: string }>(
+      'SELECT id FROM customers.shopkeepers WHERE id = $1',
+      [SHOP_B],
+    );
+    expect(noTenant.rows).toHaveLength(0);
+    // Sanity: A can read its own row under its tenant context.
+    const own = await withTenant(
+      appPool,
+      { subjectType: 'shopkeeper', shopkeeperId: SHOP_A, distributorId: DIST_1 },
+      (tx) =>
+        tx.client.query<{ id: string }>('SELECT id FROM customers.shopkeepers WHERE id = $1', [
+          SHOP_A,
+        ]),
+    );
+    expect(own.rows).toHaveLength(1);
   });
 });

@@ -126,7 +126,11 @@ export async function lookupAccountStatus(
   return status === 'active' ? 'active' : 'inactive';
 }
 
-async function revokeAccountSessionsInTx(
+/**
+ * Exported for C11: the password change runs inside the new session's issue transaction, so the
+ * revoke must share that transaction and may skip the `session_version` bump it performs itself.
+ */
+export async function revokeAccountSessionsInTx(
   client: pg.PoolClient,
   input: {
     accountId: string;
@@ -134,6 +138,8 @@ async function revokeAccountSessionsInTx(
     now?: Date;
     lockTimeout?: string;
     alreadyLocked?: boolean;
+    /** C11 bumps `session_version` itself in the same transaction. */
+    bumpSessionVersion?: boolean;
   },
 ): Promise<{ sids: string[]; familyIds: string[] }> {
   const now = input.now ?? new Date();
@@ -165,10 +171,12 @@ async function revokeAccountSessionsInTx(
       WHERE s.sid = t.sid AND s.account_id = $1`,
     [input.accountId, now],
   );
-  await client.query(
-    `UPDATE identity.accounts SET session_version = session_version + 1 WHERE id = $1`,
-    [input.accountId],
-  );
+  if (input.bumpSessionVersion !== false) {
+    await client.query(
+      `UPDATE identity.accounts SET session_version = session_version + 1 WHERE id = $1`,
+      [input.accountId],
+    );
+  }
   const distributor = await client.query<{ distributor_id: string | null }>(
     `SELECT distributor_id FROM identity.lookup_account_scope($1)`,
     [input.accountId],
