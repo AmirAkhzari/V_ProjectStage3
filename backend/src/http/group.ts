@@ -51,7 +51,7 @@ function requestPathOf(request: FastifyRequest): string {
  * Keyed on the exact registered operationId (never a path suffix) so an auto-HEAD for a GET
  * op is covered by Fastify copying the GET operationId.
  */
-const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set(['A7', 'C11']);
+const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set(['A7', 'C11', 'B83']);
 
 /**
  * A route group only sets prefix, guard and registration (§9.3 rule 4); routes come from modules.
