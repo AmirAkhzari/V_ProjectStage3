@@ -7,6 +7,7 @@ import { buildApp, type App } from '../../src/app.js';
 import { createRouteGroup } from '../../src/http/group.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import {
+  catchAllRouteConfig,
   createRouteRegistry,
   type RouteRegistryRow,
 } from '../../src/platform/http/routeRegistry.js';
@@ -386,6 +387,39 @@ describe('onRequest access enforcement', () => {
     expect(response.json()).toEqual({
       error: { code: 'NOT_FOUND', message: 'Resource not found' },
     });
+  });
+
+  it('P3-2a: a marked route on a non-catch-all path is 403 at request time, not skipped', async () => {
+    const plugin = createRouteGroup({ group: 'app', prefix: '/v1/app', subject: 'shopkeeper' });
+    const isolated = Fastify();
+    registerErrorHandling(isolated);
+    // Simulate a route that reached request time despite the build-time onRoute guard: the
+    // marker below (a global symbol, shared with the production idempotency tag) makes the
+    // plugin skip installing the assert hook, so the route can register without an operationId.
+    (isolated as unknown as Record<symbol, boolean>)[Symbol.for('vproject.routeRegistryHook')] =
+      true;
+    await isolated.register(plugin, {
+      prefix: '/v1/app',
+      modules: [],
+      verifier: verifierOf('shopkeeper'),
+      sessionAuthority: allowAllSessionAuthority('shopkeeper'),
+      assertIssuance: async () => undefined,
+      registry: createRouteRegistry([]),
+      extraRoutes: async (probes) => {
+        probes.get('/not-catch-all', catchAllRouteConfig(), async () => ({ ok: true }));
+      },
+    });
+    try {
+      const response = await isolated.inject({
+        method: 'GET',
+        url: '/v1/app/not-catch-all',
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+    } finally {
+      await isolated.close();
+    }
   });
 });
 

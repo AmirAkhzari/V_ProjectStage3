@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
+import { EddsaAccessTokenService, generateEd25519Key } from '../../src/platform/auth/eddsa.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import type { SessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
 import {
@@ -102,6 +103,49 @@ describe('A7 GET /v1/app/me', () => {
     expect(noToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
     const badToken = await appMe(app, 'GET', { authorization: 'Bearer bad-token' });
     expect(badToken.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+  });
+
+  it('A7-401: an expired token is 401 UNAUTHENTICATED', async () => {
+    const key = await generateEd25519Key('k1');
+    const issuedAt = new Date('2026-11-16T12:00:00.000Z');
+    const signer = new EddsaAccessTokenService({
+      iss: 'vproject',
+      activeKid: 'k1',
+      keys: [key],
+      now: () => issuedAt,
+    });
+    const expiredToken = await signer.sign({
+      sub: ACCOUNT_ID,
+      typ: 'shopkeeper',
+      sid: 'sid-1',
+      sv: 0,
+    });
+    // 20 minutes after issuance: past the 15-minute TTL plus the 60-second clock skew.
+    const later = new Date(issuedAt.getTime() + 20 * 60 * 1000);
+    const expiredApp = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: new EddsaAccessTokenService({
+        iss: 'vproject',
+        activeKid: 'k1',
+        keys: [key],
+        now: () => later,
+      }),
+      sessionAuthority: authority,
+      appDb: poolOf([row()]),
+    });
+    try {
+      const response = await expiredApp.inject({
+        method: 'GET',
+        url: '/v1/app/me',
+        headers: { authorization: `Bearer ${expiredToken}` },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      expect(response.headers['cache-control']).toBe('no-store');
+    } finally {
+      await expiredApp.close();
+    }
   });
 
   it('A7-401: revoked session is 401 SESSION_REVOKED', async () => {
