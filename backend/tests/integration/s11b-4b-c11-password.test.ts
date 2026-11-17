@@ -205,15 +205,6 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
     }
   });
 
-  it('C11-05: must-change driver is 403 PASSWORD_CHANGE_REQUIRED on C3 logout', async () => {
-    const seeded = await seedDriver(true, FUTURE);
-    const token = (seeded.session as { accessToken: string }).accessToken;
-    const blocked = await app.inject({
-      method: 'POST',
-      url: '/v1/driver/auth/logout',
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(blocked.statusCode).toBe(403);
-    expect(blocked.json()).toMatchObject({ error: { code: 'PASSWORD_CHANGE_REQUIRED' } });
-  });
+  // C11-05 (must-change driver blocked on other driver routes) is covered at guard level in
+  // tests/unit/route-access.test.ts; C3 itself stays PENDING (catch-all 404), not implemented.
 });
