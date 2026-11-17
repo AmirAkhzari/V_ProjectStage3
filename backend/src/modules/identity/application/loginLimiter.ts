@@ -159,7 +159,7 @@ export function userIpFailKeyHashed(userHash: string, ipHash: string): string {
 export function userIpLockKeyHashed(userHash: string, ipHash: string): string {
   return `login:lock:uip:${userHash}:${ipHash}`;
 }
-/* New key class: B83 has no IP, so it needs every IP hash that reserved for this username. */
+/* B83 has no IP, so it needs every IP hash that ever reserved for this username. */
 export function uipIndexKey(username: string): string {
   return `login:uip:index:${limiterKeyPart(username)}`;
 }
@@ -212,8 +212,8 @@ export async function reserveLoginAttempt(
   if (asNumber(raw[0]) === 0) {
     return { status: 'blocked', retryAfter: Math.max(asNumber(raw[1]), 1) };
   }
-  // Plain SADD+EXPIRE keeps the existing reservation Lua untouched; best-effort, so an
-  // index failure can never turn a reserved login into a 503.
+  // Plain SADD+EXPIRE keeps the reservation Lua untouched; best-effort, so an index failure
+  // can never turn a reserved login into a 503.
   try {
     await redis.sadd(uipIndexKey(username), limiterKeyPart(ip));
     await redis.expire(uipIndexKey(username), LOGIN_USER_FAIL_WINDOW);
@@ -333,33 +333,25 @@ export const UNLOCK_STAFF_MAX_PER_HOUR = 10;
 export const UNLOCK_DRIVER_MAX_PER_HOUR = 3;
 export const UNLOCK_WINDOW_SECONDS = 3600;
 
-export function unlockStaffKey(staffId: string): string {
-  return `unlock:staff:${limiterKeyPart(staffId)}`;
-}
-export function unlockDriverKey(driverId: string): string {
-  return `unlock:driver:${limiterKeyPart(driverId)}`;
-}
+export const unlockStaffKey = (staffId: string) => `unlock:staff:${limiterKeyPart(staffId)}`;
+export const unlockDriverKey = (driverId: string) => `unlock:driver:${limiterKeyPart(driverId)}`;
 
 export type UnlockReservation =
   { allowed: true; driverCount: number } | { allowed: false; retryAfter: number };
 
-/** Reuses the shared `INCR_EXPIRE` script; no new Lua for a plain fixed-window counter. */
+/** Reuses the shared `INCR_EXPIRE` script (plain fixed-window counters); no new Lua. */
 export async function reserveDriverUnlock(
   redis: Redis,
   staffId: string,
   driverId: string,
 ): Promise<UnlockReservation> {
-  const staffKey = unlockStaffKey(staffId);
-  const staffCount = asNumber(
-    await redis.eval(INCR_EXPIRE, 1, staffKey, String(UNLOCK_WINDOW_SECONDS)),
-  );
+  const [staffKey, driverKey] = [unlockStaffKey(staffId), unlockDriverKey(driverId)];
+  const win = String(UNLOCK_WINDOW_SECONDS);
+  const staffCount = asNumber(await redis.eval(INCR_EXPIRE, 1, staffKey, win));
   if (staffCount > UNLOCK_STAFF_MAX_PER_HOUR) {
     return { allowed: false, retryAfter: Math.max(await redis.ttl(staffKey), 1) };
   }
-  const driverKey = unlockDriverKey(driverId);
-  const driverCount = asNumber(
-    await redis.eval(INCR_EXPIRE, 1, driverKey, String(UNLOCK_WINDOW_SECONDS)),
-  );
+  const driverCount = asNumber(await redis.eval(INCR_EXPIRE, 1, driverKey, win));
   if (driverCount > UNLOCK_DRIVER_MAX_PER_HOUR) {
     return { allowed: false, retryAfter: Math.max(await redis.ttl(driverKey), 1) };
   }
@@ -374,9 +366,8 @@ export async function refundDriverUnlock(redis: Redis, staffId: string, driverId
 }
 
 /**
- * AUTH-B83-03: clear only username+IP and username-global counters and locks.
- * Never the per-IP counter, tarpit, or LIM-C11-01 `pwd:change:sub:*`.
- * Returns nothing; `driverLockedUntil` reads the pre-clear expiry for the response.
+ * AUTH-B83-03: clear only username+IP and username-global counters/locks — never the per-IP
+ * counter, tarpit, or LIM-C11-01 `pwd:change:sub:*`.
  */
 export async function clearDriverLockout(redis: Redis, username: string): Promise<void> {
   const userHash = limiterKeyPart(username);

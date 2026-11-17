@@ -8,6 +8,7 @@ import type {
 
 /** An in-progress row older than this may be taken over after a crashed request. */
 const TAKEOVER_SECONDS = 30;
+type StoredRow = { request_hash: string; status_code: number | null; response: unknown };
 
 export class PgIdempotencyStore implements IdempotencyStore {
   constructor(private readonly pool: pg.Pool) {}
@@ -70,11 +71,7 @@ export class PgIdempotencyStore implements IdempotencyStore {
       [scope, sub, key, hash, TAKEOVER_SECONDS],
     );
     if (taken.rowCount === 1) return { status: 'claimed' };
-    const existing = await this.pool.query<{
-      request_hash: string;
-      status_code: number | null;
-      response: unknown;
-    }>(
+    const existing = await this.pool.query<StoredRow>(
       `SELECT request_hash, status_code, response FROM platform.idempotency_keys
         WHERE scope = $1 AND subject_id = $2 AND key = $3`,
       [scope, sub, key],

@@ -1,7 +1,6 @@
 /**
- * Idempotency-Key store (P0-E7-T1 / Architect N-9). `PgIdempotencyStore` persists
- * `platform.idempotency_keys`. `claim` takes an in-progress row (status_code NULL);
- * `complete` fills it with the stored response.
+ * Idempotency-Key store (P0-E7-T1 / Architect N-9). `claim` takes an in-progress row
+ * (status_code NULL); `complete` fills it with the stored response.
  */
 export interface IdempotencyRecord {
   requestHash: string;

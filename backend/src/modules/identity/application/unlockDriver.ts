@@ -17,10 +17,9 @@ import {
 } from './loginLimiter.js';
 
 /**
- * B83 required order:
- *   authz (group guard) → RLS lookup (404) → idempotency replay (no second limit hit)
- *   → LIM-B83-01 (429) → effect + audit + completed idempotency in one PG tx → Redis DEL.
- * A cross-tenant 404 therefore happens before any 429 can distinguish it.
+ * B83 order: authz → RLS 404 → idempotency replay (no second limit hit) → LIM-B83-01 (429)
+ * → effect + audit + completed idempotency in one PG tx → Redis DEL. A cross-tenant 404
+ * therefore happens before any 429 can distinguish it.
  */
 
 export interface DriverUnlockRuntime {
@@ -28,7 +27,6 @@ export interface DriverUnlockRuntime {
   redis: Redis;
   log: DrainLog;
   idempotency?: IdempotencyStore;
-  clock?: Clock;
 }
 
 export interface DriverUnlockInput {
@@ -130,10 +128,8 @@ export async function unlockDriver(
   const reason = parseUnlockReason(input.body);
   const key = readIdempotencyKey(input.idempotencyKeyHeader);
   const requestHash = bodyHash(reason);
-
   const driver = await lookupDriver(runtime.identityPool, input.distributorId, input.driverId);
   if (!driver) throw notFound();
-
   const store = runtime.idempotency ?? new PgIdempotencyStore(runtime.identityPool);
   const scope = `B83:${input.driverId}`;
   const claim = await store.claim(scope, input.staffId, key, requestHash);
@@ -144,7 +140,6 @@ export async function unlockDriver(
     return claim.record.response as DriverUnlockView;
   }
   if (claim.status === 'in_progress') throw inProgress(claim.retryAfter);
-
   let committed = false;
   let reserved = false;
   try {
@@ -154,8 +149,8 @@ export async function unlockDriver(
     );
     if (!limit.allowed) throw rateLimited(limit.retryAfter);
     reserved = true;
+    // Stable alert message; no username or IP in clear.
     if (limit.driverCount === UNLOCK_DRIVER_MAX_PER_HOUR) {
-      // Stable alert message; no username or IP in clear.
       runtime.log.info?.(
         { driverId: input.driverId, staffId: input.staffId },
         'driver_unlock_repeat_alert',
@@ -169,7 +164,6 @@ export async function unlockDriver(
       lockedUntilBefore: lockedUntil?.toISOString() ?? null,
       active: driver.status === 'active',
     };
-
     await withTenant(runtime.identityPool, staffTenant(input.distributorId), async (tx) => {
       await tx.client.query(
         `INSERT INTO platform.audit_log (id, at, actor_type, actor_id, actor_name, distributor_id, action, entity, entity_id, data, ip)
@@ -193,13 +187,8 @@ export async function unlockDriver(
         ],
       );
       // Completed idempotency in the same PG transaction as the audit.
-      await store.complete(
-        scope,
-        input.staffId,
-        key,
-        { requestHash, statusCode: 200, response: view },
-        tx.client,
-      );
+      const record = { requestHash, statusCode: 200, response: view };
+      await store.complete(scope, input.staffId, key, record, tx.client);
     });
     committed = true;
     try {

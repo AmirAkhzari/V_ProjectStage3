@@ -257,31 +257,24 @@ describe('frozen contract coverage (slice 1b)', () => {
     }
   });
 
-  /** P6-9/P6-10: real NODE_ENV=production boot mounts exactly the expected ids. */
-  async function expectMounted(
-    cfg: ReturnType<typeof productionApiConfig>,
-    ids: readonly string[],
-  ) {
-    const app = await buildApp({ config: cfg, healthChecks: [], appDb: {} as pg.Pool });
+  /** P6-9/P6-10: real NODE_ENV=production boots mount exactly the expected ids. */
+  async function expectMounted(c: ReturnType<typeof productionApiConfig>, ids: readonly string[]) {
+    const app = await buildApp({ config: c, healthChecks: [], appDb: {} as pg.Pool });
     await app.ready();
     try {
       const want = new Set(ids);
       for (const row of ROUTE_REGISTRY.rows) {
         const url = row.path.replace(/\{([^}]+)\}/g, ':$1');
-        expect(app.hasRoute({ method: row.method, url }), row.operationId).toBe(
-          want.has(row.operationId),
-        );
+        const mounted = app.hasRoute({ method: row.method, url });
+        expect(mounted, row.operationId).toBe(want.has(row.operationId));
       }
     } finally {
       await app.close();
     }
   }
 
-  it('real production boot mounts exactly LIVE', async () => {
+  it('real production boot mounts exactly LIVE; staging adds only A5/B5', async () => {
     await expectMounted(productionApiConfig(), LIVE);
-  });
-
-  it('demo-enabled staging boot adds only A5/B5 (real production app)', async () => {
     // `demoLoginEnabled` is `(nodeEnv !== 'production' || deployEnv === 'staging') && flag`.
     const config = productionApiConfig({
       DEPLOY_ENV: 'staging',

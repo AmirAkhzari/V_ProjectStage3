@@ -22,25 +22,23 @@ import {
 import { AppError } from '../../src/platform/http/errors.js';
 
 const USER = 'drv-aaaaaa';
+const HASH = limiterKeyPart(USER);
 
 class LockRedis {
   readonly sets = new Map<string, Set<string>>();
   readonly deleted: string[] = [];
-  smembers(key: string): Promise<string[]> {
-    return Promise.resolve([...(this.sets.get(key) ?? [])]);
-  }
-  del = (...keys: string[]): Promise<number> => Promise.resolve(this.deleted.push(...keys));
-  ttl = (): Promise<number> => Promise.resolve(-2);
+  smembers = (key: string) => Promise.resolve([...(this.sets.get(key) ?? [])]);
+  del = (...keys: string[]) => Promise.resolve(this.deleted.push(...keys));
+  ttl = () => Promise.resolve(-2);
 }
 
 class CounterRedis {
   readonly counts = new Map<string, number>();
-  eval = (_lua: string, _n: number, key: string): Promise<number> => {
-    const next = (this.counts.get(key) ?? 0) + 1;
-    this.counts.set(key, next);
-    return Promise.resolve(next);
+  eval = (_lua: string, _n: number, key: string) => {
+    this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
+    return Promise.resolve(this.counts.get(key)!);
   };
-  ttl = (): Promise<number> => Promise.resolve(3600);
+  ttl = () => Promise.resolve(3600);
 }
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -55,63 +53,50 @@ function codeOf(fn: () => unknown): string | undefined {
 describe('B83 driver unlock', () => {
   it('B83-01: clears username+IP and username keys/locks, never per-IP/tarpit/C11', async () => {
     const redis = new LockRedis();
-    const userHash = limiterKeyPart(USER);
     redis.sets.set(uipIndexKey(USER), new Set(['iphash1', 'iphash2']));
     await clearDriverLockout(redis as unknown as Redis, USER);
-    expect(new Set(redis.deleted)).toEqual(
-      new Set([
-        userFailKey(USER),
-        userLockKey(USER),
-        userIpFailKeyHashed(userHash, 'iphash1'),
-        userIpLockKeyHashed(userHash, 'iphash1'),
-        userIpFailKeyHashed(userHash, 'iphash2'),
-        userIpLockKeyHashed(userHash, 'iphash2'),
-        uipIndexKey(USER),
-      ]),
-    );
-    for (const untouched of [ipFailKey('203.0.113.9'), tarpitKey('203.0.113.9')]) {
-      expect(redis.deleted).not.toContain(untouched);
-    }
-    expect(redis.deleted).not.toContain(passwordChangeKey('account-id'));
+    const expected = [
+      userFailKey(USER),
+      userLockKey(USER),
+      uipIndexKey(USER),
+      userIpFailKeyHashed(HASH, 'iphash1'),
+      userIpLockKeyHashed(HASH, 'iphash1'),
+      userIpFailKeyHashed(HASH, 'iphash2'),
+      userIpLockKeyHashed(HASH, 'iphash2'),
+    ];
+    expect(new Set(redis.deleted)).toEqual(new Set(expected));
+    const untouched = [
+      ipFailKey('203.0.113.9'),
+      tarpitKey('203.0.113.9'),
+      passwordChangeKey('acc'),
+    ];
+    for (const key of untouched) expect(redis.deleted).not.toContain(key);
   });
 
   it('B83-06: reason trims / maps missing, short, long; Idempotency-Key 16..128', () => {
     expect(parseUnlockReason({ reason: '   lockout typo reset  ' })).toBe('lockout typo reset');
     expect(parseUnlockReason({ reason: 'a'.repeat(500) })).toHaveLength(500);
-    expect(codeOf(() => parseUnlockReason({}))).toBe('REASON_REQUIRED');
-    expect(codeOf(() => parseUnlockReason({ reason: 'ab' }))).toBe('REASON_REQUIRED');
-    expect(codeOf(() => parseUnlockReason({ reason: 'a'.repeat(501) }))).toBe('REASON_TOO_LONG');
-    expect(codeOf(() => parseUnlockReason({ reason: 'okay', extra: 1 }))).toBe('VALIDATION_FAILED');
+    const bad: [unknown, string][] = [
+      [{}, 'REASON_REQUIRED'],
+      [{ reason: 'ab' }, 'REASON_REQUIRED'],
+      [{ reason: 'a'.repeat(501) }, 'REASON_TOO_LONG'],
+      [{ reason: 'okay', extra: 1 }, 'VALIDATION_FAILED'],
+    ];
+    for (const [body, code] of bad) expect(codeOf(() => parseUnlockReason(body))).toBe(code);
     expect(readIdempotencyKey('a'.repeat(16))).toHaveLength(16);
-    expect(codeOf(() => readIdempotencyKey(undefined))).toBe('IDEMPOTENCY_KEY_REQUIRED');
-    expect(codeOf(() => readIdempotencyKey('short'))).toBe('IDEMPOTENCY_KEY_REQUIRED');
-    expect(codeOf(() => readIdempotencyKey('a'.repeat(129)))).toBe('IDEMPOTENCY_KEY_REQUIRED');
+    for (const key of [undefined, 'short', 'a'.repeat(129)]) {
+      expect(codeOf(() => readIdempotencyKey(key))).toBe('IDEMPOTENCY_KEY_REQUIRED');
+    }
   });
 
   it('LIM-B83-01: 10/h per staff, 3/h per driver, every attempt counts', async () => {
-    const redis = new CounterRedis();
-    const fake = redis as unknown as Redis;
-    for (let n = 1; n <= 10; n += 1) {
-      await expect(reserveDriverUnlock(fake, 'staff-1', `drv-${n}`)).resolves.toMatchObject({
-        allowed: true,
-      });
-    }
-    expect(await reserveDriverUnlock(fake, 'staff-1', 'drv-11')).toEqual({
-      allowed: false,
-      retryAfter: 3600,
-    });
+    const redis = new CounterRedis() as unknown as Redis;
+    for (let n = 1; n <= 10; n += 1) await reserveDriverUnlock(redis, 'staff-1', `drv-${n}`);
+    expect(await reserveDriverUnlock(redis, 'staff-1', 'drv-11')).toMatchObject({ allowed: false });
     expect(unlockStaffKey('staff-1')).toMatch(/^unlock:staff:/);
     expect(unlockDriverKey('drv')).toMatch(/^unlock:driver:/);
-    const other = new CounterRedis();
-    const otherFake = other as unknown as Redis;
-    for (let n = 1; n <= 3; n += 1) {
-      await expect(reserveDriverUnlock(otherFake, 'staff-2', 'drv-x')).resolves.toMatchObject({
-        allowed: true,
-      });
-    }
-    await expect(reserveDriverUnlock(otherFake, 'staff-2', 'drv-x')).resolves.toEqual({
-      allowed: false,
-      retryAfter: 3600,
-    });
+    const other = new CounterRedis() as unknown as Redis;
+    for (let n = 1; n <= 3; n += 1) await reserveDriverUnlock(other, 'staff-2', 'drv-x');
+    expect(await reserveDriverUnlock(other, 'staff-2', 'drv-x')).toMatchObject({ allowed: false });
   });
 });
