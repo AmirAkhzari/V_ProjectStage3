@@ -214,17 +214,23 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
         })
       ).statusCode,
     ).toBe(200);
-    // E3/audit only for prior families: the new familyId is not in the revoke outbox.
-    const newSid = await ownerPool.query<{ sid: string }>(
-      `SELECT sid FROM identity.sessions WHERE account_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [seeded.accountId],
-    );
-    const revokedSids = await ownerPool.query<{ sid: string }>(
-      `SELECT payload->>'sid' AS sid FROM platform.outbox_events
-        WHERE event_type = 'identity.sessions_revoked' AND payload->>'accountId' = $1`,
-      [seeded.accountId],
-    );
-    expect(revokedSids.rows.map((r) => r.sid)).not.toContain(newSid.rows[0]?.sid);
+    // E3 only lists prior families. created_at is pinned to the original login, so
+    // do not pick "latest created_at" — that can be the revoked prior sid.
+    const liveSids = (
+      await ownerPool.query<{ sid: string }>(
+        `SELECT sid FROM identity.sessions WHERE account_id = $1 AND revoked_at IS NULL`,
+        [seeded.accountId],
+      )
+    ).rows.map((r) => r.sid);
+    expect(liveSids.length).toBeGreaterThan(0);
+    const revokedSids = (
+      await ownerPool.query<{ sid: string }>(
+        `SELECT payload->>'sid' AS sid FROM platform.outbox_events
+          WHERE event_type = 'identity.sessions_revoked' AND payload->>'accountId' = $1`,
+        [seeded.accountId],
+      )
+    ).rows.map((r) => r.sid);
+    for (const sid of liveSids) expect(revokedSids).not.toContain(sid);
     const username = await ownerPool.query<{ username_norm: string }>(
       `SELECT username_norm FROM identity.accounts WHERE id = $1`,
       [seeded.accountId],
