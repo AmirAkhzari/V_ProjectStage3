@@ -24,12 +24,9 @@ export const appMeResponseSchema = z
 export const appRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/me',
-    {
-      schema: { operationId: 'A7', response: { 200: appMeResponseSchema } },
-      onSend: async (_request, reply) => {
-        void reply.header('cache-control', 'no-store');
-      },
-    },
+    // L-5-1: `cache-control: no-store` comes from the group hook keyed on operationId A7,
+    // which already covers 200/401/403/404 and the auto-HEAD route.
+    { schema: { operationId: 'A7', response: { 200: appMeResponseSchema } } },
     async (request) => {
       const tenant = request.tenant;
       if (!tenant?.shopkeeperId) {

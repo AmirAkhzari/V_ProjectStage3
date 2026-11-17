@@ -191,3 +191,8 @@ ORD-SM-01/02, PAY-ORD-01/02, ADM-ORD-01, PAY-VER/REF/NC/CB, PAY-NTF-01, DEL-MAN-
 | PAY-SEC-* / DEL-SEC-*   | deferred | P2/P3                                                 |
 
 **C-1 overall: pending** until remaining exec-auth is green. Gate stays closed.
+
+## Stage3 slice 3a — PR #5 carries + C11
+
+Carries: `tests/unit/a7-app-me.test.ts` proves no-store on A7 200/401/404/HEAD/503 and P5-1 (real EdDSA staff/driver tokens are 401 `UNAUTHENTICATED`); `tests/unit/route-access.test.ts` proves P5-5 (private Symbol) and request-time default-deny; `tests/integration/a7-app-me.test.ts` proves P5-2 (RLS hides B's row under A's tenant and with no GUC).
+C11: `tests/unit/c11-driver-password.test.ts` (C11-04 policy, 429/C11-01, typ 401, no-store) and `tests/integration/s11b-4b-c11-password.test.ts` (C11-01..03, lockout 429, expired temp 422, Redis 503). C11-05 is green at guard level in `tests/unit/route-access.test.ts` (must-change driver blocked on a non-C11 driver probe, C11 reachable); C3 itself stays PENDING. Coverage: PENDING 120→119, LIVE 14→15; A8/B83 stay PENDING. No migrations, no OpenAPI change.

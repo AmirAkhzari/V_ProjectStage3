@@ -115,6 +115,10 @@ return n
 
 const LOGIN_USER_FAIL_WINDOW = 60 * 60;
 
+/** LIM-C11-01: 5 wrong current-password attempts per driver account per rolling 15 minutes. */
+export const PASSWORD_CHANGE_MAX_ATTEMPTS = 5;
+export const PASSWORD_CHANGE_WINDOW_SECONDS = 15 * 60;
+
 export interface LoginLimiterLimits {
   userIpFails?: number;
   ipFails?: number;
@@ -159,6 +163,11 @@ export function ipFailKey(ip: string): string {
 }
 export function tarpitKey(ip: string): string {
   return `login:tarpit:${limiterKeyPart(ip)}`;
+}
+
+/** LIM-C11-01 key class: per-sub (hashed account id), independent of username/IP keys. */
+export function passwordChangeKey(accountId: string): string {
+  return `pwd:change:sub:${limiterKeyPart(accountId)}`;
 }
 
 function asNumber(value: unknown): number {
@@ -276,4 +285,26 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * LIM-C11-01. Reuses the existing `INCR_EXPIRE` Lua (INCR + EXPIRE only on the first hit);
+ * no new script is needed because this key class is a plain counter with a fixed window.
+ */
+export async function reservePasswordChangeAttempt(
+  redis: Redis,
+  accountId: string,
+): Promise<{ allowed: true } | { allowed: false; retryAfter: number }> {
+  const key = passwordChangeKey(accountId);
+  const count = asNumber(
+    await redis.eval(INCR_EXPIRE, 1, key, String(PASSWORD_CHANGE_WINDOW_SECONDS)),
+  );
+  if (count <= PASSWORD_CHANGE_MAX_ATTEMPTS) return { allowed: true };
+  const ttl = await redis.ttl(key);
+  return { allowed: false, retryAfter: Math.max(ttl, 1) };
+}
+
+/** A completed change clears the per-sub counter, like a successful login clears its own. */
+export async function clearPasswordChangeAttempts(redis: Redis, accountId: string): Promise<void> {
+  await redis.del(passwordChangeKey(accountId));
 }

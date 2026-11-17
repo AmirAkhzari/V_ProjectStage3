@@ -47,11 +47,20 @@ export interface RefreshIssueInput {
   /** Hash that login verified. Under the issue lock a mismatch aborts (R2-2 / R13-4). */
   verifiedPasswordHash?: string;
   casPasswordHash?: { oldHash: string; nextHash: string };
+  /**
+   * C11: the new session inherits the prior session's absolute window. `created_at` (and thus
+   * the absolute expiry) is pinned to this instant instead of `now`.
+   */
+  authTime?: Date;
+  /** C11: runs after locks/CAS but BEFORE the new session/RT INSERT (revoke prior families). */
+  beforeInsert?: IssueTxHook;
   /** N18-5: run inside the issue transaction before COMMIT (OTP login audit). */
-  beforeCommit?: (client: {
-    query: (queryText: string, values?: unknown[]) => Promise<unknown>;
-  }) => Promise<void>;
+  beforeCommit?: IssueTxHook;
 }
+
+export type IssueTxHook = (client: {
+  query: (queryText: string, values?: unknown[]) => Promise<unknown>;
+}) => Promise<void>;
 
 export interface RefreshIssueResult {
   refreshToken: string;

@@ -1,0 +1,72 @@
+/**
+ * Embedded body of the offline breached-password list (P6-8).
+ *
+ * Kept byte-identical to breached-passwords.txt so the pinned sha256 in
+ * breachedPasswords.ts covers this module too. Runtime never reads the .txt:
+ * plain tsc does not copy it into dist.
+ */
+export const BREACHED_LIST_BODY = `# vproject offline breached-password list
+# version: 2026-10-15.1
+# licence: CC0-1.0 (curated common-password strings; not a third-party dump)
+# sha256 of this file is recorded in breached-passwords.txt.sha256
+123456
+1234567
+12345678
+123456789
+1234567890
+123123
+111111
+000000
+654321
+password
+password1
+password12
+password123
+passw0rd
+qwerty
+qwerty123
+qwertyuiop
+abc123
+admin
+admin123
+letmein
+welcome
+monkey
+dragon
+master
+login
+iloveyou
+1q2w3e4r
+1qaz2wsx
+qazwsx
+zaq12wsx
+football
+baseball
+sunshine
+trustno1
+starwars
+princess
+whatever
+changeme
+default
+guest
+root
+secret
+pass
+pass123
+test
+test123
+hello
+freedom
+mustang
+shadow
+hunter
+ranger
+soccer
+hockey
+asdfgh
+zxcvbn
+p@ssw0rd
+P@ssw0rd
+Password1
+`;

@@ -45,6 +45,8 @@ export interface DriverAuthRuntime {
   hasher: PasswordHasher;
   log: DrainLog;
   auditHashKey: string;
+  /** P6-4: offline list check, loaded once at boot. C11 fails closed without it. */
+  breachedPassword?: (normalized: string) => boolean;
   maxSessions?: number;
   limiter?: LoginLimiterLimits;
   clock?: Clock;
@@ -344,7 +346,8 @@ async function requireUsername(pool: pg.Pool, accountId: string): Promise<string
   return username;
 }
 
-function sessionBody(input: {
+/** Shared with C11 so both issuance paths return the identical `DriverSession` body. */
+export function sessionBody(input: {
   accessToken: string;
   absolute: Date;
   mustChangePassword: boolean;

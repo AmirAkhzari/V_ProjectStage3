@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { normalizePassword } from '../../domain/passwordPolicy.js';
+import { BREACHED_LIST_BODY } from './breachedPasswordsData.js';
 
 export const BREACHED_LIST_VERSION = '2026-10-15.1';
 
-const LIST_FILE = 'breached-passwords.txt';
-const SHA_FILE = 'breached-passwords.txt.sha256';
+/** AppSec Low: the sha is pinned in code, not trusted from a sibling file. */
+export const BREACHED_LIST_SHA256 =
+  '510841f72880b13988200c81408f928c617559b3bb25ed900a9d2d3678a368dc';
 
 export interface BreachedPasswordList {
   version: string;
@@ -23,25 +22,22 @@ export class BreachedListError extends Error {
   }
 }
 
-export function defaultBreachedListDir(): string {
-  return dirname(fileURLToPath(import.meta.url));
-}
-
-/** Offline list only. Never fetches HIBP or any other network (AUTH-PW-02-OFF). */
-export function loadBreachedPasswordList(
-  dir: string = defaultBreachedListDir(),
-): BreachedPasswordList {
-  const body = readFileSync(join(dir, LIST_FILE));
-  const recorded = readFileSync(join(dir, SHA_FILE), 'utf8').trim().split(/\s+/)[0];
+/**
+ * Offline list only. Never fetches HIBP or any other network (AUTH-PW-02-OFF).
+ * P6-8: the body is embedded, so this never touches the filesystem — plain tsc
+ * does not copy the .txt into dist and the production image only ships dist.
+ */
+export function loadBreachedPasswordList(): BreachedPasswordList {
+  const body = BREACHED_LIST_BODY;
   const sha256 = createHash('sha256').update(body).digest('hex');
-  if (recorded !== sha256) {
+  if (BREACHED_LIST_SHA256 !== sha256) {
     throw new BreachedListError(
-      `breached-password list sha256 mismatch: expected ${recorded}, got ${sha256}`,
+      `breached-password list sha256 mismatch: expected ${BREACHED_LIST_SHA256}, got ${sha256}`,
     );
   }
 
   const entries = new Set<string>();
-  for (const line of body.toString('utf8').split('\n')) {
+  for (const line of body.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith('#')) continue;
     entries.add(normalizePassword(trimmed).toLocaleLowerCase('en-US'));

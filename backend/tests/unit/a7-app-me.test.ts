@@ -173,7 +173,7 @@ describe('A7 GET /v1/app/me', () => {
     }
   });
 
-  it('A7-401: staff and driver tokens are TOKEN_TYPE_MISMATCH', async () => {
+  it('A7-401: staff and driver tokens on a fake verifier are TOKEN_TYPE_MISMATCH', async () => {
     app = await appOf([row()]);
     for (const token of ['staff-token', 'driver-token']) {
       const response = await appMe(app, 'GET', { authorization: `Bearer ${token}` });
@@ -213,7 +213,7 @@ describe('A7 GET /v1/app/me', () => {
     }
   });
 
-  it('A7-PII: Cache-Control no-store on 200 and 401, no ETag', async () => {
+  it('A7-PII: Cache-Control no-store on 200, 401 and 404, no ETag', async () => {
     app = await appOf([row()]);
     const ok = await appMe(app);
     expect(ok.headers['cache-control']).toBe('no-store');
@@ -221,8 +221,52 @@ describe('A7 GET /v1/app/me', () => {
     const denied = await appMe(app, 'GET', {});
     expect(denied.statusCode).toBe(401);
     expect(denied.headers['cache-control']).toBe('no-store');
-    const missing = await appMe(app, 'GET', { authorization: 'Bearer staff-token' });
-    expect(missing.headers['cache-control']).toBe('no-store');
+    // P5-4: the handler 404 must be no-store too, not only the guard paths.
+    await app.close();
+    app = await appOf([]);
+    const notFound = await appMe(app);
+    expect(notFound.statusCode).toBe(404);
+    expect(notFound.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    expect(notFound.headers['cache-control']).toBe('no-store');
+    // The fail-closed 503 is covered too.
+    const noPool = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier,
+      sessionAuthority: authority,
+    });
+    const unavailable = await noPool.inject({ method: 'GET', url: '/v1/app/me', headers: AUTH });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.headers['cache-control']).toBe('no-store');
+    await noPool.close();
+  });
+
+  it('P5-1: the real EdDSA verifier rejects staff and driver tokens with UNAUTHENTICATED', async () => {
+    const key = await generateEd25519Key('k1');
+    const jwt = new EddsaAccessTokenService({ iss: 'vproject', activeKid: 'k1', keys: [key] });
+    const staffToken = await jwt.sign({ sub: ACCOUNT_ID, typ: 'staff', sid: 'sid-1', sv: 0 });
+    const driverToken = await jwt.sign({
+      sub: ACCOUNT_ID,
+      typ: 'driver',
+      sid: 'sid-1',
+      sv: 0,
+      did: '01000000-0000-4000-8000-0000000000d1',
+    });
+    app = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier: jwt,
+      sessionAuthority: allowAllSessionAuthority('shopkeeper', { accountId: ACCOUNT_ID }),
+      appDb: poolOf([row()]),
+    });
+    for (const token of [staffToken, driverToken]) {
+      const response = await appMe(app, 'GET', { authorization: `Bearer ${token}` });
+      // aud/typ fail inside verify(), so the guard reports UNAUTHENTICATED (not
+      // TOKEN_TYPE_MISMATCH); NO remap happens in production code.
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } });
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
   });
 
   it('A7-HEAD: matches GET for 401 and 200', async () => {
