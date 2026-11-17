@@ -169,7 +169,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     );
     return { accountId, username };
   }
-
   async function lockState(u: string, accountId: string) {
     const ip = nextIp();
     for (const key of [userLockKey(u), userIpFailKey(u, ip), userIpLockKey(u, ip)]) {
@@ -299,16 +298,17 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     expect(joined).not.toContain(driver.username);
     expect(joined).not.toContain(TEMP);
     expect(joined).not.toContain(da.accessToken);
-    await redis.disconnect();
+    const real = app.otpAuth!.redis;
+    const down = { status: 'close', connect: () => Promise.reject(new Error('down')) };
+    (app.otpAuth as { redis: unknown }).redis = down;
     try {
       const response = await unlock(da.accessToken, driver.accountId);
       expect(response.statusCode).toBe(503);
       expect(response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
     } finally {
-      await redis.connect();
+      (app.otpAuth as { redis: unknown }).redis = real;
     }
   });
-
   it('B83-05: 11th staff / 4th driver unlock in 1h are 429; no-ops count', async () => {
     const staff = await seedStaff('distributor_admin', DIST, ['drivers.manage']);
     for (let n = 0; n < 10; n += 1) {
