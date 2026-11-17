@@ -50,6 +50,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
   let app: App;
   let hasher: Argon2idPasswordHasher;
   let fake: FakeSmsProvider;
+  let afterRespond: Promise<void> = Promise.resolve();
   const logLines: string[] = [];
 
   beforeAll(async () => {
@@ -78,7 +79,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       log: silentDrainLog,
       pepper: TEST_OTP_HMAC_KEY,
       budget: { hour: 0, day: 0, skipBudget: true },
-      runAfterRespond: (fn) => void fn(),
+      runAfterRespond: (fn) => void (afterRespond = Promise.resolve(fn())),
     };
     const driverAuth: DriverAuthRuntime = {
       ...shared,
@@ -145,17 +146,16 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       [accountId, role, dist, perms],
     );
     const keys = await redis.keys('otp:lim:*');
-    if (keys.length > 0) await redis.del(...keys);
-    fake.outbox.length = 0;
-    await post('/v1/admin/auth/otp/send', { phone });
-    const verified = await post('/v1/admin/auth/otp/verify', {
-      phone,
-      code: fake.outbox.at(-1)?.code,
-    });
+    if (keys.length > 0) await redis.del(...keys); // reset per-phone/IP OTP send limits
+    const sent = await post('/v1/admin/auth/otp/send', { phone });
+    await afterRespond;
+    expect(sent.statusCode, sent.body).toBe(200);
+    const code = fake.outbox.at(-1)?.code;
+    expect(code).toMatch(/^[0-9]{6}$/);
+    const verified = await post('/v1/admin/auth/otp/verify', { phone, code });
     expect(verified.statusCode, verified.body).toBe(200);
     return { accountId, accessToken: verified.json<{ accessToken: string }>().accessToken };
   }
-
   async function seedDriver(distributorId = DIST, status = 'active') {
     const accountId = randomUUID();
     const username = `drv-${randomUUID().slice(0, 8)}`;
