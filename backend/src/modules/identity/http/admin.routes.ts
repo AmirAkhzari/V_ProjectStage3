@@ -49,6 +49,7 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
           body: request.body,
           idempotencyKeyHeader: request.headers['idempotency-key'],
           ip: request.ip,
+          userAgent: request.headers['user-agent'],
         },
       );
     },

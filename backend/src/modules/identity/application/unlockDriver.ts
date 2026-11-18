@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { assertRedisForAuthIssuance } from '../../../platform/auth/failClosed.js';
 import { withTenant } from '../../../platform/db/tenant.js';
-import { AppError, type PlatformErrorCode } from '../../../platform/http/errors.js';
+import { AppError, errorEnvelope, type PlatformErrorCode } from '../../../platform/http/errors.js';
 import type { IdempotencyStore } from '../../../platform/http/idempotency.js';
 import { PgIdempotencyStore } from '../../../platform/http/idempotencyPg.js';
 import { systemClock, type Clock } from '../../../platform/lib/clock.js';
@@ -37,6 +37,7 @@ export interface DriverUnlockInput {
   body: unknown;
   idempotencyKeyHeader: string | string[] | undefined;
   ip: string;
+  userAgent?: string | string[] | undefined;
 }
 
 export interface DriverUnlockView {
@@ -63,6 +64,19 @@ const inProgress = (retryAfter: number) =>
   fail('IDEMPOTENCY_IN_PROGRESS', 409, 'Request with this key is in progress', { retryAfter });
 const rateLimited = (retryAfter: number) =>
   fail('RATE_LIMITED', 429, 'Too many requests', { retryAfter });
+const SERVICE_UNAVAILABLE_ENVELOPE = errorEnvelope(
+  'SERVICE_UNAVAILABLE',
+  'Service temporarily unavailable',
+  { retryAfter: 5 },
+);
+
+/** P7-5: audit-only. Strips C0/C1 controls (incl. CR/LF/TAB), trims, caps at 256 code points. */
+export function normalizeUserAgent(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.replace(/\p{Cc}/gu, '').trim();
+  const points = Array.from(clean);
+  return points.length === 0 ? null : points.slice(0, 256).join('');
+}
 
 /**
  * `ReasonRequest.strict()` parsed by hand: Zod's min/max would surface as generic
@@ -135,8 +149,11 @@ export async function unlockDriver(
   const claim = await store.claim(scope, input.staffId, key, requestHash);
   if (claim.status === 'completed') {
     if (claim.record.requestHash !== requestHash) throw reuse();
-    // P7-1: pure replay of the committed 200. No Redis, limit or audit — a re-locked driver
-    // stays locked; recovery from a failed post-commit DEL is a new key (counted + audited).
+    // P7-1/P7-9: pure replay, no Redis, limit or audit. A stored 503 stays a 503.
+    if (claim.record.statusCode === 503) {
+      const stored = claim.record.response as { error: { message: string; details?: unknown } };
+      throw new AppError('SERVICE_UNAVAILABLE', 503, stored.error.message, stored.error.details);
+    }
     return claim.record.response as DriverUnlockView;
   }
   if (claim.status === 'in_progress') throw inProgress(claim.retryAfter);
@@ -182,6 +199,7 @@ export async function unlockDriver(
             reason,
             wasLocked: view.wasLocked,
             lockedUntilBefore: view.lockedUntilBefore,
+            userAgent: normalizeUserAgent(input.userAgent),
           }),
           input.ip,
         ],
@@ -199,6 +217,19 @@ export async function unlockDriver(
         { driverId: input.driverId, staffId: input.staffId },
         'driver_unlock_redis_clear_failed',
       );
+      // P7-9 (a): best-effort downgrade of the same committed row, no retry loop.
+      await store
+        .complete(scope, input.staffId, key, {
+          requestHash,
+          statusCode: 503,
+          response: SERVICE_UNAVAILABLE_ENVELOPE,
+        })
+        .catch(() =>
+          runtime.log.error(
+            { driverId: input.driverId, staffId: input.staffId },
+            'idempotency_downgrade_failed',
+          ),
+        );
       throw error instanceof AppError ? error : unavailable();
     }
     return view;
