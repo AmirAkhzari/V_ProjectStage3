@@ -415,7 +415,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     expect((await login(u, TEMP, ipB)).statusCode).toBe(200);
     expect(await redis.exists(ipFailKey(ipA), ipFailKey(ipB))).toBe(2);
   });
-
   it('P7-9 + L-7-2: DEL failure stores a 503; replays are Redis-free; new key recovers', async () => {
     const staff = await seedStaff('distributor_admin', DIST, ['drivers.manage']);
     const driver = await seedDriver();
@@ -541,7 +540,10 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
         )
       ).rows[0]!.ua;
     const missing = await seedDriver();
-    expect((await unlock(staff.accessToken, missing.accountId)).statusCode).toBe(200);
+    const noUa = await unlock(staff.accessToken, missing.accountId, {
+      headers: { 'user-agent': '' },
+    });
+    expect(noUa.statusCode, noUa.body).toBe(200);
     expect(await ua(missing.accountId)).toBeNull();
     const capped = await seedDriver();
     const key = keyOf();
@@ -578,7 +580,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       );
     const failed = async (driverId: string) =>
       expect((await unlock(staff.accessToken, driverId)).statusCode).toBeGreaterThanOrEqual(500);
-
     const driver = await seedDriver();
     await auditDown('b83_refund_audit', `NEW.entity_id = '${driver.accountId}'`);
     try {
@@ -595,7 +596,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     for (let n = 0; n < 3; n += 1)
       expect((await unlock(staff.accessToken, driver.accountId)).statusCode).toBe(200);
     expect((await unlock(staff.accessToken, driver.accountId)).statusCode).toBe(429);
-
     // Eleven forced rollbacks by one staff cannot exhaust the 10/h staff cap.
     await auditDown('b83_refund_staff', `NEW.actor_id = '${staff.accountId}'`);
     try {
