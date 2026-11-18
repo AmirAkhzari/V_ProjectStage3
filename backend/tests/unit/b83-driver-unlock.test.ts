@@ -16,6 +16,7 @@ import {
   userLockKey,
 } from '../../src/modules/identity/application/loginLimiter.js';
 import {
+  normalizeUserAgent,
   parseUnlockReason,
   readIdempotencyKey,
 } from '../../src/modules/identity/application/unlockDriver.js';
@@ -83,6 +84,13 @@ describe('B83 driver unlock', () => {
       [{ reason: 'okay', extra: 1 }, 'VALIDATION_FAILED'],
     ];
     for (const [body, code] of bad) expect(codeOf(() => parseUnlockReason(body))).toBe(code);
+    let long: unknown;
+    try {
+      parseUnlockReason({ reason: 'a'.repeat(501) });
+    } catch (error) {
+      long = error;
+    }
+    expect(long).toMatchObject({ details: { max: 500 } });
     expect(readIdempotencyKey('a'.repeat(16))).toHaveLength(16);
     for (const key of [undefined, 'short', 'a'.repeat(129)]) {
       expect(codeOf(() => readIdempotencyKey(key))).toBe('IDEMPOTENCY_KEY_REQUIRED');
@@ -91,12 +99,35 @@ describe('B83 driver unlock', () => {
 
   it('LIM-B83-01: 10/h per staff, 3/h per driver, every attempt counts', async () => {
     const redis = new CounterRedis() as unknown as Redis;
-    for (let n = 1; n <= 10; n += 1) await reserveDriverUnlock(redis, 'staff-1', `drv-${n}`);
-    expect(await reserveDriverUnlock(redis, 'staff-1', 'drv-11')).toMatchObject({ allowed: false });
+    for (let n = 1; n <= 10; n += 1)
+      expect(await reserveDriverUnlock(redis, 'staff-1', `drv-${n}`)).toEqual({
+        allowed: true,
+        driverCount: 1,
+      });
+    const staffBlocked = await reserveDriverUnlock(redis, 'staff-1', 'drv-11');
+    expect(staffBlocked.allowed).toBe(false);
+    if (!staffBlocked.allowed) expect(staffBlocked.retryAfter).toBeGreaterThan(0);
     expect(unlockStaffKey('staff-1')).toMatch(/^unlock:staff:/);
     expect(unlockDriverKey('drv')).toMatch(/^unlock:driver:/);
     const other = new CounterRedis() as unknown as Redis;
-    for (let n = 1; n <= 3; n += 1) await reserveDriverUnlock(other, 'staff-2', 'drv-x');
-    expect(await reserveDriverUnlock(other, 'staff-2', 'drv-x')).toMatchObject({ allowed: false });
+    for (let n = 1; n <= 3; n += 1)
+      expect(await reserveDriverUnlock(other, 'staff-2', 'drv-x')).toEqual({
+        allowed: true,
+        driverCount: n,
+      });
+    const driverBlocked = await reserveDriverUnlock(other, 'staff-2', 'drv-x');
+    expect(driverBlocked.allowed).toBe(false);
+    if (!driverBlocked.allowed) expect(driverBlocked.retryAfter).toBeGreaterThan(0);
+  });
+
+  it('P7-5: user agent is stripped, trimmed and capped at 256 code points', () => {
+    expect(normalizeUserAgent('ok\r\nUA\t')).toBe('okUA');
+    for (const value of [undefined, '', '  ', '\u0000\u001f\u007f\u009f']) {
+      expect(normalizeUserAgent(value)).toBeNull();
+    }
+    expect(normalizeUserAgent('a'.repeat(300))).toHaveLength(256);
+    const emoji = normalizeUserAgent('🦊'.repeat(300))!;
+    expect(Array.from(emoji)).toHaveLength(256);
+    expect(Array.from(emoji).at(-1)).toBe('🦊');
   });
 });
