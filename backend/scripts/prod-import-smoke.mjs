@@ -51,16 +51,19 @@ const fixtureEnv = {
   NODE_ENV: 'production',
   DEPLOY_ENV: 'production',
   LOG_LEVEL: 'info',
-  DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.example.ir:5432/vproject?sslmode=require',
+  // RFC 2606 `.invalid`: never resolves, so the smoke can never reach a real host.
+  DATABASE_URL_APP: 'postgres://vproject_app:vproject@db.invalid:5432/vproject?sslmode=require',
   DATABASE_URL_IDENTITY:
-    'postgres://vproject_identity:vproject@db.example.ir:5432/vproject?sslmode=require',
-  REDIS_URL: 'rediss://cache.example.ir:6379',
+    'postgres://vproject_identity:vproject@db.invalid:5432/vproject?sslmode=require',
+  REDIS_URL: 'rediss://cache.invalid:6379',
   OPENAPI_DOCS_ENABLED: 'false',
   TRUST_PROXY_HOPS: '1',
   AUDIT_HASH_KEY: config.PROD_FIXTURE_AUDIT_HASH_KEY,
   OTP_HMAC_KEY: config.PROD_FIXTURE_OTP_HMAC_KEY,
   SMS_PROVIDER: 'kavenegar',
-  SMS_LIVE_SEND: 'true',
+  // CI smoke must never send: live send off, disabled allowed under production.
+  SMS_LIVE_SEND: 'false',
+  SMS_STAGING_ALLOW_DISABLED: 'true',
   SMS_BUDGET_HOUR: '100',
   SMS_BUDGET_DAY: '1000',
   KAVENEGAR_API_KEY: config.PROD_LIVE_FIXTURE_KAVENEGAR_API_KEY,

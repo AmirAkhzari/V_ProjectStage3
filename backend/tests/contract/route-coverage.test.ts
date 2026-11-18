@@ -18,7 +18,7 @@ const yamlPath = join(root, 'openapi/openapi-v1.2.0.yaml');
 const EXPECTED_SHA = 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e054601';
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
-const LIVE = 'S1 S2 A1 A2 A3 A4 A7 B1 B2 B3 B4 C1 C2 C11 B25'.split(' ');
+const LIVE = 'S1 S2 A1 A2 A3 A4 A7 B1 B2 B3 B4 C1 C2 C11 B25 B83'.split(' ');
 const DEMO = ['A5', 'B5'];
 const UNREGISTERED_IN_PROD = ['A5', 'A35', 'B5', 'B79', 'B80'];
 
@@ -170,8 +170,8 @@ async function captureRoutes(config: ReturnType<typeof productionApiConfig>): Pr
   captured: CapturedRoute[];
 }> {
   const captured: CapturedRoute[] = [];
-  // buildApp refuses test-only options (onRoute) under NODE_ENV=production, so the
-  // production-shaped fixture boots as test: route gating depends on DEPLOY_ENV, not NODE_ENV.
+  // `onRoute` is a test-only option refused under NODE_ENV=production, so capture in test.
+  // The production-shaped staging/live boot cases below use real NODE_ENV=production.
   const app = await buildApp({
     config: { ...config, NODE_ENV: 'test' },
     healthChecks: [],
@@ -212,8 +212,8 @@ describe('frozen contract coverage (slice 1b)', () => {
   });
 
   it('PENDING ids are counted, mapped, and not live', () => {
-    expect(PENDING_OPERATION_IDS).toHaveLength(119);
-    expect(new Set(PENDING_OPERATION_IDS).size).toBe(119);
+    expect(PENDING_OPERATION_IDS).toHaveLength(118);
+    expect(new Set(PENDING_OPERATION_IDS).size).toBe(118);
     const pending = new Set(PENDING_OPERATION_IDS);
     for (const operationId of PENDING_OPERATION_IDS) {
       expect(ROUTE_REGISTRY.byOperationId.has(operationId)).toBe(true);
@@ -257,27 +257,34 @@ describe('frozen contract coverage (slice 1b)', () => {
     }
   });
 
-  it('demo-enabled staging boot adds only A5/B5', async () => {
-    const { app, captured } = await captureRoutes({
-      ...productionApiConfig(),
-      DEPLOY_ENV: 'staging',
-      DEMO_LOGIN_ENABLED: 'true',
-    });
+  /** P6-9/P6-10: real NODE_ENV=production boots mount exactly the expected ids. */
+  async function expectMounted(c: ReturnType<typeof productionApiConfig>, ids: readonly string[]) {
+    const app = await buildApp({ config: c, healthChecks: [], appDb: {} as pg.Pool });
+    await app.ready();
     try {
-      checkContractCoverage({
-        spec,
-        registry: ROUTE_REGISTRY,
-        captured,
-        expectedOperationIds: [...LIVE, ...DEMO],
-        publicRoutes: PUBLIC_ROUTES,
-      });
-      for (const operationId of ['A35', 'B79', 'B80']) {
-        const row = ROUTE_REGISTRY.byOperationId.get(operationId)!;
-        expect(app.hasRoute({ method: row.method, url: row.path })).toBe(false);
+      const want = new Set(ids);
+      for (const row of ROUTE_REGISTRY.rows) {
+        const url = row.path.replace(/\{([^}]+)\}/g, ':$1');
+        const mounted = app.hasRoute({ method: row.method, url });
+        expect(mounted, row.operationId).toBe(want.has(row.operationId));
       }
     } finally {
       await app.close();
     }
+  }
+
+  it('real production boot mounts exactly LIVE; staging adds only A5/B5', async () => {
+    await expectMounted(productionApiConfig(), LIVE);
+    // `demoLoginEnabled` is `(nodeEnv !== 'production' || deployEnv === 'staging') && flag`.
+    const config = productionApiConfig({
+      DEPLOY_ENV: 'staging',
+      DEMO_LOGIN_ENABLED: 'true',
+      DEMO_JWT_EDDSA_KID: 'k-staging',
+      DEMO_JWT_EDDSA_JWKS: '{"keys":[]}',
+      RATE_DEMO_PER_IP_HOUR: '10',
+      RATE_DEMO_GLOBAL_DAY: '100',
+    });
+    await expectMounted(config, [...LIVE, ...DEMO]);
   });
 
   it('self-test: the checker rejects a missing mapping and an extra route', () => {
