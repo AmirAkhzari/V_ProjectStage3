@@ -31,7 +31,6 @@ import { TEST_AUDIT_HASH_KEY, TEST_OTP_HMAC_KEY } from '../../src/platform/confi
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
 import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
-
 const DIST = '13131313-1313-4313-8313-131313131313';
 const DIST2 = '14141414-1414-4414-8414-141414141414';
 const TEMP = 'pw-drv-aaaaaa';
@@ -44,7 +43,6 @@ const nextPhone = () => `+989${(seq += 1)}`;
 const nextIp = () => `203.0.113.${(seq % 200) + 1}`;
 const keyOf = () => `b83-key-${randomUUID()}`;
 const AUDIT_COUNT = `SELECT count(*)::text AS c FROM platform.audit_log WHERE action = 'driver_lockout_cleared' AND entity_id = $1`;
-
 describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
   let pgRoles: StartedPostgresRoles;
   let redisBox: StartedRedisContainer;
@@ -62,7 +60,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
     warn: (bindings, msg) => logLines.push(JSON.stringify({ ...bindings, msg })),
     info: (bindings, msg) => logLines.push(JSON.stringify({ ...bindings, msg })),
   };
-
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
     redisBox = await new RedisContainer('redis:7-alpine').start();
@@ -100,7 +97,11 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       [DIST, DIST2],
     );
     app = await buildApp({
-      config: testConfig({ REDIS_URL: redisBox.getConnectionUrl(), LOG_LEVEL: 'info' }),
+      config: testConfig({
+        REDIS_URL: redisBox.getConnectionUrl(),
+        LOG_LEVEL: 'info',
+        TRUST_PROXY_HOPS: '1',
+      }),
       logDestination: { write: (line: string) => logLines.push(line) },
       healthChecks: [],
       verifier: jwt,
@@ -110,7 +111,6 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
       driverAuth,
     });
   }, 180_000);
-
   afterAll(async () => {
     await app?.close();
     await redis.quit().catch(() => redis.disconnect());
