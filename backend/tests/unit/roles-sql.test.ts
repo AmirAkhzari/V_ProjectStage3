@@ -204,6 +204,20 @@ describe('0007_s11b4b_pending_denies_purge.sql', () => {
   });
 });
 
+describe('0012_s11b7_b27_profile_update.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0012_s11b7_b27_profile_update.sql'), 'utf8');
+
+  it('grants column-level UPDATE on name only and keeps status/INSERT/DELETE out of reach', () => {
+    expect(sql).toMatch(/GRANT UPDATE \(name\) ON TABLE tenancy\.distributors TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT UPDATE ON TABLE tenancy\.distributors TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT [^;]*\bINSERT\b[^;]*tenancy\.distributors TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT [^;]*\bDELETE\b[^;]*tenancy\.distributors TO vproject_app/);
+    expect(sql).toMatch(/CREATE POLICY distributors_update_own ON tenancy\.distributors/);
+    expect(sql).toMatch(/app\.distributor_id/);
+    expect(sql).not.toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE/);
+  });
+});
+
 describe('0010_s11b6_demo_login.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
 

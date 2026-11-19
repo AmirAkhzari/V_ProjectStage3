@@ -8,11 +8,21 @@ export interface DistributorView {
   createdAt: string;
 }
 
-interface DistributorRow {
+export interface DistributorRow {
   id: string;
   name: string;
   status: string;
   created_at: Date;
+}
+
+/** Shared by B25 and B27 so the read and the write answer with the same shape. */
+export function toDistributorView(row: DistributorRow): DistributorView {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 /**
@@ -32,10 +42,5 @@ export async function findDistributor(
   );
   const row = found.rows[0];
   if (!row) return null;
-  return {
-    id: row.id,
-    name: row.name,
-    status: row.status,
-    createdAt: row.created_at.toISOString(),
-  };
+  return toDistributorView(row);
 }

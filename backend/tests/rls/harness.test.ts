@@ -426,7 +426,7 @@ describe('RLS harness skeleton', () => {
     expect(drivers.rows[0]?.c).toBe('4');
   });
 
-  it('TENANT-01-S11B: tenancy.distributors is SELECT-only for the app; DA cannot write own row', async () => {
+  it('TENANT-01-S11B: the app renames only its own distributor; status, INSERT and DELETE stay denied', async () => {
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const rows = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM tenancy.distributors WHERE id IN ($1, $2) ORDER BY id`,
@@ -434,18 +434,32 @@ describe('RLS harness skeleton', () => {
       );
       expect(rows.rows.map((r) => r.id)).toEqual([DIST_A]);
     });
+    // B27: the column-level grant allows `name` on the caller's own row only.
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const renamed = await tx.client.query(
+        `UPDATE tenancy.distributors SET name = 'Harness D1 renamed' WHERE id = $1`,
+        [DIST_A],
+      );
+      expect(renamed.rowCount).toBe(1);
+      const foreign = await tx.client.query(
+        `UPDATE tenancy.distributors SET name = 'hacked' WHERE id = $1`,
+        [DIST_B],
+      );
+      expect(foreign.rowCount).toBe(0);
+    });
+    const renamed = await ownerPool.query<{ name: string }>(
+      `SELECT name FROM tenancy.distributors WHERE id = ANY($1::uuid[]) ORDER BY id`,
+      [[DIST_A, DIST_B].sort()],
+    );
+    expect(renamed.rows.map((row) => row.name)).toEqual(['Harness D1 renamed', 'Harness D2']);
+    // B27 is profile-only: status never moves through the app role.
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
-        await tx.client.query(`UPDATE tenancy.distributors SET name = 'hacked' WHERE id = $1`, [
+        await tx.client.query(`UPDATE tenancy.distributors SET status = 'inactive' WHERE id = $1`, [
           DIST_A,
         ]);
       }),
     ).rejects.toThrow(/permission denied/i);
-    const unchanged = await ownerPool.query<{ name: string }>(
-      `SELECT name FROM tenancy.distributors WHERE id = $1`,
-      [DIST_A],
-    );
-    expect(unchanged.rows[0]?.name).toBe('Harness D1');
     await expect(
       withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
         await tx.client.query(
