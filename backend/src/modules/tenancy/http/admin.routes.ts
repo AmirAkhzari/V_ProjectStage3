@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { requirePermission } from '../../../platform/auth/guards.js';
 import { AppError } from '../../../platform/http/errors.js';
 import { findDistributor } from '../application/getDistributor.js';
+import { listDistributors, readAllFlag } from '../application/listDistributors.js';
 import {
   parseProfileUpdateBody,
   readOptionalIdempotencyKey,
@@ -10,8 +11,26 @@ import {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Admin surface for `tenancy`. B25 reads and B27 edits one tenant profile (TEN-404-01, B27). */
+/**
+ * Admin surface for `tenancy`. B24 lists the visible tenants, B25 reads and B27 edits one tenant
+ * profile (TEN-404-01, B27).
+ */
 export const adminRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/distributors', { schema: { operationId: 'B24' } }, async (request) => {
+    requirePermission(request, 'distributors.view');
+    const tenant = request.tenant;
+    if (!tenant) throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+    // Query parsing precedes the pool check so a malformed flag is always a 400, never a 503.
+    const all = readAllFlag((request.query as { all?: unknown }).all);
+    const pool = app.appDb;
+    if (!pool) {
+      throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+        retryAfter: 5,
+      });
+    }
+    return listDistributors(pool, tenant, { all });
+  });
+
   app.get('/distributors/:id', { schema: { operationId: 'B25' } }, async (request) => {
     requirePermission(request, 'distributors.view');
     const { id } = request.params as { id: string };
