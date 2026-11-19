@@ -18,7 +18,7 @@ const yamlPath = join(root, 'openapi/openapi-v1.2.0.yaml');
 const EXPECTED_SHA = 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e054601';
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
-const LIVE = ['S1', 'S2', 'A1', 'A2', 'A3', 'A4', 'B1', 'B2', 'B3', 'B4', 'C1', 'C2', 'B25'];
+const LIVE = 'S1 S2 A1 A2 A3 A4 A7 B1 B2 B3 B4 C1 C2 C11 B25 B83'.split(' ');
 const DEMO = ['A5', 'B5'];
 const UNREGISTERED_IN_PROD = ['A5', 'A35', 'B5', 'B79', 'B80'];
 
@@ -27,6 +27,7 @@ export interface SpecOperation {
   method: string;
   path: string;
   permission: string;
+  environment?: string;
 }
 
 export interface CapturedRoute {
@@ -38,7 +39,10 @@ export interface CapturedRoute {
 
 function specOperations(): SpecOperation[] {
   const doc = parse(readFileSync(yamlPath, 'utf8'), { maxAliasCount: -1 }) as {
-    paths: Record<string, Record<string, { operationId?: string; 'x-permission'?: string }>>;
+    paths: Record<
+      string,
+      Record<string, { operationId?: string; 'x-permission'?: string; 'x-environment'?: string }>
+    >;
   };
   const operations: SpecOperation[] = [];
   for (const [path, item] of Object.entries(doc.paths)) {
@@ -49,6 +53,7 @@ function specOperations(): SpecOperation[] {
         method: method.toUpperCase(),
         path,
         permission: op['x-permission'] ?? '',
+        ...(op['x-environment'] ? { environment: op['x-environment'] } : {}),
       });
     }
   }
@@ -165,8 +170,10 @@ async function captureRoutes(config: ReturnType<typeof productionApiConfig>): Pr
   captured: CapturedRoute[];
 }> {
   const captured: CapturedRoute[] = [];
+  // `onRoute` is a test-only option refused under NODE_ENV=production, so capture in test.
+  // The production-shaped staging/live boot cases below use real NODE_ENV=production.
   const app = await buildApp({
-    config,
+    config: { ...config, NODE_ENV: 'test' },
     healthChecks: [],
     appDb: {} as pg.Pool,
     onRoute: (route) => {
@@ -186,6 +193,12 @@ async function captureRoutes(config: ReturnType<typeof productionApiConfig>): Pr
 
 const spec = specOperations();
 
+/** P4-1: derived at test time from the frozen spec, never a hard-coded source of truth. */
+const PROD_ABSENT_OPERATION_IDS = spec
+  .filter((op) => op.environment?.includes('non-production') === true)
+  .map((op) => op.operationId)
+  .sort();
+
 describe('frozen contract coverage (slice 1b)', () => {
   it('keeps the frozen v1.2.0 sha256', () => {
     const sha = createHash('sha256').update(readFileSync(yamlPath)).digest('hex');
@@ -199,14 +212,28 @@ describe('frozen contract coverage (slice 1b)', () => {
   });
 
   it('PENDING ids are counted, mapped, and not live', () => {
-    expect(PENDING_OPERATION_IDS).toHaveLength(121);
-    expect(new Set(PENDING_OPERATION_IDS).size).toBe(121);
+    expect(PENDING_OPERATION_IDS).toHaveLength(118);
+    expect(new Set(PENDING_OPERATION_IDS).size).toBe(118);
     const pending = new Set(PENDING_OPERATION_IDS);
     for (const operationId of PENDING_OPERATION_IDS) {
       expect(ROUTE_REGISTRY.byOperationId.has(operationId)).toBe(true);
     }
     for (const operationId of [...LIVE, ...DEMO]) expect(pending.has(operationId)).toBe(false);
     for (const operationId of UNREGISTERED_IN_PROD) expect(pending.has(operationId)).toBe(false);
+  });
+
+  it('P4-1: derives the prod-absent set from the frozen spec x-environment', async () => {
+    expect(PROD_ABSENT_OPERATION_IDS.length).toBeGreaterThan(0);
+    expect(PROD_ABSENT_OPERATION_IDS).toEqual(['A35', 'A5', 'B5', 'B79', 'B80'].sort());
+    const { app } = await captureRoutes(productionApiConfig());
+    try {
+      for (const operationId of PROD_ABSENT_OPERATION_IDS) {
+        const row = ROUTE_REGISTRY.byOperationId.get(operationId)!;
+        expect(app.hasRoute({ method: row.method, url: row.path })).toBe(false);
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   it('proD-like boot matches the spec except the explicit exceptions', async () => {
@@ -230,27 +257,34 @@ describe('frozen contract coverage (slice 1b)', () => {
     }
   });
 
-  it('demo-enabled staging boot adds only A5/B5', async () => {
-    const { app, captured } = await captureRoutes({
-      ...productionApiConfig(),
-      DEPLOY_ENV: 'staging',
-      DEMO_LOGIN_ENABLED: 'true',
-    });
+  /** P6-9/P6-10: real NODE_ENV=production boots mount exactly the expected ids. */
+  async function expectMounted(c: ReturnType<typeof productionApiConfig>, ids: readonly string[]) {
+    const app = await buildApp({ config: c, healthChecks: [], appDb: {} as pg.Pool });
+    await app.ready();
     try {
-      checkContractCoverage({
-        spec,
-        registry: ROUTE_REGISTRY,
-        captured,
-        expectedOperationIds: [...LIVE, ...DEMO],
-        publicRoutes: PUBLIC_ROUTES,
-      });
-      for (const operationId of ['A35', 'B79', 'B80']) {
-        const row = ROUTE_REGISTRY.byOperationId.get(operationId)!;
-        expect(app.hasRoute({ method: row.method, url: row.path })).toBe(false);
+      const want = new Set(ids);
+      for (const row of ROUTE_REGISTRY.rows) {
+        const url = row.path.replace(/\{([^}]+)\}/g, ':$1');
+        const mounted = app.hasRoute({ method: row.method, url });
+        expect(mounted, row.operationId).toBe(want.has(row.operationId));
       }
     } finally {
       await app.close();
     }
+  }
+
+  it('real production boot mounts exactly LIVE; staging adds only A5/B5', async () => {
+    await expectMounted(productionApiConfig(), LIVE);
+    // `demoLoginEnabled` is `(nodeEnv !== 'production' || deployEnv === 'staging') && flag`.
+    const config = productionApiConfig({
+      DEPLOY_ENV: 'staging',
+      DEMO_LOGIN_ENABLED: 'true',
+      DEMO_JWT_EDDSA_KID: 'k-staging',
+      DEMO_JWT_EDDSA_JWKS: '{"keys":[]}',
+      RATE_DEMO_PER_IP_HOUR: '10',
+      RATE_DEMO_GLOBAL_DAY: '100',
+    });
+    await expectMounted(config, [...LIVE, ...DEMO]);
   });
 
   it('self-test: the checker rejects a missing mapping and an extra route', () => {

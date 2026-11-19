@@ -15,8 +15,9 @@ import {
   routeAccessError,
 } from '../platform/http/routeAccess.js';
 import {
-  CATCH_ALL,
+  catchAllRouteConfig,
   installRouteRegistryHook,
+  isCatchAllRoute,
   isPublicRegistryRoute,
   type RouteRegistry,
 } from '../platform/http/routeRegistry.js';
@@ -46,6 +47,13 @@ function requestPathOf(request: FastifyRequest): string {
 }
 
 /**
+ * L-5-1 / P5-4: PII-bearing operations that must never be cached by a browser or proxy.
+ * Keyed on the exact registered operationId (never a path suffix) so an auto-HEAD for a GET
+ * op is covered by Fastify copying the GET operationId.
+ */
+const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set(['A7', 'C11', 'B83']);
+
+/**
  * A route group only sets prefix, guard and registration (§9.3 rule 4); routes come from modules.
  * The guard runs before every route in the group and fails closed with the deny-all verifier.
  *
@@ -61,6 +69,14 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
     const guard = subjectGuard(spec.subject, verifier, {
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
+    });
+    // A7/C11 carry PII or credentials: no-store must also cover guard (401/403) and handler
+    // (404/422) responses, so it is set before the guard and before the handler.
+    group.addHook('onRequest', async function noStorePrivateRoutes(request, reply) {
+      const operationId = routeOperationId(request);
+      if (operationId !== undefined && NO_STORE_OPERATION_IDS.has(operationId)) {
+        void reply.header('cache-control', 'no-store');
+      }
     });
     group.addHook('onRequest', async function skipPublicThenGuard(request, reply) {
       const registered = request.routeOptions.url ?? '';
@@ -91,7 +107,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       if (operationId === undefined) {
         const config = request.routeOptions.config as unknown as
           Record<string | symbol, unknown> | undefined;
-        if (config?.[CATCH_ALL] === true) return;
+        if (isCatchAllRoute(config, routePath)) return;
         throw new AppError('FORBIDDEN', 403, 'Forbidden');
       }
       const decision = decideRouteAccess(
@@ -117,7 +133,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
     if (extraRoutes) await group.register(extraRoutes);
 
     // Keep empty groups addressable so typ-guard behaviour is testable without domain routes.
-    group.all('/*', { config: { [CATCH_ALL]: true } }, async () => {
+    group.all('/*', catchAllRouteConfig(), async () => {
       throw new AppError('NOT_FOUND', 404, 'Resource not found');
     });
   };

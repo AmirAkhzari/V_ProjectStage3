@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
+import { changeDriverPassword } from '../application/changeDriverPassword.js';
 import { loginDriver, refreshDriver, type DriverAuthRuntime } from '../application/driverAuth.js';
 import {
   presentedRefreshToken,
@@ -46,6 +47,18 @@ const driverRefreshSession = z
 
 const loginBody = z.object({ username: z.string(), password: z.string() }).strict();
 
+/**
+ * C11 body. `newPassword` is 1..128 rather than the contract's minLength 8 so a 7-char
+ * password reaches the AUTH-PW-02 policy and returns 422 PASSWORD_TOO_SHORT (C11-04), not a
+ * generic 400. The 128 cap is enforced here, before any hashing.
+ */
+const passwordChangeBody = z
+  .object({
+    currentPassword: z.string().min(1).max(128),
+    newPassword: z.string().min(1).max(128),
+  })
+  .strict();
+
 function runtimeOf(app: { driverAuth?: DriverAuthRuntime }): DriverAuthRuntime {
   if (!app.driverAuth) {
     throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
@@ -66,6 +79,43 @@ export const driverRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
   });
+  app.post(
+    '/auth/password',
+    {
+      schema: {
+        operationId: 'C11',
+        body: passwordChangeBody,
+        response: { 200: driverAuthSession },
+      },
+    },
+    async (request) => {
+      const subject = request.subject;
+      if (!subject) {
+        throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+      }
+      const body = request.body as z.infer<typeof passwordChangeBody>;
+      let outcome = 'ok';
+      try {
+        // Identity comes from the token only; a body `driverId` fails `.strict()` first.
+        return driverAuthSession.parse(
+          await changeDriverPassword(runtimeOf(app), {
+            accountId: subject.sub,
+            sid: subject.sid,
+            ...body,
+            ip: request.ip,
+          }),
+        );
+      } catch (error) {
+        outcome = error instanceof AppError ? error.code : 'error';
+        throw error;
+      } finally {
+        request.log.info(
+          { operationId: 'C11', sub: subject.sub, outcome },
+          'driver_password_change',
+        );
+      }
+    },
+  );
   app.post('/auth/refresh', { schema: { operationId: 'C2' } }, async (request) => {
     const token = presentedRefreshToken(request.body);
     if (!token) throw refreshUnauthenticated();

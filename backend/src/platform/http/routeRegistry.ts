@@ -36,10 +36,12 @@ export interface RouteRegistryRow {
 export interface RouteRegistry {
   readonly rows: readonly RouteRegistryRow[];
   readonly byOperationId: ReadonlyMap<string, RouteRegistryRow>;
+  /** Precomputed public `METHOD path` keys (L-3-4 lookup, no per-request scan). */
+  readonly publicRoutes: ReadonlySet<string>;
 }
 
-/** Marks a group catch-all. The exemption is this config symbol, not a path string alone. */
-export const CATCH_ALL: unique symbol = Symbol.for('vproject.catchAll');
+/** P4-2 / L-4-1: module-private catch-all marker. Never exported; helpers only. */
+const CATCH_ALL: unique symbol = Symbol('vproject.catchAll');
 
 /** The only routes allowed to register without an operationId (three group catch-alls). */
 export const INFRA_CATCH_ALL_PATHS: ReadonlySet<string> = new Set([
@@ -47,6 +49,22 @@ export const INFRA_CATCH_ALL_PATHS: ReadonlySet<string> = new Set([
   '/v1/admin/*',
   '/v1/driver/*',
 ]);
+
+/** Config for a group catch-all registration; pair with `isCatchAllRoute`. */
+export function catchAllRouteConfig(): { config: Record<symbol, true> } {
+  return { config: { [CATCH_ALL]: true } };
+}
+
+/**
+ * P4-2 / L-4-1: an operationId-less route is skipped only when BOTH the private marker is set
+ * AND its normalised path is one of the three infra catch-alls. Anything else fails closed.
+ */
+export function isCatchAllRoute(
+  config: Record<string | symbol, unknown> | undefined,
+  url: string,
+): boolean {
+  return config?.[CATCH_ALL] === true && INFRA_CATCH_ALL_PATHS.has(toOpenApiPath(url));
+}
 
 /** P3-6a: Amir approved B4 as the single second must-change exception (DECISION_LOG §I). */
 export const MUST_CHANGE_PASSWORD_OPS = ['C11', 'B4'] as const;
@@ -87,6 +105,7 @@ export function isUsablePermissionRule(access: RouteAccess): boolean {
 export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteRegistry {
   const byOperationId = new Map<string, RouteRegistryRow>();
   const byRoute = new Set<string>();
+  const publicRoutes = new Set<string>();
   for (const row of rows) {
     if (row.operationId.length === 0) {
       throw new Error('route registry: row with an empty operationId');
@@ -136,8 +155,9 @@ export function createRouteRegistry(rows: readonly RouteRegistryRow[]): RouteReg
     }
     byOperationId.set(row.operationId, row);
     byRoute.add(routeKey);
+    if (row.access.kind === 'public') publicRoutes.add(routeKey);
   }
-  return { rows: [...rows], byOperationId };
+  return { rows: [...rows], byOperationId, publicRoutes };
 }
 
 /** Structural subset of Fastify's onRoute payload that this check needs. */
@@ -162,10 +182,7 @@ export function isPublicRegistryRoute(
   method: string,
   path: string,
 ): boolean {
-  const normalized = toOpenApiPath(path);
-  return registry.rows.some(
-    (row) => row.method === method && row.path === normalized && row.access.kind === 'public',
-  );
+  return registry.publicRoutes.has(`${method} ${toOpenApiPath(path)}`);
 }
 
 function methodMatches(registered: string, rowMethod: HttpMethod): boolean {
@@ -185,10 +202,8 @@ export function assertRouteRegistered(payload: OnRoutePayload, registry: RouteRe
   const operationId = typeof rawOperationId === 'string' ? rawOperationId : undefined;
 
   if (operationId === undefined || operationId.length === 0) {
-    // P3-2c: the config symbol identifies the group's own catch-all; the path set is a
-    // belt-and-braces check. Any other operationId-less route fails closed at boot.
-    const isCatchAll = payload.config?.[CATCH_ALL] === true;
-    if (isCatchAll || INFRA_CATCH_ALL_PATHS.has(path)) return;
+    // P3-2c / P4-2: marker AND exact infra path are both required.
+    if (isCatchAllRoute(payload.config, path)) return;
     throw new Error(
       `route registry: ${methods.join(',')} ${path} is registered without an operationId`,
     );
@@ -223,7 +238,11 @@ export function assertRouteRegistered(payload: OnRoutePayload, registry: RouteRe
   }
 }
 
-const HOOK_INSTALLED = Symbol.for('vproject.routeRegistryHook');
+/**
+ * P5-5: module-private marker. Deliberately NOT `Symbol.for` (a global registry key any caller
+ * can preset to skip this hook) and deliberately not exported.
+ */
+const HOOK_INSTALLED: unique symbol = Symbol('vproject.routeRegistryHook');
 
 /**
  * Installs the onRoute check. Idempotent: a Fastify child instance inherits the marker

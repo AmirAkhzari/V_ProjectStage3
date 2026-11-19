@@ -2,6 +2,10 @@ import { buildApp } from './app.js';
 import { createIdentityDb } from './modules/identity/infra/db/pool.js';
 import { configureSessionTtl } from './modules/identity/domain/sessionTtl.js';
 import { Argon2idPasswordHasher } from './modules/identity/infra/crypto/argon2Hasher.js';
+import {
+  loadBreachedPasswordList,
+  logBreachedListBoot,
+} from './modules/identity/infra/crypto/breachedPasswords.js';
 import { createSmsProvider } from './modules/notification/api.js';
 import { PgRefreshTokenStore } from './modules/identity/infra/crypto/pgRefreshStore.js';
 import { PgSessionStore } from './modules/identity/infra/session/pgSessionStore.js';
@@ -31,6 +35,18 @@ configureSessionTtl({
   driverAbsoluteMs: config.SESSION_TTL_DRIVER_ABSOLUTE_HOURS * 60 * 60 * 1000,
 });
 const log = pino(pinoOptions(config));
+// P6-4/P6-8: fail boot on a sha256 mismatch; the list is embedded (no file read) and the
+// log line is emitted before any DB/Redis await so a smoke of main.js can observe it.
+const breachedList = (() => {
+  try {
+    const list = loadBreachedPasswordList();
+    logBreachedListBoot(log, list);
+    return list;
+  } catch (error) {
+    log.error({ err: error }, 'api refused breached-password list');
+    process.exit(1);
+  }
+})();
 const db = createDb(config.DATABASE_URL_APP, { log });
 const identityDb = createIdentityDb(config.DATABASE_URL_IDENTITY, { log });
 const sessionLookupPool = new pg.Pool(fallbackPoolOptions(config.DATABASE_URL_IDENTITY));
@@ -93,6 +109,7 @@ const app = await buildApp({
     hasher,
     log,
     auditHashKey: config.AUDIT_HASH_KEY,
+    breachedPassword: (normalized) => breachedList.has(normalized),
   },
   otpAuth: {
     identityPool: identityDb.pool,

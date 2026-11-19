@@ -29,6 +29,29 @@ describe('AUTH-DM-01 demo endpoints in production', () => {
     });
     await expectHidden(app);
   });
+
+  it('P6-8: refuses every test-only buildApp option in production', async () => {
+    const testOnly = [
+      { adminTestRoutes: async () => undefined },
+      { driverTestRoutes: async () => undefined },
+      { testRegistryRows: [] },
+      { onRoute: () => undefined },
+    ];
+    for (const extra of testOnly) {
+      const options = {
+        config: productionApiConfig(),
+        healthChecks: [],
+        ...extra,
+      } as Parameters<typeof buildApp>[0];
+      await expect(buildApp(options)).rejects.toThrow(/test-only options in production/);
+    }
+    const all = {
+      config: productionApiConfig(),
+      healthChecks: [],
+      ...Object.assign({}, ...testOnly),
+    } as Parameters<typeof buildApp>[0];
+    await expect(buildApp(all)).rejects.toThrow(/adminTestRoutes/);
+  });
 });
 
 describe('demo login flag', () => {

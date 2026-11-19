@@ -7,7 +7,9 @@ import { buildApp, type App } from '../../src/app.js';
 import { createRouteGroup } from '../../src/http/group.js';
 import type { AccessClaims, AccessTokenVerifier } from '../../src/platform/auth/jwt.js';
 import {
+  catchAllRouteConfig,
   createRouteRegistry,
+  installRouteRegistryHook,
   type RouteRegistryRow,
 } from '../../src/platform/http/routeRegistry.js';
 import type { OtpAuthRuntime } from '../../src/modules/identity/application/otpAuth.js';
@@ -86,7 +88,6 @@ const PROBES: { plugin: FastifyPluginAsync; rows: readonly RouteRegistryRow[] } 
 
 const DRIVER_PROBES: { plugin: FastifyPluginAsync; rows: readonly RouteRegistryRow[] } = {
   plugin: async (app) => {
-    app.post('/auth/password', { schema: { operationId: 'C11' } }, async () => ({ ok: true }));
     app.get('/test/payouts', { schema: { operationId: 'TEST_DRIVER_PROBE' } }, async () => ({
       ok: true,
     }));
@@ -387,6 +388,67 @@ describe('onRequest access enforcement', () => {
       error: { code: 'NOT_FOUND', message: 'Resource not found' },
     });
   });
+
+  it('P3-2a: a route whose registry row drifts away after boot is 403 at request time', async () => {
+    const plugin = createRouteGroup({ group: 'app', prefix: '/v1/app', subject: 'shopkeeper' });
+    const isolated = Fastify();
+    registerErrorHandling(isolated);
+    // The row exists at boot (so the build-time onRoute guard can pass) and is removed before
+    // the request. The request-time check must fail closed — the catch-all marker is not a
+    // skip switch for a non-catch-all path.
+    const registry = createRouteRegistry([
+      {
+        operationId: 'TEST_P3_2A',
+        method: 'GET',
+        path: '/v1/app/not-catch-all',
+        access: { kind: 'authenticated', subject: 'shopkeeper' },
+      },
+    ]);
+    await isolated.register(plugin, {
+      prefix: '/v1/app',
+      modules: [],
+      verifier: verifierOf('shopkeeper'),
+      sessionAuthority: allowAllSessionAuthority('shopkeeper'),
+      assertIssuance: async () => undefined,
+      registry,
+      extraRoutes: async (probes) => {
+        probes.get(
+          '/not-catch-all',
+          { ...catchAllRouteConfig(), schema: { operationId: 'TEST_P3_2A' } },
+          async () => ({ ok: true }),
+        );
+      },
+    });
+    (registry.byOperationId as Map<string, unknown>).delete('TEST_P3_2A');
+    try {
+      const response = await isolated.inject({
+        method: 'GET',
+        url: '/v1/app/not-catch-all',
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('P5-5: presetting Symbol.for(routeRegistryHook) does not skip the onRoute guard', async () => {
+    const registry = createRouteRegistry([]);
+    const isolated = Fastify();
+    (isolated as unknown as Record<symbol, boolean>)[Symbol.for('vproject.routeRegistryHook')] =
+      true;
+    installRouteRegistryHook(isolated, registry);
+    try {
+      await expect(
+        isolated.register(async (probes) => {
+          probes.get('/v1/app/unmapped', async () => ({ ok: true }));
+        }),
+      ).rejects.toThrow(/without an operationId/);
+    } finally {
+      await isolated.close();
+    }
+  });
 });
 
 describe('must_change_password (C11 exception)', () => {
@@ -397,7 +459,7 @@ describe('must_change_password (C11 exception)', () => {
     app = undefined;
   });
 
-  it('blocks a driver non-C11 probe but allows the C11-shaped probe', async () => {
+  it('blocks a driver non-C11 probe but lets C11 reach its handler', async () => {
     app = await buildApp({
       config: testConfig(),
       healthChecks: [],
@@ -410,8 +472,14 @@ describe('must_change_password (C11 exception)', () => {
     const blocked = await request(app, 'GET', '/v1/driver/test/payouts');
     expect(blocked.statusCode).toBe(403);
     expect(blocked.json()).toMatchObject({ error: { code: 'PASSWORD_CHANGE_REQUIRED' } });
-    const allowed = await request(app, 'POST', '/v1/driver/auth/password');
-    expect(allowed.statusCode).toBe(200);
+    // The real C11 route is reachable while must-change; with no runtime wired it fails
+    // closed with 503, which proves the guard did not return PASSWORD_CHANGE_REQUIRED.
+    const allowed = await request(app, 'POST', '/v1/driver/auth/password', {
+      headers: { 'content-type': 'application/json' },
+      payload: { currentPassword: 'pw-cur-aaaaaa', newPassword: 'pw-new-bbbbbbbb' },
+    });
+    expect(allowed.statusCode).toBe(503);
+    expect(allowed.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
   });
 });
 

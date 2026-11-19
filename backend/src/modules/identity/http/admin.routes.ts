@@ -9,6 +9,7 @@ import {
   refreshUnauthenticated,
 } from '../application/refreshAuth.js';
 import { guardDemoLoginRate } from '../application/demoRate.js';
+import { unavailable, unlockDriver } from '../application/unlockDriver.js';
 import { otpRoutePlugin } from './otp.routes.js';
 
 /** B5 is omitted unless demo login is enabled. ScopeDistributor is not read. */
@@ -28,6 +29,31 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       refreshCallContext(request.ip, request.headers['user-agent'], app.demoLogin),
     );
   });
+  app.post<{ Params: { id: string } }>(
+    '/drivers/:id/unlock',
+    { schema: { operationId: 'B83' } },
+    async (request) => {
+      if (!app.otpAuth || !request.subject) throw unavailable();
+      const tenant = request.tenant;
+      // Super_admin must scope; isPlatform never looks up a driver.
+      if (!tenant || tenant.isPlatform === true || !tenant.distributorId) {
+        throw new AppError('VALIDATION_FAILED', 400, 'Request could not be processed');
+      }
+      return unlockDriver(
+        { identityPool: app.otpAuth.identityPool, redis: app.otpAuth.redis, log: app.otpAuth.log },
+        {
+          driverId: request.params.id,
+          staffId: request.subject.sub,
+          staffRole: request.staffRole ?? 'staff',
+          distributorId: tenant.distributorId,
+          body: request.body,
+          idempotencyKeyHeader: request.headers['idempotency-key'],
+          ip: request.ip,
+          userAgent: request.headers['user-agent'],
+        },
+      );
+    },
+  );
   app.post('/auth/logout', { schema: { operationId: 'B4' } }, async (request) => {
     assertEmptyLogoutBody(request.body);
     if (!app.otpAuth) {
