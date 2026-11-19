@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { requirePermission } from '../../../platform/auth/guards.js';
 import { AppError } from '../../../platform/http/errors.js';
 import { findDistributor } from '../application/getDistributor.js';
-import { listDistributors, readAllFlag } from '../application/listDistributors.js';
+import { listDistributors, readDistributorListQuery } from '../application/listDistributors.js';
 import {
   parseProfileUpdateBody,
   readOptionalIdempotencyKey,
@@ -21,14 +21,14 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     const tenant = request.tenant;
     if (!tenant) throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
     // Query parsing precedes the pool check so a malformed flag is always a 400, never a 503.
-    const all = readAllFlag((request.query as { all?: unknown }).all);
+    const page = readDistributorListQuery(request.query);
     const pool = app.appDb;
     if (!pool) {
       throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
         retryAfter: 5,
       });
     }
-    return listDistributors(pool, tenant, { all });
+    return listDistributors(pool, tenant, page);
   });
 
   app.get('/distributors/:id', { schema: { operationId: 'B25' } }, async (request) => {

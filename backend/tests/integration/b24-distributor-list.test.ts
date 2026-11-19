@@ -7,6 +7,7 @@ import type {
   SessionAuthority,
   SessionSnapshot,
 } from '../../src/platform/auth/sessionAuthority.js';
+import { encodeDistributorCursor } from '../../src/modules/tenancy/application/listDistributors.js';
 import { testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
@@ -166,14 +167,17 @@ describe('B24 tenant list', () => {
       items: [
         { id: DIST_1, name: 'Distributor 1', status: 'active', createdAt: expect.any(String) },
       ],
+      hasMore: false,
+      nextAfter: null,
     });
   });
 
   it('shows every tenant to the platform scope, ordered by name', async () => {
     const response = await list('sa', '?all=1');
     expect(response.statusCode, response.body).toBe(200);
-    const ids = (response.json() as { items: { id: string }[] }).items.map((item) => item.id);
-    expect(ids).toEqual([DIST_3, DIST_1, DIST_2]);
+    const body = response.json() as { items: { id: string }[]; hasMore: boolean };
+    expect(body.items.map((item) => item.id)).toEqual([DIST_3, DIST_1, DIST_2]);
+    expect(body.hasMore).toBe(false);
   });
 
   it('narrows a scoped super admin back to the declared tenant', async () => {
@@ -183,6 +187,8 @@ describe('B24 tenant list', () => {
       items: [
         { id: DIST_1, name: 'Distributor 1', status: 'active', createdAt: expect.any(String) },
       ],
+      hasMore: false,
+      nextAfter: null,
     });
 
     // The switcher flag never escapes the scope the caller asked for.
@@ -195,6 +201,100 @@ describe('B24 tenant list', () => {
     const response = await list('da1-view', '?all=1');
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+  });
+
+  it('honours a smaller page size and hands back the next cursor', async () => {
+    const response = await list('sa', '?all=1&limit=2');
+    expect(response.statusCode, response.body).toBe(200);
+    const body = response.json() as {
+      items: { id: string }[];
+      hasMore: boolean;
+      nextAfter: string | null;
+    };
+    expect(body.items.map((item) => item.id)).toEqual([DIST_3, DIST_1]);
+    expect(body.hasMore).toBe(true);
+    expect(body.nextAfter).toBe(encodeDistributorCursor('Distributor 1', DIST_1));
+  });
+
+  it('pages past the cap instead of truncating the list silently', async () => {
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at)
+       SELECT ($1 || lpad(g::text, 12, '0'))::uuid,
+              'Bulk ' || lpad(g::text, 4, '0'), 'active', now()
+         FROM generate_series(1, 503) g`,
+      ['03000000-0000-4000-8000-'],
+    );
+    try {
+      const seen: string[] = [];
+      let after: string | null = null;
+      let pages = 0;
+      for (;;) {
+        const query = after === null ? '?all=1' : `?all=1&after=${after}`;
+        const response = await list('sa', query);
+        expect(response.statusCode, response.body).toBe(200);
+        const body = response.json() as {
+          items: { id: string }[];
+          hasMore: boolean;
+          nextAfter: string | null;
+        };
+        expect(body.items.length).toBeLessThanOrEqual(500);
+        seen.push(...body.items.map((item) => item.id));
+        pages += 1;
+        if (!body.hasMore) {
+          expect(body.nextAfter).toBeNull();
+          break;
+        }
+        expect(body.nextAfter).toEqual(expect.any(String));
+        after = body.nextAfter;
+        expect(pages).toBeLessThan(4);
+      }
+      expect(pages).toBe(2);
+      expect(seen).toHaveLength(506);
+      expect(new Set(seen).size).toBe(506);
+    } finally {
+      await ownerPool.query(`DELETE FROM tenancy.distributors WHERE id::text LIKE '03000000-%'`);
+    }
+  }, 120_000);
+
+  it('resumes on (name, id), so duplicate names never skip or repeat a row', async () => {
+    const pairA = '04000000-0000-4000-8000-000000000001';
+    const pairB = '04000000-0000-4000-8000-000000000002';
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at)
+       VALUES ($1, 'Zed Same', 'active', now()), ($2, 'Zed Same', 'active', now())`,
+      [pairA, pairB],
+    );
+    try {
+      const next = await list(
+        'sa',
+        `?all=1&limit=1&after=${encodeDistributorCursor('Zed Same', pairA)}`,
+      );
+      expect(next.statusCode, next.body).toBe(200);
+      const body = next.json() as {
+        items: { id: string }[];
+        hasMore: boolean;
+        nextAfter: string | null;
+      };
+      expect(body.items.map((item) => item.id)).toEqual([pairB]);
+      expect(body.hasMore).toBe(false);
+      expect(body.nextAfter).toBeNull();
+
+      const exhausted = await list(
+        'sa',
+        `?all=1&after=${encodeDistributorCursor('Zed Same', pairB)}`,
+      );
+      expect(exhausted.json()).toEqual({ items: [], hasMore: false, nextAfter: null });
+    } finally {
+      await ownerPool.query(`DELETE FROM tenancy.distributors WHERE id::text LIKE '04000000-%'`);
+    }
+  });
+
+  it('rejects a malformed page request instead of guessing at a page', async () => {
+    for (const query of ['?limit=0', '?limit=501', '?limit=01', '?after=', '?after=*']) {
+      const response = await list('sa', query);
+      expect(response.statusCode, query).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
   });
 
   it('requires distributors.view, not distributors.manage', async () => {
