@@ -50,6 +50,24 @@ export type RetailerFilters = {
   plan?: RetailerPlan | "all";
 };
 
+/**
+ * B33 page request. `limit`/`after` are the server cursor; the remaining fields narrow the list in
+ * the mock adapter and, once the profile schema exists, on the server too.
+ */
+export type RetailerListQuery = RetailerFilters & {
+  q?: string;
+  city?: string;
+  status?: Retailer["status"] | "all";
+  limit?: number;
+  after?: string | null;
+};
+
+export type RetailerPage = {
+  items: Retailer[];
+  hasMore: boolean;
+  nextAfter: string | null;
+};
+
 export type SubscriptionFilters = {
   plan?: RetailerPlan | "all";
   status?: SubscriptionStatus | "all";
@@ -99,13 +117,18 @@ export interface AdminApi {
   setPriceMultiplier(distributorId: string, multiplier: number): Promise<void>;
 
   // distributors
-  /** `all: true` ignores the active scope (used by the SuperAdmin switcher and filters). */
+  /**
+   * `all: true` ignores the active scope (used by the SuperAdmin switcher and filters). It only
+   * widens a platform-scoped super admin; inside a tenant scope the scoped list is returned.
+   */
   getDistributors(opts?: { all?: boolean }): Promise<Distributor[]>;
   getDistributor(id: string): Promise<Distributor | null>;
   saveDistributor(distributor: Omit<Distributor, "id" | "createdAt"> & { id?: string }): Promise<Distributor>;
 
   // retailers
   getRetailers(filters?: RetailerFilters): Promise<Retailer[]>;
+  /** B33 paged list: `after` is the opaque `nextAfter` of the previous page. */
+  getRetailersPage(filters?: RetailerListQuery): Promise<RetailerPage>;
   getRetailer(id: string): Promise<Retailer | null>;
   getRetailerAddresses(id: string): Promise<Address[]>;
   setRetailerStatus(id: string, status: Retailer["status"]): Promise<void>;

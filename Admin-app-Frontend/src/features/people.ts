@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/services/client";
-import type { RetailerFilters } from "@/services/api";
+import type { RetailerFilters, RetailerListQuery } from "@/services/api";
 import type { Retailer, Staff, SubscriptionAction } from "@/types";
 import { keys, useScopeKey } from "./keys";
 
@@ -10,6 +10,15 @@ export function useRetailers(filters?: RetailerFilters) {
   return useQuery({
     queryKey: keys.retailers(scope, filters),
     queryFn: () => api.getRetailers(filters),
+  });
+}
+
+export function useRetailersPage(filters?: RetailerListQuery) {
+  const scope = useScopeKey();
+  return useQuery({
+    queryKey: keys.retailers(scope, filters),
+    queryFn: () => api.getRetailersPage(filters),
+    placeholderData: (previous) => previous,
   });
 }
 

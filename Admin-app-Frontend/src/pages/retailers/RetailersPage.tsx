@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import PageHeader from "@/components/shared/PageHeader";
 import Price from "@/components/shared/Price";
 import DataTable from "@/components/data-table/DataTable";
@@ -10,7 +10,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useRetailers } from "@/features/people";
+import { useRetailersPage } from "@/features/people";
 import { useOrders } from "@/features/orders";
 import { useCities } from "@/features/ops";
 import { normalizePersian, toFaNum } from "@/lib/format";
@@ -23,15 +23,35 @@ import { PlanBadge } from "./components/PlanBadge";
 
 type Row = Retailer & { orders: number; spent: number; lastOrderAt?: string };
 
+/** One B33 page. The cursor stack is what makes "previous page" possible with keyset paging. */
+const PAGE_SIZE = 20;
+
 export default function RetailersPage() {
   const navigate = useNavigate();
   const [plan, setPlan] = useState<RetailerPlan | "all">("all");
-  const { data: retailers, isLoading } = useRetailers(plan === "all" ? undefined : { plan });
   const { data: orders } = useOrders();
   const { data: cities } = useCities();
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("all");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<Retailer["status"] | "all">("all");
+  const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const after = cursors[cursors.length - 1] ?? null;
+  const pageIndex = cursors.length - 1;
+
+  // A changed filter starts a new list, so the old cursor must not survive it.
+  useEffect(() => {
+    setCursors([null]);
+  }, [plan, query, city, status]);
+
+  const { data: page, isLoading } = useRetailersPage({
+    plan,
+    q: query.trim() || undefined,
+    city: city === "all" ? undefined : city,
+    status,
+    limit: PAGE_SIZE,
+    after,
+  });
+  const retailers = page?.items;
 
   const rows = useMemo<Row[]>(() => {
     const q = normalizePersian(query.trim());
@@ -47,11 +67,12 @@ export default function RetailersPage() {
       })
       .filter((r) => {
         if (city !== "all" && r.city !== city) return false;
+        if (plan !== "all" && r.plan !== plan) return false;
         if (status !== "all" && r.status !== status) return false;
         if (q && !normalizePersian(`${r.name} ${r.phone} ${r.city}`).includes(q)) return false;
         return true;
       });
-  }, [retailers, orders, query, city, status]);
+  }, [retailers, orders, plan, query, city, status]);
 
   const columns = useMemo<ColumnDef<Row, unknown>[]>(
     () => [
@@ -79,9 +100,7 @@ export default function RetailersPage() {
         accessorKey: "primaryDistributorName",
         header: "شرکت پخش اصلی",
         cell: ({ row }) => (
-          <span className="max-w-40 truncate text-label-secondary">
-            {row.original.primaryDistributorName ?? "—"}
-          </span>
+          <span className="max-w-40 truncate text-label-secondary">{row.original.primaryDistributorName ?? "—"}</span>
         ),
       },
       {
@@ -153,7 +172,7 @@ export default function RetailersPage() {
     <>
       <PageHeader
         title="فروشگاه‌ها"
-        description={`${toFaNum(retailers?.length ?? 0)} فروشگاه خرده‌فروشی ثبت‌شده`}
+        description={`${toFaNum(rows.length)} فروشگاه در این صفحه`}
         actions={
           <Button variant="outline" onClick={exportCsv} disabled={!rows.length}>
             <Download /> خروجی CSV
@@ -191,7 +210,7 @@ export default function RetailersPage() {
                 <SelectItem value="pro">پرو</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={status} onValueChange={setStatus}>
+            <Select value={status} onValueChange={(v) => setStatus(v as Retailer["status"] | "all")}>
               <SelectTrigger size="sm" className="w-28 bg-fill">
                 <SelectValue />
               </SelectTrigger>
@@ -204,6 +223,37 @@ export default function RetailersPage() {
           </>
         }
       />
+      {!isLoading && (pageIndex > 0 || page?.hasMore) ? (
+        <div className="flex items-center justify-between px-1 text-[12px] text-label-secondary">
+          <span className="tabular-nums">
+            {toFaNum(pageIndex * PAGE_SIZE + 1)}–{toFaNum(pageIndex * PAGE_SIZE + rows.length)}
+            {page?.hasMore ? "+" : ""}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setCursors(cursors.slice(0, -1))}
+              disabled={pageIndex === 0}
+              aria-label="صفحه قبل"
+            >
+              <ChevronRight />
+            </Button>
+            <span className="min-w-8 text-center text-foreground tabular-nums">{toFaNum(pageIndex + 1)}</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => {
+                if (page?.nextAfter) setCursors([...cursors, page.nextAfter]);
+              }}
+              disabled={!page?.hasMore}
+              aria-label="صفحه بعد"
+            >
+              <ChevronLeft />
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

@@ -51,7 +51,12 @@ export function errorMessage(data: unknown, fallback = "خطای شبکه") {
   if (data && typeof data === "object" && "error" in data) {
     const err = (data as { error: unknown }).error;
     if (typeof err === "string") return err;
-    if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+    if (
+      err &&
+      typeof err === "object" &&
+      "message" in err &&
+      typeof (err as { message: unknown }).message === "string"
+    ) {
       return (err as { message: string }).message;
     }
   }
@@ -88,15 +93,18 @@ async function refreshTokens() {
   return refreshInflight;
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit & { json?: unknown; idempotency?: boolean } = {}): Promise<T> {
-  const { json, idempotency, headers: extra, ...rest } = init;
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit & { json?: unknown; idempotency?: boolean; scope?: boolean } = {},
+): Promise<T> {
+  const { json, idempotency, scope: withScope, headers: extra, ...rest } = init;
   const run = async (retried: boolean): Promise<T> => {
     const bundle = readBundle();
     const headers = new Headers(extra);
     if (json !== undefined) headers.set("Content-Type", "application/json");
     if (bundle?.accessToken) headers.set("Authorization", `Bearer ${bundle.accessToken}`);
     const scope = readScope();
-    if (scope) headers.set("X-Scope-Distributor", scope);
+    if (withScope !== false && scope) headers.set("X-Scope-Distributor", scope);
     if (idempotency) headers.set("Idempotency-Key", crypto.randomUUID());
     const res = await fetch(`${apiBase()}${path}`, {
       ...rest,

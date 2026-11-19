@@ -28,7 +28,16 @@ import type {
   WalletAccount,
 } from "@/types";
 import { PRO_MONTHLY_PRICE } from "@/types";
-import type { AdminApi, ApiError, ApiOk, OrderFilters, RetailerFilters, Scope, SubscriptionFilters } from "./api";
+import type {
+  AdminApi,
+  ApiError,
+  ApiOk,
+  OrderFilters,
+  RetailerFilters,
+  RetailerListQuery,
+  Scope,
+  SubscriptionFilters,
+} from "./api";
 import { apiFetch, readBundle, writeBundle, writeScope } from "./http";
 import { ROLE_LABELS } from "@/lib/permissions";
 
@@ -59,6 +68,9 @@ function persistSession(data: {
   }
   return session;
 }
+
+type DistributorListPayload = Record<string, unknown>[] | { items?: Record<string, unknown>[] };
+type RetailerRowsPayload = Record<string, unknown>[] | { items?: Record<string, unknown>[] };
 
 function mapDistributor(row: Record<string, unknown>): Distributor {
   return {
@@ -164,6 +176,23 @@ function mapCity(row: Record<string, unknown>): City {
     province: String(row.province ?? ""),
     lat: Number(row.lat ?? 0),
     lng: Number(row.lng ?? 0),
+  };
+}
+
+function mapRetailer(row: Record<string, unknown>): Retailer {
+  // `customers.shopkeepers` stores no name, city, plan or wallet yet, so B33 answers only what
+  // exists; the missing columns fall back to the phone and to the free plan.
+  return {
+    id: String(row.id),
+    name: String(row.name ?? row.phone ?? ""),
+    phone: String(row.phone ?? ""),
+    city: String(row.city ?? ""),
+    status: row.status === "blocked" ? "blocked" : "active",
+    createdAt: String(row.createdAt ?? new Date().toISOString()),
+    walletBalance: Number(row.walletBalance ?? 0),
+    primaryDistributorId: (row.primaryDistributorId as string | null) ?? null,
+    primaryDistributorName: (row.primaryDistributorName as string | null) ?? null,
+    plan: (row.plan as RetailerPlan) ?? "free",
   };
 }
 
@@ -326,8 +355,17 @@ export const httpApi: AdminApi = {
   },
 
   async getDistributors(opts) {
-    const qs = opts?.all ? "?all=1" : "";
-    const rows = await apiFetch<Record<string, unknown>[]>(`/admin/distributors${qs}`);
+    // B24 answers `{ items, hasMore, nextAfter }`; older builds answered a bare array, so accept
+    // both shapes. `all=1` only widens a platform-scoped (super admin) caller: the backend refuses
+    // it inside a tenant scope, so a distributor admin keeps the scoped list and the platform call
+    // goes out without the scope header.
+    const platform = readBundle()?.session.staff.role === "super_admin";
+    const all = Boolean(opts?.all) && platform;
+    const data = await apiFetch<DistributorListPayload>(
+      `/admin/distributors${all ? "?all=1" : ""}`,
+      all ? { scope: false } : undefined,
+    );
+    const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map(mapDistributor);
   },
 
@@ -363,8 +401,30 @@ export const httpApi: AdminApi = {
   },
 
   async getRetailers(filters?: RetailerFilters) {
-    const qs = filters?.plan && filters.plan !== "all" ? `?plan=${filters.plan}` : "";
-    return apiFetch<Array<Retailer & { createdAt: string }>>(`/admin/retailers${qs}`);
+    // Unpaged callers (command palette, city coverage) read the first B33 page; the page is capped
+    // at RETAILERS_LIST_MAX server-side, exactly like the B24 list.
+    const qs = new URLSearchParams({ limit: "500" });
+    if (filters?.plan && filters.plan !== "all") qs.set("plan", filters.plan);
+    const data = await apiFetch<RetailerRowsPayload>(`/admin/retailers?${qs}`);
+    const rows = Array.isArray(data) ? data : (data.items ?? []);
+    return rows.map(mapRetailer);
+  },
+
+  async getRetailersPage(filters?: RetailerListQuery) {
+    // Only the cursor is enforced server-side today; plan/city/status/q have no columns yet, so
+    // the page narrows the rows it received. The mock adapter still filters the whole list.
+    const qs = new URLSearchParams({ limit: String(filters?.limit ?? 20) });
+    if (filters?.after) qs.set("after", filters.after);
+    const data = await apiFetch<{
+      items?: Record<string, unknown>[];
+      hasMore?: boolean;
+      nextAfter?: string | null;
+    }>(`/admin/retailers?${qs}`);
+    return {
+      items: (data.items ?? []).map(mapRetailer),
+      hasMore: Boolean(data.hasMore),
+      nextAfter: data.nextAfter ?? null,
+    };
   },
 
   async getRetailer(id) {

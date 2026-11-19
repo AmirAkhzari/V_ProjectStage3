@@ -28,7 +28,7 @@ import type {
   WalletAccount,
 } from "@/types";
 import { DEMO_OTP } from "@/types";
-import type { AdminApi, ApiError, ApiOk, RetailerFilters, Scope, SubscriptionFilters } from "./api";
+import type { AdminApi, ApiError, ApiOk, RetailerFilters, RetailerListQuery, Scope, SubscriptionFilters } from "./api";
 import {
   DRIVER_DEMO_ADDRESSES,
   DRIVER_DEMO_ORDERS,
@@ -239,6 +239,11 @@ function applyPlan(retailer: Retailer, db: Db): Retailer {
     plan: active ? "pro" : "free",
     subscriptionExpiresAt: active?.expiresAt ?? null,
   };
+}
+
+function parseRetailerCursor(after: string | null | undefined): number {
+  const match = /^mock:(\d+)$/.exec(after ?? "");
+  return match ? Number(match[1]) : 0;
 }
 
 function listRetailer(retailer: Retailer, db: Db): Retailer {
@@ -696,6 +701,37 @@ export const mockApi: AdminApi = {
       rows = rows.filter((r) => r.plan === filters.plan);
     }
     return rows;
+  },
+
+  async getRetailersPage(filters?: RetailerListQuery) {
+    await delay(160);
+    const db = readDb();
+    let rows = db.retailers.map((r) => listRetailer(r, db));
+    if (scope.distributorId) {
+      rows = rows.filter((r) => r.primaryDistributorId === scope.distributorId);
+    }
+    if (filters?.plan && filters.plan !== "all") {
+      rows = rows.filter((r) => r.plan === filters.plan);
+    }
+    if (filters?.status && filters.status !== "all") {
+      rows = rows.filter((r) => r.status === filters.status);
+    }
+    if (filters?.city && filters.city !== "all") {
+      rows = rows.filter((r) => r.city === filters.city);
+    }
+    const q = filters?.q ? normalizePersian(filters.q.trim()) : "";
+    if (q) {
+      rows = rows.filter((r) => normalizePersian(`${r.name} ${r.phone} ${r.city}`).includes(q));
+    }
+    const limit = Math.max(1, Math.min(500, filters?.limit ?? 20));
+    const start = parseRetailerCursor(filters?.after);
+    const page = rows.slice(start, start + limit);
+    const hasMore = start + page.length < rows.length;
+    return {
+      items: page,
+      hasMore,
+      nextAfter: hasMore ? `mock:${start + page.length}` : null,
+    };
   },
 
   async getRetailer(id) {

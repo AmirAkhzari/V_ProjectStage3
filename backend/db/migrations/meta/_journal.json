@@ -99,6 +99,13 @@
       "when": 1794000000000,
       "tag": "0013_s11b7_1_b24_list_paging",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794100000000,
+      "tag": "0014_s12_b33_retailer_list_paging",
+      "breakpoints": true
     }
   ]
 }

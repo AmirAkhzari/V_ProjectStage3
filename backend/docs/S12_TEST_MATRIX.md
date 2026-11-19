@@ -213,6 +213,12 @@ ORD-SM-01/02, PAY-ORD-01/02, ADM-ORD-01, PAY-VER/REF/NC/CB, PAY-NTF-01, DEL-MAN-
 
 **C-1 overall: pending** until remaining exec-auth is green. Gate stays closed.
 
+## Stage3 slice 3g — B33 retailer list paging
+
+B33 is LIVE in the `customers` module (15 LIVE ops; PENDING 116→115) as an additive paging extension over the frozen `Placeholder` contract: `limit` (1..500, default 500) plus the opaque `after` cursor, answered as `{ items, hasMore, nextAfter }`. Rows are ordered and resumed on `(created_at DESC, id DESC)` (index `shopkeepers_created_at_id_idx`, migration 0014). Visibility stays RLS-decided: `shopkeepers_staff_read` admits a staff token to the shopkeepers whose primary distributor is `app.distributor_id`, and the platform scope (`app.is_platform`) to every row; the policy requires `app.subject_type = 'staff'`, so shopkeeper and driver tokens gain nothing. The item view only carries what the table stores (`id, phone, status, primaryDistributorId, primaryDistributorName, createdAt`); name, city, plan and wallet are absent until the profile/membership schema lands, and the contract's `plan` filter is not applied by the endpoint.
+
+Tests: `tests/unit/b33-retailer-list.test.ts` (defaults, canonical limits, cursor round-trip, self-built/extra-part/non-UUID/non-ISO cursors) and `tests/integration/b33-retailer-list.test.ts` (DA sees only its primary-distributor shops, SA sees all, scoped SA narrows, limit+cursor resume, equal-timestamp keyset, 400 malformed page, 403 manage-only, 401, 503 no pool).
+
 ## Stage3 slice 3a — PR #5 carries + C11
 
 Carries: `tests/unit/a7-app-me.test.ts` proves no-store on A7 200/401/404/HEAD/503 and P5-1 (real EdDSA staff/driver tokens are 401 `UNAUTHENTICATED`); `tests/unit/route-access.test.ts` proves P5-5 (private Symbol) and request-time default-deny; `tests/integration/a7-app-me.test.ts` proves P5-2 (RLS hides B's row under A's tenant and with no GUC).

@@ -14,6 +14,7 @@ Admin dashboard for V-Project. This folder is the **admin** front end; the **cli
 - Stack: Vite + React 19 + TypeScript + Tailwind v4 + shadcn (radix-nova, `rtl: true`) + Zustand (session/UI) + TanStack Query (server state) + react-router v7. Standalone folder, no monorepo.
 - Data: `src/services/api.ts` (`AdminApi`) with a localStorage mock (`visitor-admin:db:v1`) seeded from copies of the client's `catalog.ts` / `account.ts`; `VITE_API_MODE=mock|http`.
 - `src/types/index.ts` is a superset of `../FrontEnd/src/types/index.ts` — keep them in sync.
+- Backend contract parity: every backend change (response shape, status codes, scope rules, new query params) must be checked against this app in the same slice — `AdminApi` in `src/services/api.ts`, the `httpApi` adapter and `mockApi` all have to match it. `httpApi.getDistributors` already accepts both the old bare array and B24's `{ items, hasMore, nextAfter }`; `all=1` is sent only for a platform-scoped super admin, without the `X-Scope-Distributor` header. B33 keeps the same shape: `getRetailersPage` sends `limit`/`after` and pages in `RetailersPage` with a cursor stack; unpaged callers use `getRetailers`, which reads the first (500-row) page and still tolerates a bare array.
 
 ## Conventions (shared with client)
 
