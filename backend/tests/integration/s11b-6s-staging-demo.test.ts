@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import type { FastifyPluginAsync } from 'fastify';
 import type { Redis } from 'ioredis';
 import pg from 'pg';
@@ -31,7 +30,9 @@ import { productionApiConfig, testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
+  startRedis,
   type StartedPostgresRoles,
+  type StartedTestRedis,
 } from '../helpers/containers.js';
 
 const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Resource not found' } };
@@ -69,7 +70,7 @@ const demoWriteProbes: FastifyPluginAsync = async (probe) => {
 
 describe('V11-DM-05 staging demo login', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
@@ -79,7 +80,7 @@ describe('V11-DM-05 staging demo login', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     attachPgTeardownGuard(identityPool);

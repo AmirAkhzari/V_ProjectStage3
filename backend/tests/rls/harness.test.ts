@@ -476,17 +476,22 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/permission denied/i);
   });
 
-  it('TENANT-01-S11B: customers.shopkeepers is owner-shopkeeper + platform only (DL-18 deferred)', async () => {
+  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33)', async () => {
+    // B33 (0014) adds shopkeepers_staff_read: a staff token sees the shops of its own distributor.
+    const supplyA = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM customers.shopkeepers WHERE primary_distributor_id = $1`,
+      [DIST_A],
+    );
     await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const visible = await tx.client.query<{ c: string }>(
         `SELECT count(*)::text AS c FROM customers.shopkeepers`,
       );
-      expect(visible.rows[0]?.c).toBe('0');
+      expect(visible.rows[0]?.c).toBe(supplyA.rows[0]?.c);
       const rows = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
         [SK_A, SK_B],
       );
-      expect(rows.rows.map((r) => r.id)).toEqual([]);
+      expect(rows.rows.map((r) => r.id)).toEqual([SK_A]);
       const updated = await tx.client.query(
         `UPDATE customers.shopkeepers SET status = status WHERE id = $1`,
         [SK_A],

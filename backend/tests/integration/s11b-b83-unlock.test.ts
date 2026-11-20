@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
 import type { DriverAuthRuntime } from '../../src/modules/identity/application/driverAuth.js';
@@ -31,7 +30,12 @@ import { RedisPgSessionAuthority } from '../../src/platform/auth/sessionAuthorit
 import { TEST_AUDIT_HASH_KEY, TEST_OTP_HMAC_KEY } from '../../src/platform/config.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
-import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+import {
+  startPostgresWithRoles,
+  startRedis,
+  type StartedPostgresRoles,
+  type StartedTestRedis,
+} from '../helpers/containers.js';
 const DIST = '13131313-1313-4313-8313-131313131313';
 const DIST2 = '14141414-1414-4414-8414-141414141414';
 const TEMP = 'pw-drv-aaaaaa';
@@ -49,7 +53,7 @@ const keyOf = () => `b83-key-${randomUUID()}`;
 const AUDIT_COUNT = `SELECT count(*)::text AS c FROM platform.audit_log WHERE action = 'driver_lockout_cleared' AND entity_id = $1`;
 describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
@@ -66,7 +70,7 @@ describe('Slice 3b B83 POST /v1/admin/drivers/{id}/unlock', () => {
   };
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     redis = createRedis(redisBox.getConnectionUrl());

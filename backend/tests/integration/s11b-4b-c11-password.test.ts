@@ -6,7 +6,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { RouteRegistryRow } from '../../src/platform/http/routeRegistry.js';
 import { loadBreachedPasswordList } from '../../src/modules/identity/infra/crypto/breachedPasswords.js';
 import pg from 'pg';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { buildApp, type App } from '../../src/app.js';
 import type { DriverAuthRuntime } from '../../src/modules/identity/application/driverAuth.js';
 import { TEST_AUDIT_HASH_KEY } from '../../src/modules/identity/domain/loginPolicy.js';
@@ -21,7 +20,12 @@ import { assertRedisForAuthIssuance } from '../../src/platform/auth/failClosed.j
 import { RedisPgSessionAuthority } from '../../src/platform/auth/sessionAuthority.js';
 import { createRedis } from '../../src/platform/redis.js';
 import { testConfig } from '../helpers/config.js';
-import { startPostgresWithRoles, type StartedPostgresRoles } from '../helpers/containers.js';
+import {
+  startPostgresWithRoles,
+  startRedis,
+  type StartedPostgresRoles,
+  type StartedTestRedis,
+} from '../helpers/containers.js';
 
 const DIST = '12121212-1212-1212-1212-121212121212';
 const TEMP = 'pw-temp-aaaaaa';
@@ -30,7 +34,7 @@ const FUTURE = new Date(Date.now() + 60 * 60 * 1000);
 
 describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
@@ -54,7 +58,7 @@ describe('Slice 3a C11 POST /v1/driver/auth/password', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     redis = createRedis(redisBox.getConnectionUrl());

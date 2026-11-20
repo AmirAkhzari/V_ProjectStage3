@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import {
   luaSafeInt,
   otpLimitKeys,
@@ -17,6 +16,7 @@ import {
   putOtpChallenge,
 } from '../../src/modules/identity/infra/otp/redisOtpStore.js';
 import { createRedis } from '../../src/platform/redis.js';
+import { startRedis, type StartedTestRedis } from '../helpers/containers.js';
 import { smsRefundable } from '../../src/modules/notification/application/ports.js';
 import { TEST_OTP_HMAC_KEY } from '../../src/platform/config.js';
 
@@ -24,11 +24,11 @@ const pepper = TEST_OTP_HMAC_KEY;
 const skip = { hour: 0, day: 0, skipBudget: true };
 
 describe('S11b-5a OTP Redis core', () => {
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let redis: ReturnType<typeof createRedis>;
 
   beforeAll(async () => {
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     redis = createRedis(redisBox.getConnectionUrl());
     await redis.connect();
   }, 120_000);

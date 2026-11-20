@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import pg from 'pg';
 import { pino } from 'pino';
 import { buildApp, type App } from '../../src/app.js';
@@ -25,7 +24,9 @@ import { testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
+  startRedis,
   type StartedPostgresRoles,
+  type StartedTestRedis,
 } from '../helpers/containers.js';
 
 const DIST = '11111111-1111-4111-8111-111111111111';
@@ -37,7 +38,7 @@ function nextIp(): string {
 
 describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
@@ -50,7 +51,7 @@ describe('S11b-5a OTP HTTP A1/A2/B1/B2', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     attachPgTeardownGuard(identityPool);

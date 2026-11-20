@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { SignJWT } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import pg from 'pg';
 import { pino } from 'pino';
 import { buildApp, type App } from '../../src/app.js';
@@ -52,7 +51,9 @@ import {
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
+  startRedis,
   type StartedPostgresRoles,
+  type StartedTestRedis,
 } from '../helpers/containers.js';
 
 const REAL_DIST = '44444444-4444-4444-8444-444444444444';
@@ -90,7 +91,7 @@ describe('V11-DM-03 production loader', () => {
 
 describe('S11b-6 demo login HTTP', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let appPool: pg.Pool;
@@ -105,7 +106,7 @@ describe('S11b-6 demo login HTTP', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     appPool = new pg.Pool({ connectionString: pgRoles.appUrl });
@@ -217,6 +218,12 @@ describe('S11b-6 demo login HTTP', () => {
     return response;
   };
 
+  // `date` is stamped per response at second resolution, so identical responses differ across it.
+  const comparableHeaders = (headers: Record<string, unknown>): Record<string, unknown> => {
+    const { date: _date, ...rest } = headers;
+    return rest;
+  };
+
   it('hides A5/B5 in production even when the flag is set on the config object', async () => {
     const hidden = await buildApp({
       config: { ...productionApiConfig(), DEMO_LOGIN_ENABLED: 'true' },
@@ -229,8 +236,8 @@ describe('S11b-6 demo login HTTP', () => {
       const b5 = await hidden.inject({ method: 'POST', url: '/v1/admin/auth/demo', headers });
       expect(a5.statusCode).toBe(unknown.statusCode);
       expect(b5.statusCode).toBe(unknown.statusCode);
-      expect(a5.headers).toEqual(unknown.headers);
-      expect(b5.headers).toEqual(unknown.headers);
+      expect(comparableHeaders(a5.headers)).toEqual(comparableHeaders(unknown.headers));
+      expect(comparableHeaders(b5.headers)).toEqual(comparableHeaders(unknown.headers));
       expect(a5.body).toBe(unknown.body);
       expect(b5.body).toBe(unknown.body);
       expect(a5.json()).toEqual(NOT_FOUND);
@@ -498,7 +505,7 @@ describe('S11b-6 demo login HTTP', () => {
       payload: { phone: '+989111111111', code: '246810' },
     });
     expect(a2.statusCode).toBe(unknown.statusCode);
-    expect(a2.headers).toEqual(unknown.headers);
+    expect(comparableHeaders(a2.headers)).toEqual(comparableHeaders(unknown.headers));
     expect(a2.body).toBe(unknown.body);
     const b2 = await app.inject({
       method: 'POST',
@@ -513,7 +520,7 @@ describe('S11b-6 demo login HTTP', () => {
       payload: { phone: '+989111111112', code: '246810' },
     });
     expect(b2.statusCode).toBe(unknownStaff.statusCode);
-    expect(b2.headers).toEqual(unknownStaff.headers);
+    expect(comparableHeaders(b2.headers)).toEqual(comparableHeaders(unknownStaff.headers));
     expect(b2.body).toBe(unknownStaff.body);
     expect(await sessionCount(ownerPool, DEMO_SHOPKEEPER_ID)).toBe(shopBefore);
     expect(await sessionCount(ownerPool, DEMO_STAFF_ID)).toBe(staffBefore);
@@ -532,7 +539,7 @@ describe('S11b-6 demo login HTTP', () => {
       payload: { username: 'nobody', password: DEMO_DRIVER_PASSWORD },
     });
     expect(demoDriver.statusCode).toBe(401);
-    expect(demoDriver.headers).toEqual(missing.headers);
+    expect(comparableHeaders(demoDriver.headers)).toEqual(comparableHeaders(missing.headers));
     expect(demoDriver.body).toBe(missing.body);
     expect(await sessionCount(ownerPool, DEMO_DRIVER)).toBe(driverBefore);
   });

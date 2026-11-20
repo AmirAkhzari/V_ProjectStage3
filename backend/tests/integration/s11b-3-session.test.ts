@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { buildApp, type App } from '../../src/app.js';
 import { createIdentityApi } from '../../src/modules/identity/api.js';
 import { PgRefreshTokenStore } from '../../src/modules/identity/infra/crypto/pgRefreshStore.js';
@@ -35,7 +34,9 @@ import { testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
+  startRedis,
   type StartedPostgresRoles,
+  type StartedTestRedis,
 } from '../helpers/containers.js';
 
 const DIST_A = '11111111-1111-1111-1111-111111111111';
@@ -43,7 +44,7 @@ const DIST_B = '22222222-2222-2222-2222-222222222222';
 
 describe('S11b-3 session SoT + auth plugin', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let appPool: pg.Pool;
@@ -56,7 +57,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool(fallbackPoolOptions(pgRoles.identityUrl));
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     appPool = new pg.Pool({ connectionString: pgRoles.appUrl });
@@ -668,7 +669,7 @@ describe('S11b-3 session SoT + auth plugin', () => {
 
   it('A-11-1: seed live, revoke while Redis is down, restore, 401 within 5s', async () => {
     const { accountId, token, sid } = await issueDriverAt();
-    const box = await new RedisContainer('redis:7-alpine').start();
+    const box = await startRedis();
     const liveRedis = createRedis(box.getConnectionUrl());
     await liveRedis.connect();
     const liveAuthority = new RedisPgSessionAuthority(liveRedis, new PgSessionStore(identityPool));

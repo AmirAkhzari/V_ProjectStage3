@@ -7,7 +7,6 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import argon2 from 'argon2';
 import { parse } from 'yaml';
 import pg from 'pg';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { buildApp, type App } from '../../src/app.js';
 import {
   loginDriver,
@@ -35,7 +34,9 @@ import { productionApiConfig, testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
+  startRedis,
   type StartedPostgresRoles,
+  type StartedTestRedis,
 } from '../helpers/containers.js';
 
 const DIST = '11111111-1111-1111-1111-111111111111';
@@ -73,7 +74,7 @@ function loadAjv() {
 
 describe('S11b-4a driver C1/C2', () => {
   let pgRoles: StartedPostgresRoles;
-  let redisBox: StartedRedisContainer;
+  let redisBox: StartedTestRedis;
   let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
   let redis: ReturnType<typeof createRedis>;
@@ -85,7 +86,7 @@ describe('S11b-4a driver C1/C2', () => {
 
   beforeAll(async () => {
     pgRoles = await startPostgresWithRoles();
-    redisBox = await new RedisContainer('redis:7-alpine').start();
+    redisBox = await startRedis();
     identityPool = new pg.Pool({ connectionString: pgRoles.identityUrl });
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl });
     attachPgTeardownGuard(identityPool);
