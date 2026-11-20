@@ -4,6 +4,7 @@ import Button from "@/components/ui/Button";
 import Spinner from "@/components/ui/Spinner";
 import { cityIdFromName, distributorsInCity, userCity } from "@/lib/distributors";
 import { toFaNum } from "@/lib/format";
+import { ApiClientError } from "@/lib/apiError";
 import { api } from "@/services/client";
 import { DISTRIBUTORS } from "@/data/catalog";
 import type { Distributor } from "@/types";
@@ -66,6 +67,14 @@ export default function PrimaryDistributorPage() {
       setToast("شرکت پخش اصلی ثبت شد");
       navigate("/", { replace: true });
     } catch (err) {
+      // A16 is a one-time choice: a stale screen can hit the lock, in which case the shop already
+      // has a distributor and the store is behind the server.
+      if (err instanceof ApiClientError && err.code === "DISTRIBUTOR_LOCKED") {
+        await refreshEntitlement();
+        setToast("شرکت پخش اصلی قبلاً ثبت شده است");
+        navigate("/", { replace: true });
+        return;
+      }
       setError(err instanceof Error ? err.message : "ثبت شرکت پخش ناموفق بود");
       setBusy(false);
     }

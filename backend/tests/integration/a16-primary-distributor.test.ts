@@ -193,18 +193,27 @@ describe('A16 /v1/app/me/primary-distributor', () => {
     expect(await primaryOf(SHOP_A)).toBe(DIST_1);
   });
 
-  it('A16 can move the shop to another active distributor', async () => {
+  it('A16 treats the choice as one-time: another distributor is a 409 DISTRIBUTOR_LOCKED', async () => {
     const response = await choose('tok-a', { primaryDistributorId: DIST_2 });
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json()).toEqual({ primaryDistributorId: DIST_2 });
-    expect((await me('tok-a')).json()).toMatchObject({ primaryDistributorId: DIST_2 });
-
-    const audits = await auditsOf(SHOP_A);
-    expect(audits).toHaveLength(2);
-    expect(audits[1]).toMatchObject({
-      distributor_id: DIST_2,
-      data: { distributorBefore: DIST_1, distributorAfter: DIST_2 },
+    expect(response.statusCode, response.body).toBe(409);
+    expect(response.json()).toEqual({
+      error: { code: 'DISTRIBUTOR_LOCKED', message: 'Primary distributor is already chosen' },
     });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect((await me('tok-a')).json()).toMatchObject({ primaryDistributorId: DIST_1 });
+    expect(await primaryOf(SHOP_A)).toBe(DIST_1);
+    expect(await auditsOf(SHOP_A)).toHaveLength(1);
+  });
+
+  it('A16 locks before probing the target, so an inactive or unknown id is also a 409', async () => {
+    for (const primaryDistributorId of [DIST_OFF, DIST_UNKNOWN]) {
+      const response = await choose('tok-a', { primaryDistributorId });
+      expect(response.statusCode, primaryDistributorId).toBe(409);
+      expect(response.json()).toMatchObject({ error: { code: 'DISTRIBUTOR_LOCKED' } });
+    }
+    // The lock answer never depends on whether the distributor exists or is active.
+    expect(await primaryOf(SHOP_A)).toBe(DIST_1);
+    expect(await auditsOf(SHOP_A)).toHaveLength(1);
   });
 
   it('A16 refuses malformed bodies and writes nothing', async () => {
@@ -224,30 +233,35 @@ describe('A16 /v1/app/me/primary-distributor', () => {
       expect(response.statusCode, JSON.stringify(body)).toBe(400);
       expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
     }
-    expect(await primaryOf(SHOP_A)).toBe(DIST_2);
-    expect(await auditsOf(SHOP_A)).toHaveLength(2);
+    expect(await primaryOf(SHOP_A)).toBe(DIST_1);
+    expect(await auditsOf(SHOP_A)).toHaveLength(1);
   });
 
-  it('A16 answers 404 for an unknown and for an inactive distributor', async () => {
+  it('A16 answers 404 for an unknown and for an inactive distributor on a fresh shop', async () => {
     for (const primaryDistributorId of [DIST_UNKNOWN, DIST_OFF]) {
-      const response = await choose('tok-a', { primaryDistributorId });
+      const response = await choose('tok-b', { primaryDistributorId });
       expect(response.statusCode, primaryDistributorId).toBe(404);
       expect(response.json()).toEqual({
         error: { code: 'NOT_FOUND', message: 'Resource not found' },
       });
     }
-    // The invisible distributor never reaches the shop's row.
-    expect(await primaryOf(SHOP_A)).toBe(DIST_2);
-    expect(await auditsOf(SHOP_A)).toHaveLength(2);
+    // The invisible distributor never reaches the shop's row, so the one-time choice is still open.
+    expect(await primaryOf(SHOP_B)).toBeNull();
+    expect(await auditsOf(SHOP_B)).toHaveLength(0);
   });
 
-  it('A16 never crosses shops: B changes only its own row', async () => {
+  it('A16 never crosses shops: B changes only its own row, then locks too', async () => {
     const response = await choose('tok-b', { primaryDistributorId: DIST_1 });
     expect(response.statusCode, response.body).toBe(200);
     expect(await primaryOf(SHOP_B)).toBe(DIST_1);
-    expect(await primaryOf(SHOP_A)).toBe(DIST_2);
+    expect(await primaryOf(SHOP_A)).toBe(DIST_1);
     expect(await auditsOf(SHOP_B)).toHaveLength(1);
-    expect(await auditsOf(SHOP_A)).toHaveLength(2);
+    expect(await auditsOf(SHOP_A)).toHaveLength(1);
+
+    const moved = await choose('tok-b', { primaryDistributorId: DIST_2 });
+    expect(moved.statusCode).toBe(409);
+    expect(await primaryOf(SHOP_B)).toBe(DIST_1);
+    expect(await auditsOf(SHOP_B)).toHaveLength(1);
   });
 
   it('A16 treats a blocked row and a missing row as the same 404', async () => {

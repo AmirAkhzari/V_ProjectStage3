@@ -14,6 +14,13 @@ import { AppError } from '../../../platform/http/errors.js';
  * unknown id and an inactive distributor are the same uniform 404, exactly like B36's target probe.
  * Saving the distributor the shop already has is a 200 no-op with no audit row (like A8/B27/B35/B36),
  * so A16 carries no Idempotency-Key and re-posting is safe.
+ *
+ * The choice is one-time (the PWA and the product copy already treat it that way): once
+ * `primary_distributor_id` is set, any *other* id is a `409 DISTRIBUTOR_LOCKED` and only the admin
+ * endpoint B36 (`retailers.manage`) can move the shop. The lock is answered before the target probe,
+ * so a locked shop gets the same 409 for an active, an inactive and an unknown distributor — the
+ * endpoint never becomes an existence oracle. That also closes the plan bypass: a free shop cannot
+ * hop its primary distributor to reach another distributor's marketplace.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -68,6 +75,11 @@ export async function chooseMyPrimaryDistributor(
 
     if (owner.primary_distributor_id === input.primaryDistributorId) {
       return { primaryDistributorId: input.primaryDistributorId };
+    }
+    // One-time choice: only B36 moves a shop that already has a distributor, and the lock comes
+    // before the target probe so the answer does not depend on whether the id exists.
+    if (owner.primary_distributor_id !== null) {
+      throw new AppError('DISTRIBUTOR_LOCKED', 409, 'Primary distributor is already chosen');
     }
 
     // RLS decides which distributors this caller may name; an invisible one is an unknown one.
