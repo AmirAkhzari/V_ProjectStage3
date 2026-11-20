@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
+import { withTenant } from '../../src/platform/db/tenant.js';
 import { SUPER_ADMIN_PERMISSIONS } from '../../src/modules/identity/domain/permissions.js';
 import {
   encodeRetailerCursor,
@@ -388,5 +389,150 @@ describe('B33/B34 retailers', () => {
     } finally {
       await noDb.close();
     }
+  });
+
+  const patchStatus = (
+    token: string,
+    id: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/v1/admin/retailers/${id}`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...headers },
+      payload: body as object,
+    });
+
+  const statusAudits = async (id: string) => {
+    const result = await ownerPool.query<{
+      data: { retailerId: string; statusBefore: string; statusAfter: string };
+    }>(
+      `SELECT data FROM platform.audit_log
+        WHERE action = 'retailer_status_updated' AND entity_id = $1`,
+      [id],
+    );
+    return result.rows;
+  };
+
+  it('B35: blocks a shop of the caller tenant and audits before/after', async () => {
+    const response = await patchStatus('da1-manage', SHOP_A, { status: 'blocked' });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ id: SHOP_A, status: 'blocked', phone: '09120000001' });
+
+    const stored = await ownerPool.query<{ status: string; phone: string }>(
+      `SELECT status, phone FROM customers.shopkeepers WHERE id = $1`,
+      [SHOP_A],
+    );
+    expect(stored.rows[0]).toEqual({ status: 'blocked', phone: '09120000001' });
+
+    const audits = await statusAudits(SHOP_A);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.data).toMatchObject({
+      retailerId: SHOP_A,
+      statusBefore: 'active',
+      statusAfter: 'blocked',
+    });
+  });
+
+  it('B35: the same status is a 200 no-op with no second audit row', async () => {
+    expect((await patchStatus('da1-manage', SHOP_A, { status: 'active' })).statusCode).toBe(200);
+    const before = (await statusAudits(SHOP_A)).length;
+
+    const again = await patchStatus('da1-manage', SHOP_A, { status: 'active' });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ id: SHOP_A, status: 'active' });
+    expect(await statusAudits(SHOP_A)).toHaveLength(before);
+  });
+
+  it('B35: a foreign, unknown or malformed id is the same 404 and changes nothing', async () => {
+    const before = await statusAudits(SHOP_C);
+    const foreign = await patchStatus('da1-manage', SHOP_C, { status: 'blocked' });
+    const unknown = await patchStatus('da1-manage', '09000000-0000-4000-8000-000000000000', {
+      status: 'blocked',
+    });
+    const malformed = await patchStatus('da1-manage', 'not-a-uuid', { status: 'blocked' });
+    for (const response of [foreign, unknown, malformed]) {
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    }
+    expect(foreign.body).toBe(unknown.body);
+    expect(foreign.body).toBe(malformed.body);
+
+    const stored = await ownerPool.query<{ status: string }>(
+      `SELECT status FROM customers.shopkeepers WHERE id = $1`,
+      [SHOP_C],
+    );
+    expect(stored.rows[0]?.status).toBe('active');
+    expect(await statusAudits(SHOP_C)).toHaveLength(before.length);
+  });
+
+  it('B35: the platform scope changes any shop and a scope header narrows it', async () => {
+    expect((await patchStatus('sa', SHOP_C, { status: 'blocked' })).statusCode).toBe(200);
+    expect((await patchStatus('sa', SHOP_B, { status: 'active' })).statusCode).toBe(200);
+
+    const scoped = await patchStatus(
+      'sa',
+      SHOP_C,
+      { status: 'active' },
+      { 'x-scope-distributor': DIST_1 },
+    );
+    expect(scoped.statusCode).toBe(404);
+  });
+
+  it('B35: requires retailers.manage, a staff bearer, a strict body and a pool', async () => {
+    const denied = await patchStatus('da1-view', SHOP_A, { status: 'blocked' });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+
+    const anonymous = await app.inject({
+      method: 'PATCH',
+      url: `/v1/admin/retailers/${SHOP_A}`,
+      payload: { status: 'blocked' },
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    for (const body of [{ status: 'deleted' }, {}, { status: 'active', extra: 1 }, { status: 1 }]) {
+      const response = await patchStatus('da1-manage', SHOP_A, body);
+      expect(response.statusCode, JSON.stringify(body)).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
+
+    const noDb = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier,
+      sessionAuthority: authority,
+    });
+    try {
+      const response = await noDb.inject({
+        method: 'PATCH',
+        url: `/v1/admin/retailers/${SHOP_A}`,
+        headers: { authorization: 'Bearer da1-manage', 'content-type': 'application/json' },
+        payload: { status: 'blocked' },
+      });
+      expect(response.statusCode).toBe(503);
+    } finally {
+      await noDb.close();
+    }
+  });
+
+  it('B35: the app role may write only the status column', async () => {
+    const tenant = { subjectType: 'staff', distributorId: DIST_1 } as const;
+    // The denied statement aborts its transaction, so each probe takes its own.
+    await expect(
+      withTenant(appPool, tenant, async (tx) => {
+        await tx.client.query(`UPDATE customers.shopkeepers SET phone = phone WHERE id = $1`, [
+          SHOP_A,
+        ]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    await withTenant(appPool, tenant, async (tx) => {
+      const foreign = await tx.client.query(
+        `UPDATE customers.shopkeepers SET status = 'blocked' WHERE id = $1`,
+        [SHOP_C],
+      );
+      expect(foreign.rowCount).toBe(0);
+    });
   });
 });

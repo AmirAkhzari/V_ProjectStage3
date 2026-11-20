@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
 import { AppError } from '../../../platform/http/errors.js';
+import { isRetailerStatus } from '../domain/retailerStatus.js';
 
 /**
  * B33: the admin retailer list. Visibility is decided by RLS, never by the query: a staff token in
@@ -37,12 +38,10 @@ export function readRetailerListLimit(value: unknown): number {
   return limit;
 }
 
-const RETAILER_STATUSES = new Set(['active', 'blocked']);
-
 /** `status` narrows to one lifecycle state, which `customers.shopkeepers.status` already stores. */
 export function readRetailerListStatus(value: unknown): string | null {
   if (value === undefined) return null;
-  if (typeof value !== 'string' || !RETAILER_STATUSES.has(value)) throw validationFailed();
+  if (!isRetailerStatus(value)) throw validationFailed();
   return value;
 }
 

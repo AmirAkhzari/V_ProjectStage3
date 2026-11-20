@@ -476,7 +476,7 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/permission denied/i);
   });
 
-  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33)', async () => {
+  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33/B35)', async () => {
     // B33 (0014) adds shopkeepers_staff_read: a staff token sees the shops of its own distributor.
     const supplyA = await ownerPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM customers.shopkeepers WHERE primary_distributor_id = $1`,
@@ -492,11 +492,16 @@ describe('RLS harness skeleton', () => {
         [SK_A, SK_B],
       );
       expect(rows.rows.map((r) => r.id)).toEqual([SK_A]);
+      // B35 (`shopkeepers_staff_update`) lets staff flip the status of its own distributor's shops…
       const updated = await tx.client.query(
-        `UPDATE customers.shopkeepers SET status = status WHERE id = $1`,
-        [SK_A],
+        `UPDATE customers.shopkeepers SET status = 'blocked' WHERE id = ANY($1::uuid[])`,
+        [[SK_A, SK_B]],
       );
-      expect(updated.rowCount).toBe(0);
+      expect(updated.rowCount).toBe(1);
+      // …and 0015 grants that one column only, so no other field moves through the app role.
+      await expect(
+        tx.client.query(`UPDATE customers.shopkeepers SET phone = phone WHERE id = $1`, [SK_A]),
+      ).rejects.toThrow(/permission denied/i);
     });
     await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
       const self = await tx.client.query<{ id: string }>(
