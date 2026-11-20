@@ -135,7 +135,7 @@ export interface AdminApi {
   setRetailerPrimaryDistributor(
     id: string,
     distributorId: string,
-  ): Promise<ApiResult<{ primaryDistributorId: string }>>;
+  ): Promise<ApiResult<{ primaryDistributorId: string | null }>>;
   setRetailerSubscription(
     id: string,
     action: SubscriptionAction,

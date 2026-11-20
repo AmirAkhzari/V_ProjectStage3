@@ -1,5 +1,4 @@
 import type {
-  Address,
   AdminNotification,
   AdminSession,
   AuditEntry,
@@ -431,18 +430,20 @@ export const httpApi: AdminApi = {
 
   async getRetailer(id) {
     try {
-      return await apiFetch<Retailer>(`/admin/retailers/${id}`);
+      // B34 answers the same B33 item view, so a detail row maps exactly like a list row and the
+      // missing profile columns (name, city, plan) fall back the same way.
+      const row = await apiFetch<Record<string, unknown>>(`/admin/retailers/${id}`);
+      return mapRetailer(row);
     } catch {
       return null;
     }
   },
 
   async getRetailerAddresses(id) {
-    const row = await apiFetch<{ addresses?: Address[] }>(`/admin/retailers/${id}`);
-    return (row.addresses ?? []).map((a) => ({
-      ...a,
-      city: (a as Address & { cityName?: string }).cityName ?? a.city,
-    }));
+    // B34's detail is the B33 row and `customers` has no address table yet, so this tab stays
+    // empty instead of a second request that can only return nothing.
+    void id;
+    return [];
   },
 
   async setRetailerStatus(id, status) {
@@ -451,11 +452,13 @@ export const httpApi: AdminApi = {
 
   async setRetailerPrimaryDistributor(id, distributorId) {
     try {
-      const res = await apiFetch<{ ok: true; primaryDistributorId: string }>(
+      // B36 names the field it writes (`primaryDistributorId`); a `distributorId` key is refused by
+      // the platform, which never lets a caller describe its own scope. The answer is the B34 view.
+      const res = await apiFetch<{ primaryDistributorId: string | null }>(
         `/admin/retailers/${id}/primary-distributor`,
-        { method: "PUT", json: { distributorId } },
+        { method: "PUT", json: { primaryDistributorId: distributorId } },
       );
-      return ok({ primaryDistributorId: res.primaryDistributorId });
+      return ok({ primaryDistributorId: res.primaryDistributorId ?? null });
     } catch (e) {
       return fail(e instanceof Error ? e.message : "خطا در تغییر شرکت پخش اصلی");
     }
