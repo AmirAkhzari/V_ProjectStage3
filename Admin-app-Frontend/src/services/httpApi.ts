@@ -400,21 +400,23 @@ export const httpApi: AdminApi = {
     return saved;
   },
 
-  async getRetailers(filters?: RetailerFilters) {
+  async getRetailers(_filters?: RetailerFilters) {
     // Unpaged callers (command palette, city coverage) read the first B33 page; the page is capped
-    // at RETAILERS_LIST_MAX server-side, exactly like the B24 list.
+    // at RETAILERS_LIST_MAX server-side, exactly like the B24 list. `plan` is not a B33 parameter:
+    // `customers.shopkeepers` has no plan column yet, so no caller can narrow by it here.
     const qs = new URLSearchParams({ limit: "500" });
-    if (filters?.plan && filters.plan !== "all") qs.set("plan", filters.plan);
     const data = await apiFetch<RetailerRowsPayload>(`/admin/retailers?${qs}`);
     const rows = Array.isArray(data) ? data : (data.items ?? []);
     return rows.map(mapRetailer);
   },
 
   async getRetailersPage(filters?: RetailerListQuery) {
-    // Only the cursor is enforced server-side today; plan/city/status/q have no columns yet, so
-    // the page narrows the rows it received. The mock adapter still filters the whole list.
+    // `q` (a phone fragment) and `status` are applied by the endpoint before it pages, so a filter
+    // is never limited to the rows this page already loaded.
     const qs = new URLSearchParams({ limit: String(filters?.limit ?? 20) });
     if (filters?.after) qs.set("after", filters.after);
+    if (filters?.q) qs.set("q", filters.q);
+    if (filters?.status && filters.status !== "all") qs.set("status", filters.status);
     const data = await apiFetch<{
       items?: Record<string, unknown>[];
       hasMore?: boolean;

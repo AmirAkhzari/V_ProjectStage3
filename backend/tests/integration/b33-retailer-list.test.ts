@@ -26,6 +26,12 @@ const SHOP_B = '01000000-0000-4000-8000-00000000000b';
 const SHOP_C = '01000000-0000-4000-8000-00000000000c';
 const SHOP_D = '01000000-0000-4000-8000-00000000000d';
 
+// `shopkeepers.account_id` is a uuid column, not an opaque string.
+const ACC_A = '03000000-0000-4000-8000-00000000000a';
+const ACC_B = '03000000-0000-4000-8000-00000000000b';
+const ACC_C = '03000000-0000-4000-8000-00000000000c';
+const ACC_D = '03000000-0000-4000-8000-00000000000d';
+
 const A_AT = '2026-11-19T10:00:00.000Z';
 const B_AT = '2026-11-19T09:00:00.000Z';
 const C_AT = '2026-11-19T11:00:00.000Z';
@@ -133,10 +139,12 @@ describe('B33 retailer list', () => {
     ownerPool = new pg.Pool({ connectionString: pgRoles.ownerUrl, max: 2 });
     attachPgTeardownGuard(appPool);
     attachPgTeardownGuard(ownerPool);
+    // `on conflict` keeps an external Postgres (`TEST_PG_ADMIN_URL`) usable across runs.
     await ownerPool.query(
       `INSERT INTO tenancy.distributors (id, name, status, created_at)
        VALUES ($1, 'Distributor 1', 'active', now()),
-              ($2, 'Distributor 2', 'active', now())`,
+              ($2, 'Distributor 2', 'active', now())
+       ON CONFLICT (id) DO NOTHING`,
       [DIST_1, DIST_2],
     );
     app = await buildApp({
@@ -157,22 +165,7 @@ describe('B33 retailer list', () => {
               ($2, $6, '09120000002', $3, 'blocked', $8),
               ($4, $9, '09120000003', $10, 'active', $11),
               ($12, $13, '09120000004', NULL, 'active', $14)`,
-      [
-        SHOP_A,
-        SHOP_B,
-        DIST_1,
-        SHOP_C,
-        'acct-a',
-        'acct-b',
-        A_AT,
-        B_AT,
-        'acct-c',
-        DIST_2,
-        C_AT,
-        SHOP_D,
-        'acct-d',
-        D_AT,
-      ],
+      [SHOP_A, SHOP_B, DIST_1, SHOP_C, ACC_A, ACC_B, A_AT, B_AT, ACC_C, DIST_2, C_AT, SHOP_D, ACC_D, D_AT],
     );
   });
 
@@ -228,7 +221,8 @@ describe('B33 retailer list', () => {
     const firstBody = first.json() as Page;
     expect(firstBody.items.map((item) => item.id)).toEqual([SHOP_D, SHOP_C]);
     expect(firstBody.hasMore).toBe(true);
-    expect(firstBody.nextAfter).toBe(encodeRetailerCursor(D_AT, SHOP_D));
+    // The cursor resumes after the last row of the page, which is SHOP_C (11:00), not SHOP_D.
+    expect(firstBody.nextAfter).toBe(encodeRetailerCursor(C_AT, SHOP_C));
 
     const second = await list('sa', `?limit=2&after=${firstBody.nextAfter}`);
     expect(second.statusCode, second.body).toBe(200);
@@ -253,6 +247,34 @@ describe('B33 retailer list', () => {
     const secondBody = second.json() as Page;
     expect(secondBody.items.map((item) => item.id)).toEqual([SHOP_A]);
     expect(secondBody.hasMore).toBe(false);
+  });
+
+  it('narrows by status and phone fragment on the server, before it pages', async () => {
+    const blocked = await list('sa', '?status=blocked');
+    expect(blocked.statusCode, blocked.body).toBe(200);
+    expect((blocked.json() as Page).items.map((item) => item.id)).toEqual([SHOP_B]);
+
+    const fragment = await list('sa', '?q=0003');
+    expect(fragment.statusCode, fragment.body).toBe(200);
+    expect((fragment.json() as Page).items.map((item) => item.id)).toEqual([SHOP_C]);
+
+    const both = await list('da1-view', '?status=active&q=09120000001');
+    expect(both.statusCode, both.body).toBe(200);
+    expect((both.json() as Page).items.map((item) => item.id)).toEqual([SHOP_A]);
+
+    // A filter must not be limited to the first page: the cursor resumes inside the filtered set.
+    const first = (await list('sa', '?status=active&limit=2')).json() as Page;
+    expect(first.items.map((item) => item.id)).toEqual([SHOP_D, SHOP_C]);
+    const next = (await list('sa', `?status=active&limit=2&after=${first.nextAfter}`)).json() as Page;
+    expect(next.items.map((item) => item.id)).toEqual([SHOP_A]);
+  });
+
+  it('rejects a filter the phone column or the status set cannot express', async () => {
+    for (const query of ['?q=abc', '?q=', '?status=deleted']) {
+      const response = await list('sa', query);
+      expect(response.statusCode, query).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
   });
 
   it('rejects a malformed page request instead of guessing at a page', async () => {

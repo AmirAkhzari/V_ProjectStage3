@@ -51,12 +51,12 @@ export type RetailerFilters = {
 };
 
 /**
- * B33 page request. `limit`/`after` are the server cursor; the remaining fields narrow the list in
- * the mock adapter and, once the profile schema exists, on the server too.
+ * B33 page request. `limit`/`after` are the server cursor, and `q` (a phone fragment) plus `status`
+ * narrow the list on the server. `customers.shopkeepers` has no city or plan columns yet, so those
+ * filters are deliberately not part of this request.
  */
-export type RetailerListQuery = RetailerFilters & {
+export type RetailerListQuery = {
   q?: string;
-  city?: string;
   status?: Retailer["status"] | "all";
   limit?: number;
   after?: string | null;

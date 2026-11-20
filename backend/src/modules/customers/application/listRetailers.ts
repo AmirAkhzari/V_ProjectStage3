@@ -14,8 +14,9 @@ import { AppError } from '../../../platform/http/errors.js';
  * row while new rows are inserted at the top.
  *
  * `customers.shopkeepers` has no name, city or plan columns yet (profile/membership slices), so the
- * view only carries what the table actually stores. The contract's `plan` filter stays a client
- * concern until that schema exists; the endpoint does not pretend to apply it.
+ * view only carries what the table actually stores. The list can narrow only on `status` and on a
+ * phone fragment (`q`). City and plan are not offered until that schema exists, rather than applied
+ * to the current page and pretending to be a filter.
  */
 export const RETAILERS_LIST_MAX = 500;
 
@@ -34,6 +35,31 @@ export function readRetailerListLimit(value: unknown): number {
   const limit = Number(value);
   if (limit > RETAILERS_LIST_MAX) throw validationFailed();
   return limit;
+}
+
+const RETAILER_STATUSES = new Set(['active', 'blocked']);
+
+/** `status` narrows to one lifecycle state, which `customers.shopkeepers.status` already stores. */
+export function readRetailerListStatus(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || !RETAILER_STATUSES.has(value)) throw validationFailed();
+  return value;
+}
+
+/**
+ * `q` searches the phone number, the only free-text column B33 has. Persian/Arabic digits are folded
+ * to ASCII and every separator is dropped, so `۰۹۱۲ ۰۰۰` and `0912-000` are the same probe. A probe
+ * with no digits left cannot match a phone, so it is a 400 instead of a silently unfiltered page.
+ */
+export function readRetailerListSearch(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'string') throw validationFailed();
+  const digits = value
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/\D/g, '');
+  if (digits.length === 0 || digits.length > 32) throw validationFailed();
+  return digits;
 }
 
 export interface RetailerCursor {
@@ -83,6 +109,8 @@ export function readRetailerCursor(value: unknown): RetailerCursor | null {
 export interface RetailerListQuery {
   limit: number;
   after: RetailerCursor | null;
+  q: string | null;
+  status: string | null;
 }
 
 export function readRetailerListQuery(query: unknown): RetailerListQuery {
@@ -91,6 +119,8 @@ export function readRetailerListQuery(query: unknown): RetailerListQuery {
   return {
     limit: readRetailerListLimit(source['limit']),
     after: readRetailerCursor(source['after']),
+    q: readRetailerListSearch(source['q']),
+    status: readRetailerListStatus(source['status']),
   };
 }
 
@@ -123,11 +153,13 @@ export async function listRetailers(
               d.name AS primary_distributor_name, s.created_at
          FROM customers.shopkeepers s
          LEFT JOIN tenancy.distributors d ON d.id = s.primary_distributor_id
-        WHERE $1::timestamptz IS NULL
-           OR (s.created_at, s.id) < ($1::timestamptz, $2::uuid)
+        WHERE ($1::timestamptz IS NULL
+               OR (s.created_at, s.id) < ($1::timestamptz, $2::uuid))
+          AND ($4::text IS NULL OR s.phone LIKE '%' || $4 || '%')
+          AND ($5::text IS NULL OR s.status = $5)
         ORDER BY s.created_at DESC, s.id DESC
         LIMIT $3`,
-      [after?.createdAt ?? null, after?.id ?? null, options.limit + 1],
+      [after?.createdAt ?? null, after?.id ?? null, options.limit + 1, options.q, options.status],
     ),
   );
   // One extra row is the "there is a next page" probe; it never reaches the caller.

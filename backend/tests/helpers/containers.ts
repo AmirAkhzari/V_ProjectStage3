@@ -49,9 +49,18 @@ export async function startDeps(): Promise<StartedDeps> {
   };
 }
 
+/**
+ * `TEST_PG_ADMIN_URL` points the harness at a Postgres that is already running (a sandbox without a
+ * Docker daemon, or a CI service container). The cluster is migrated and gets the project roles, so
+ * it must be disposable: migrations create `vproject_app`/`worker`/`identity` and their grants.
+ */
+const externalAdminUrl = process.env['TEST_PG_ADMIN_URL'];
+
 export async function startPostgresWithRoles(): Promise<StartedPostgresRoles> {
-  const postgres = await new PostgreSqlContainer('postgres:16-alpine').start();
-  const ownerUrl = postgres.getConnectionUri();
+  const postgres = externalAdminUrl
+    ? ({ stop: async () => {} } as unknown as StartedPostgreSqlContainer)
+    : await new PostgreSqlContainer('postgres:16-alpine').start();
+  const ownerUrl = externalAdminUrl ?? postgres.getConnectionUri();
   await runMigrations(ownerUrl, {
     applyRoles: true,
     nodeEnv: 'test',

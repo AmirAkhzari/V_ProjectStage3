@@ -12,13 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRetailersPage } from "@/features/people";
 import { useOrders } from "@/features/orders";
-import { useCities } from "@/features/ops";
-import { normalizePersian, toFaNum } from "@/lib/format";
+import { toAsciiDigits, toFaNum } from "@/lib/format";
 import { formatPhoneDisplay } from "@/lib/phone";
 import { formatJalaliShort, relativeLabel } from "@/lib/jalali";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { paths } from "@/routes/paths";
-import type { Retailer, RetailerPlan } from "@/types";
+import type { Retailer } from "@/types";
 import { PlanBadge } from "./components/PlanBadge";
 
 type Row = Retailer & { orders: number; spent: number; lastOrderAt?: string };
@@ -28,11 +27,8 @@ const PAGE_SIZE = 20;
 
 export default function RetailersPage() {
   const navigate = useNavigate();
-  const [plan, setPlan] = useState<RetailerPlan | "all">("all");
   const { data: orders } = useOrders();
-  const { data: cities } = useCities();
   const [query, setQuery] = useState("");
-  const [city, setCity] = useState("all");
   const [status, setStatus] = useState<Retailer["status"] | "all">("all");
   const [cursors, setCursors] = useState<Array<string | null>>([null]);
   const after = cursors[cursors.length - 1] ?? null;
@@ -41,38 +37,31 @@ export default function RetailersPage() {
   // A changed filter starts a new list, so the old cursor must not survive it.
   useEffect(() => {
     setCursors([null]);
-  }, [plan, query, city, status]);
+  }, [query, status]);
 
+  // B33 can only search the phone column, so the box sends a digit fragment and nothing else.
+  const phoneQuery = toAsciiDigits(query).replace(/\D/g, "");
   const { data: page, isLoading } = useRetailersPage({
-    plan,
-    q: query.trim() || undefined,
-    city: city === "all" ? undefined : city,
+    q: phoneQuery || undefined,
     status,
     limit: PAGE_SIZE,
     after,
   });
   const retailers = page?.items;
 
-  const rows = useMemo<Row[]>(() => {
-    const q = normalizePersian(query.trim());
-    return (retailers ?? [])
-      .map((r) => {
+  const rows = useMemo<Row[]>(
+    () =>
+      (retailers ?? []).map((r) => {
         const mine = (orders ?? []).filter((o) => o.retailerId === r.id && o.status !== "cancelled");
         return {
           ...r,
           orders: mine.length,
-          spent: mine.reduce((s, o) => s + o.total, 0),
+          spent: mine.reduce((sum, o) => sum + o.total, 0),
           lastOrderAt: mine[0]?.createdAt,
         };
-      })
-      .filter((r) => {
-        if (city !== "all" && r.city !== city) return false;
-        if (plan !== "all" && r.plan !== plan) return false;
-        if (status !== "all" && r.status !== status) return false;
-        if (q && !normalizePersian(`${r.name} ${r.phone} ${r.city}`).includes(q)) return false;
-        return true;
-      });
-  }, [retailers, orders, plan, query, city, status]);
+      }),
+    [retailers, orders],
+  );
 
   const columns = useMemo<ColumnDef<Row, unknown>[]>(
     () => [
@@ -186,30 +175,7 @@ export default function RetailersPage() {
         onRowClick={(r) => navigate(paths.retailer(r.id))}
         toolbar={
           <>
-            <SearchInput value={query} onChange={setQuery} placeholder="نام، موبایل یا شهر" />
-            <Select value={city} onValueChange={setCity}>
-              <SelectTrigger size="sm" className="w-32 bg-fill">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">همه شهرها</SelectItem>
-                {cities?.map((c) => (
-                  <SelectItem key={c.name} value={c.name}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={plan} onValueChange={(v) => setPlan(v as RetailerPlan | "all")}>
-              <SelectTrigger size="sm" className="w-28 bg-fill">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">همه پلن‌ها</SelectItem>
-                <SelectItem value="free">رایگان</SelectItem>
-                <SelectItem value="pro">پرو</SelectItem>
-              </SelectContent>
-            </Select>
+            <SearchInput value={query} onChange={setQuery} placeholder="شماره موبایل" />
             <Select value={status} onValueChange={(v) => setStatus(v as Retailer["status"] | "all")}>
               <SelectTrigger size="sm" className="w-28 bg-fill">
                 <SelectValue />

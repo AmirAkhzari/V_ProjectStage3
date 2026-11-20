@@ -710,19 +710,11 @@ export const mockApi: AdminApi = {
     if (scope.distributorId) {
       rows = rows.filter((r) => r.primaryDistributorId === scope.distributorId);
     }
-    if (filters?.plan && filters.plan !== "all") {
-      rows = rows.filter((r) => r.plan === filters.plan);
-    }
     if (filters?.status && filters.status !== "all") {
       rows = rows.filter((r) => r.status === filters.status);
     }
-    if (filters?.city && filters.city !== "all") {
-      rows = rows.filter((r) => r.city === filters.city);
-    }
-    const q = filters?.q ? normalizePersian(filters.q.trim()) : "";
-    if (q) {
-      rows = rows.filter((r) => normalizePersian(`${r.name} ${r.phone} ${r.city}`).includes(q));
-    }
+    const q = filters?.q?.replace(/\D/g, "") ?? "";
+    if (q) rows = rows.filter((r) => r.phone.replace(/\D/g, "").includes(q));
     const limit = Math.max(1, Math.min(500, filters?.limit ?? 20));
     const start = parseRetailerCursor(filters?.after);
     const page = rows.slice(start, start + limit);
