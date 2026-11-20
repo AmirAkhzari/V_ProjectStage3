@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
+import { RedisContainer } from '@testcontainers/redis';
 import pg from 'pg';
 import { runMigrations } from '../../src/platform/db/migrate.js';
 import { databaseUrlAs } from '../../src/platform/db/roles.js';
@@ -25,7 +25,7 @@ export const TEST_ROLE_PASSWORD = 'vproject-test';
 
 export interface StartedDeps {
   postgres: StartedPostgreSqlContainer;
-  redis: StartedRedisContainer;
+  redis: StartedTestRedis;
   databaseUrl: string;
   redisUrl: string;
 }
@@ -132,26 +132,16 @@ export async function startRedis(): Promise<StartedTestRedis> {
 }
 
 export async function startDeps(): Promise<StartedDeps> {
-  if (externalAdminUrl) {
-    const database = await createExternalDatabase(externalAdminUrl, { applyRoles: false });
-    const redis = await startRedis();
-    return {
-      postgres: database.postgres,
-      redis: redis as unknown as StartedRedisContainer,
-      databaseUrl: database.ownerUrl,
-      redisUrl: redis.getConnectionUrl(),
-    };
-  }
-  const [postgres, redis] = await Promise.all([
-    new PostgreSqlContainer('postgres:16-alpine').start(),
-    new RedisContainer('redis:7-alpine').start(),
+  const [database, redis] = await Promise.all([
+    externalAdminUrl
+      ? createExternalDatabase(externalAdminUrl, false)
+      : startPostgresWithoutRoles(),
+    startRedis(),
   ]);
-  const databaseUrl = postgres.getConnectionUri();
-  await runMigrations(databaseUrl);
   return {
-    postgres,
+    postgres: database.postgres,
     redis,
-    databaseUrl,
+    databaseUrl: database.ownerUrl,
     redisUrl: redis.getConnectionUrl(),
   };
 }
@@ -167,6 +157,8 @@ const externalAdminUrl = process.env['TEST_PG_ADMIN_URL'];
 /** vitest runs suites in worker processes, so the cluster-wide role DDL is serialized in Postgres. */
 const ROLE_DDL_LOCK_KEY = 728_510_394;
 
+/** `applyRoles: false` feeds `startDeps`, whose opt-in check asserts the cluster has no local roles. */
+
 function databaseUrlWithName(adminUrl: string, database: string): string {
   const parsed = new URL(adminUrl);
   parsed.pathname = `/${encodeURIComponent(database)}`;
@@ -181,11 +173,23 @@ function roleUrls(ownerUrl: string): Omit<StartedPostgresRoles, 'postgres' | 'ow
   };
 }
 
+interface StartedPostgres {
+  postgres: StartedPostgreSqlContainer;
+  ownerUrl: string;
+}
+
+async function startPostgresWithoutRoles(): Promise<StartedPostgres> {
+  const postgres = await new PostgreSqlContainer('postgres:16-alpine').start();
+  const ownerUrl = postgres.getConnectionUri();
+  await runMigrations(ownerUrl);
+  return { postgres, ownerUrl };
+}
+
 async function createExternalDatabase(
   adminUrl: string,
-  options: { applyRoles: boolean } = { applyRoles: true },
-): Promise<StartedPostgresRoles> {
-  const database = `vproject_test_${process.pid}_${randomUUID().replace(/-/g, '').slice(0, 10)}`;
+  applyRoles = true,
+): Promise<StartedPostgresRoles & StartedPostgres> {
+  const database = `vproject_test_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
   const admin = new pg.Client({ connectionString: adminUrl });
   await admin.connect();
   let created = false;
@@ -193,7 +197,7 @@ async function createExternalDatabase(
     await admin.query(`CREATE DATABASE ${pg.escapeIdentifier(database)}`);
     created = true;
     const ownerUrl = databaseUrlWithName(adminUrl, database);
-    if (options.applyRoles) {
+    if (applyRoles) {
       await admin.query('SELECT pg_advisory_lock($1)', [ROLE_DDL_LOCK_KEY]);
       try {
         await runMigrations(ownerUrl, {

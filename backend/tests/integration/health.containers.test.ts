@@ -16,6 +16,12 @@ import {
   type StartedDeps,
 } from '../helpers/containers.js';
 
+/**
+ * Needs a Postgres cluster no other suite has touched: the opt-in check below asserts that no
+ * `vproject_*` role exists, and a shared cluster already carries the roles the other suites apply.
+ * So under `TEST_PG_ADMIN_URL` this file only passes on a freshly initialized cluster (and uses
+ * `TEST_REDIS_SERVER_BIN`, or a Docker daemon, for Redis).
+ */
 describe('health against real Postgres 16 and Redis 7', () => {
   let deps: StartedDeps;
   let app: App;
