@@ -2,7 +2,7 @@ import { AppError } from '../../../platform/http/errors.js';
 
 /**
  * The shop's address book. `store`/`warehouse`/`branch` is the same tag set the client already
- * renders. A10 is the only writer in this slice; A11/A12/A13 stay pending.
+ * renders. A10 creates a row, A11 rewrites one, A12 points the shop at one and A13 soft-deletes it.
  */
 export const ADDRESS_TAGS = ['store', 'warehouse', 'branch'] as const;
 
@@ -69,6 +69,13 @@ export function toAddressView(row: AddressRow): AddressView {
 const validationFailed = () =>
   new AppError('VALIDATION_FAILED', 400, 'Request could not be processed');
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `null` for anything that cannot be a row id; the path route answers that with the uniform 404. */
+export function readAddressId(value: unknown): string | null {
+  return typeof value === 'string' && UUID.test(value) ? value.toLowerCase() : null;
+}
+
 export const ADDRESS_FIELD_MAX = {
   title: 100,
   fullAddress: 500,
@@ -101,6 +108,19 @@ function readCoordinate(value: unknown, limit: number): number {
     throw validationFailed();
   }
   return value;
+}
+
+/**
+ * Strict A12 body: exactly `{ addressId }`. Nothing else is accepted, because the shop whose default
+ * moves is the session principal, never a body field.
+ */
+export function parseDefaultAddressBody(body: unknown): string {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw validationFailed();
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || keys[0] !== 'addressId') throw validationFailed();
+  const id = readAddressId((body as { addressId?: unknown }).addressId);
+  if (!id) throw validationFailed();
+  return id;
 }
 
 export interface MyAddressInput {

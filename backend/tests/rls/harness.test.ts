@@ -599,7 +599,7 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/unique|duplicate/i);
   });
 
-  it('TENANT-01-S11B: customers.addresses is own-shop only for read and insert (A9/A10)', async () => {
+  it('TENANT-01-S11B: customers.addresses is own-shop only for read, insert and update (A9/A10/A11/A13)', async () => {
     const addrA = randomUUID();
     const addrB = randomUUID();
     await ownerPool.query(
@@ -647,14 +647,35 @@ describe('RLS harness skeleton', () => {
         );
       }),
     ).rejects.toThrow(/row-level security policy/i);
-    // A11/A13 are not live yet: the app role can neither rewrite nor delete an address.
+    // A11/A13 (0019): the app role may rewrite its own row and soft-delete it.
+    await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+      const own = await tx.client.query(
+        `UPDATE customers.addresses SET title = 'Harness A2', deleted_at = now() WHERE id = $1`,
+        [addrA],
+      );
+      expect(own.rowCount).toBe(1);
+      // A foreign row is invisible to the same UPDATE, so it is 0 rows rather than a write.
+      const foreign = await tx.client.query(
+        `UPDATE customers.addresses SET title = 'Hijacked' WHERE id = $1`,
+        [addrB],
+      );
+      expect(foreign.rowCount).toBe(0);
+    });
+    const untouched = await ownerPool.query<{ title: string; deleted_at: Date | null }>(
+      `SELECT title, deleted_at FROM customers.addresses WHERE id = $1`,
+      [addrB],
+    );
+    expect(untouched.rows[0]).toMatchObject({ title: 'Harness B', deleted_at: null });
+    // `shopkeeper_id` is not in the grant, so an address can never change owner.
     await expect(
       withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
-        await tx.client.query(`UPDATE customers.addresses SET title = title WHERE id = $1`, [
+        await tx.client.query(`UPDATE customers.addresses SET shopkeeper_id = $2 WHERE id = $1`, [
           addrA,
+          SK_B,
         ]);
       }),
     ).rejects.toThrow(/permission denied/i);
+    // A13 is a soft delete; DELETE itself stays out of the app role's reach.
     await expect(
       withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
         await tx.client.query(`DELETE FROM customers.addresses WHERE id = $1`, [addrA]);

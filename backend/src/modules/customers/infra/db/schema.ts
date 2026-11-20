@@ -21,7 +21,7 @@ export const shopkeepers = customersSchema.table(
   (table) => [unique('shopkeepers_account_id_unique').on(table.accountId)],
 );
 
-/** A9/A10: the shop's address book. FORCE RLS scopes it to `app.shopkeeper_id`. */
+/** A9–A13: the shop's address book. FORCE RLS scopes it to `app.shopkeeper_id`. */
 export const addresses = customersSchema.table('addresses', {
   id: uuid('id').primaryKey(),
   shopkeeperId: uuid('shopkeeper_id').notNull(),
@@ -36,4 +36,6 @@ export const addresses = customersSchema.table('addresses', {
   lng: doublePrecision('lng').notNull(),
   streetLabel: text('street_label').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  /** A13: soft delete; a non-null value keeps the row out of every address read. */
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'date' }),
 });

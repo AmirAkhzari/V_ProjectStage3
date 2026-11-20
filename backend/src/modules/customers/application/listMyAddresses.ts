@@ -25,9 +25,10 @@ export async function listMyAddresses(
     );
     const row = shop.rows[0];
     if (!row || row.status !== 'active') return null;
-    // Newest first, on the same (created_at, id) order the index carries.
+    // Newest first, on the same (created_at, id) order the index carries. A13 soft-deletes, so
+    // `deleted_at` is what keeps a removed address out of the book.
     const found = await tx.client.query<AddressRow>(
-      `${ADDRESS_SELECT} ORDER BY created_at DESC, id DESC`,
+      `${ADDRESS_SELECT} WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC`,
     );
     return found.rows.map(toAddressView);
   });

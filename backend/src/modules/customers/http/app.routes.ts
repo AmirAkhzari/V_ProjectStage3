@@ -2,10 +2,13 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
 import { createMyAddress } from '../application/createMyAddress.js';
+import { deleteMyAddress } from '../application/deleteMyAddress.js';
 import { getMyProfile } from '../application/getMyProfile.js';
 import { listMyAddresses } from '../application/listMyAddresses.js';
+import { selectMyDefaultAddress } from '../application/selectDefaultAddress.js';
+import { updateMyAddress } from '../application/updateMyAddress.js';
 import { parseShopNameBody, updateMyName } from '../application/updateMyName.js';
-import { parseMyAddressBody } from '../domain/address.js';
+import { parseDefaultAddressBody, parseMyAddressBody, readAddressId } from '../domain/address.js';
 
 /** A7/A8: strict shape; any extra key fails. Placeholder fields are documented nulls. */
 export const appMeResponseSchema = z
@@ -46,9 +49,19 @@ const addressResponseSchema = z
 
 const addressesResponseSchema = z.array(addressResponseSchema);
 
+/** A12 answers the pointer it just moved; A13 answers the deleted id and the surviving default. */
+const defaultAddressResponseSchema = z.object({ defaultAddressId: z.uuid() }).strict();
+const deletedAddressResponseSchema = z
+  .object({ id: z.uuid(), defaultAddressId: z.uuid().nullable() })
+  .strict();
+
+const addressIdOf = (request: { params: unknown }): string | null =>
+  readAddressId((request.params as { id?: unknown }).id);
+
 /**
  * App surface for `customers`: A7 reads the profile, A8 edits the shop's display name, A9 lists the
- * address book and A10 adds one address (which becomes the shop's default).
+ * address book, A10 adds one address (which becomes the shop's default), A11 rewrites one, A12
+ * chooses the default and A13 soft-deletes one.
  */
 export const appRoutes: FastifyPluginAsync = async (app) => {
   app.get(
@@ -172,6 +185,111 @@ export const appRoutes: FastifyPluginAsync = async (app) => {
         'app_address_create',
       );
       return saved;
+    },
+  );
+
+  app.put(
+    '/me/addresses/:id',
+    { schema: { operationId: 'A11', response: { 200: addressResponseSchema } } },
+    async (request) => {
+      const tenant = request.tenant;
+      if (!tenant?.shopkeeperId) {
+        throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+      }
+      // Body parsing precedes the pool check so a malformed address is always a 400, never a 503.
+      const address = parseMyAddressBody(request.body);
+      // An id that cannot be a row is the same 404 as a foreign or deleted row.
+      const id = addressIdOf(request);
+      if (!id) throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      const pool = app.appDb;
+      if (!pool) {
+        throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+          retryAfter: 5,
+        });
+      }
+      const saved = await updateMyAddress(pool, tenant, { ...address, id, ip: request.ip });
+      if (!saved) {
+        request.log.info(
+          { operationId: 'A11', sub: request.subject?.sub, outcome: 'not_found' },
+          'app_address_update',
+        );
+        throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      }
+      request.log.info(
+        { operationId: 'A11', sub: request.subject?.sub, outcome: 'ok', addressId: saved.id },
+        'app_address_update',
+      );
+      return saved;
+    },
+  );
+
+  app.put(
+    '/me/addresses/default',
+    { schema: { operationId: 'A12', response: { 200: defaultAddressResponseSchema } } },
+    async (request) => {
+      const tenant = request.tenant;
+      if (!tenant?.shopkeeperId) {
+        throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+      }
+      // Body parsing precedes the pool check so a malformed body is always a 400, never a 503.
+      const id = parseDefaultAddressBody(request.body);
+      const pool = app.appDb;
+      if (!pool) {
+        throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+          retryAfter: 5,
+        });
+      }
+      const result = await selectMyDefaultAddress(pool, tenant, { id, ip: request.ip });
+      if (!result) {
+        request.log.info(
+          { operationId: 'A12', sub: request.subject?.sub, outcome: 'not_found' },
+          'app_address_default',
+        );
+        throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      }
+      request.log.info(
+        {
+          operationId: 'A12',
+          sub: request.subject?.sub,
+          outcome: 'ok',
+          addressId: result.defaultAddressId,
+        },
+        'app_address_default',
+      );
+      return result;
+    },
+  );
+
+  app.delete(
+    '/me/addresses/:id',
+    { schema: { operationId: 'A13', response: { 200: deletedAddressResponseSchema } } },
+    async (request) => {
+      const tenant = request.tenant;
+      if (!tenant?.shopkeeperId) {
+        throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+      }
+      // An id that cannot be a row is the same 404 as a foreign or already-deleted row.
+      const id = addressIdOf(request);
+      if (!id) throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      const pool = app.appDb;
+      if (!pool) {
+        throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+          retryAfter: 5,
+        });
+      }
+      const deleted = await deleteMyAddress(pool, tenant, { id, ip: request.ip });
+      if (!deleted) {
+        request.log.info(
+          { operationId: 'A13', sub: request.subject?.sub, outcome: 'not_found' },
+          'app_address_delete',
+        );
+        throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      }
+      request.log.info(
+        { operationId: 'A13', sub: request.subject?.sub, outcome: 'ok', addressId: deleted.id },
+        'app_address_delete',
+      );
+      return deleted;
     },
   );
 };

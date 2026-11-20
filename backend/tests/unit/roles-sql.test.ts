@@ -255,6 +255,30 @@ describe('0018_s12_a9_a10_addresses.sql', () => {
   });
 });
 
+describe('0019_s12_a11_a13_addresses_edit_delete.sql', () => {
+  const sql = readFileSync(
+    join(dbDir, 'migrations/0019_s12_a11_a13_addresses_edit_delete.sql'),
+    'utf8',
+  );
+
+  it('adds the soft-delete column and only the address columns to the app role grant', () => {
+    expect(sql).toMatch(
+      /ALTER TABLE customers\.addresses ADD COLUMN deleted_at timestamp with time zone/,
+    );
+    expect(sql).toMatch(
+      /GRANT UPDATE \([^)]*deleted_at[^)]*\)\s*ON customers\.addresses TO vproject_app/,
+    );
+    expect(sql).not.toMatch(/GRANT UPDATE ON customers\.addresses/);
+    // The owner and the immutable columns stay out of the grant.
+    expect(sql).not.toMatch(
+      /GRANT [^;]*\b(id|shopkeeper_id|created_at)\b\s*,?[^;]*ON customers\.addresses/,
+    );
+    expect(sql).not.toMatch(/GRANT [^;]*DELETE[^;]*customers\.addresses/);
+    // 0018's `addresses_tenant` already covers UPDATE; this slice must not add or widen a policy.
+    expect(sql).not.toMatch(/CREATE POLICY|ALTER POLICY|DROP POLICY/);
+  });
+});
+
 describe('0010_s11b6_demo_login.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
 

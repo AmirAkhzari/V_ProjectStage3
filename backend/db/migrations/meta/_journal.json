@@ -134,6 +134,13 @@
       "when": 1794500000000,
       "tag": "0018_s12_a9_a10_addresses",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0019_s12_a11_a13_addresses_edit_delete",
+      "breakpoints": true
     }
   ]
 }
