@@ -1,6 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { AppError } from '../../../platform/http/errors.js';
+import {
+  chooseMyPrimaryDistributor,
+  parsePrimaryDistributorBody,
+} from '../application/chooseMyPrimaryDistributor.js';
 import { createMyAddress } from '../application/createMyAddress.js';
 import { deleteMyAddress } from '../application/deleteMyAddress.js';
 import { getMyProfile } from '../application/getMyProfile.js';
@@ -55,13 +59,16 @@ const deletedAddressResponseSchema = z
   .object({ id: z.uuid(), defaultAddressId: z.uuid().nullable() })
   .strict();
 
+/** A16 answers the distributor it just saved, the same name A7 reports. */
+const primaryDistributorResponseSchema = z.object({ primaryDistributorId: z.uuid() }).strict();
+
 const addressIdOf = (request: { params: unknown }): string | null =>
   readAddressId((request.params as { id?: unknown }).id);
 
 /**
  * App surface for `customers`: A7 reads the profile, A8 edits the shop's display name, A9 lists the
  * address book, A10 adds one address (which becomes the shop's default), A11 rewrites one, A12
- * chooses the default and A13 soft-deletes one.
+ * chooses the default and A13 soft-deletes one, and A16 chooses the shop's primary distributor.
  */
 export const appRoutes: FastifyPluginAsync = async (app) => {
   app.get(
@@ -290,6 +297,46 @@ export const appRoutes: FastifyPluginAsync = async (app) => {
         'app_address_delete',
       );
       return deleted;
+    },
+  );
+
+  app.post(
+    '/me/primary-distributor',
+    { schema: { operationId: 'A16', response: { 200: primaryDistributorResponseSchema } } },
+    async (request) => {
+      const tenant = request.tenant;
+      if (!tenant?.shopkeeperId) {
+        throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+      }
+      // Body parsing precedes the pool check so a malformed body is always a 400, never a 503.
+      const primaryDistributorId = parsePrimaryDistributorBody(request.body);
+      const pool = app.appDb;
+      if (!pool) {
+        throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+          retryAfter: 5,
+        });
+      }
+      const chosen = await chooseMyPrimaryDistributor(pool, tenant, {
+        primaryDistributorId,
+        ip: request.ip,
+      });
+      if (!chosen) {
+        request.log.info(
+          { operationId: 'A16', sub: request.subject?.sub, outcome: 'not_found' },
+          'app_primary_distributor',
+        );
+        throw new AppError('NOT_FOUND', 404, 'Resource not found');
+      }
+      request.log.info(
+        {
+          operationId: 'A16',
+          sub: request.subject?.sub,
+          outcome: 'ok',
+          distributorId: chosen.primaryDistributorId,
+        },
+        'app_primary_distributor',
+      );
+      return chosen;
     },
   );
 };

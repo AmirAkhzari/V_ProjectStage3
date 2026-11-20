@@ -683,6 +683,58 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/permission denied/i);
   });
 
+  it('TENANT-01-S11B: a shopkeeper sees only active distributors and moves its own primary one (A16)', async () => {
+    const inactiveId = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO tenancy.distributors (id, name, status, created_at)
+       VALUES ($1, 'Harness D3 (inactive)', 'inactive', now())`,
+      [inactiveId],
+    );
+    const active = await ownerPool.query<{ c: string }>(
+      `SELECT count(*)::text AS c FROM tenancy.distributors WHERE status = 'active'`,
+    );
+    await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+      // 0020's distributors_shopkeeper_read shows the pickable distributors and nothing else — the
+      // demo seed's own distributors are active, so they are visible too.
+      const visible = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM tenancy.distributors ORDER BY id`,
+      );
+      const visibleIds = visible.rows.map((r) => r.id);
+      expect(visible.rows).toHaveLength(Number(active.rows[0]?.c));
+      expect(visibleIds).toEqual(expect.arrayContaining([DIST_A, DIST_B]));
+      expect(visibleIds).not.toContain(inactiveId);
+      // A16 writes the caller's own row: shopkeepers_tenant plus 0016's column-level UPDATE grant.
+      const own = await tx.client.query(
+        `UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`,
+        [SK_A, DIST_B],
+      );
+      expect(own.rowCount).toBe(1);
+      // Another shop's row is invisible to the same UPDATE.
+      const foreign = await tx.client.query(
+        `UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`,
+        [SK_B, DIST_A],
+      );
+      expect(foreign.rowCount).toBe(0);
+    });
+    const moved = await ownerPool.query<{ primary_distributor_id: string | null }>(
+      `SELECT primary_distributor_id::text FROM customers.shopkeepers WHERE id = $1`,
+      [SK_A],
+    );
+    expect(moved.rows[0]?.primary_distributor_id).toBe(DIST_B);
+    const untouched = await ownerPool.query<{ primary_distributor_id: string | null }>(
+      `SELECT primary_distributor_id::text FROM customers.shopkeepers WHERE id = $1`,
+      [SK_B],
+    );
+    expect(untouched.rows[0]?.primary_distributor_id).toBe(DIST_B);
+    // No principal GUC means no distributor rows at all.
+    expect((await appPool.query(`SELECT id FROM tenancy.distributors`)).rows).toHaveLength(0);
+    // Leave the shared fixture as the later tests expect it.
+    await ownerPool.query(
+      `UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`,
+      [SK_A, DIST_A],
+    );
+  });
+
   it('TENANT-01-S11B: identity.driver_credentials is tenant-scoped for read and write', async () => {
     await withTenant(identityPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
       const rows = await tx.client.query<{ account_id: string }>(

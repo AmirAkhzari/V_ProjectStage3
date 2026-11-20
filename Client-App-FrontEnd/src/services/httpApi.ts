@@ -266,9 +266,11 @@ export const httpApi: VisitorApi = {
   },
 
   async setPrimaryDistributor(distributorId) {
+    // A16's body is `primaryDistributorId`, the name A7 returns: `distributorId` is the request's own
+    // tenant scope, which the server takes from the token and refuses in a body.
     return apiFetch<{ primaryDistributorId: string }>("/me/primary-distributor", {
       method: "POST",
-      json: { distributorId },
+      json: { primaryDistributorId: distributorId },
     });
   },
 

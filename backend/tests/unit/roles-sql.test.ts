@@ -279,6 +279,20 @@ describe('0019_s12_a11_a13_addresses_edit_delete.sql', () => {
   });
 });
 
+describe('0020_s12_a16_primary_distributor.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0020_s12_a16_primary_distributor.sql'), 'utf8');
+
+  it('adds the shopkeeper read scope on active distributors and no new grant', () => {
+    expect(sql).toMatch(/CREATE POLICY distributors_shopkeeper_read ON tenancy\.distributors/);
+    expect(sql).toMatch(/FOR SELECT/);
+    expect(sql).toMatch(/status = 'active'/);
+    expect(sql).toMatch(/app\.shopkeeper_id/);
+    // A16's write already has 0016's column grant and 0002's own-row policy: nothing to widen.
+    expect(sql).not.toMatch(/GRANT/);
+    expect(sql).not.toMatch(/ALTER TABLE|CREATE TABLE/);
+  });
+});
+
 describe('0010_s11b6_demo_login.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
 
