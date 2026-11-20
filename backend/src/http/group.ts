@@ -60,6 +60,7 @@ const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set([
   'A12',
   'A13',
   'A16',
+  'A17',
   'C11',
   'B83',
 ]);
@@ -81,7 +82,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
     });
-    // A7–A16/C11 carry PII or credentials: no-store must also cover guard (401/403) and handler
+    // A7–A17/C11 carry PII or credentials: no-store must also cover guard (401/403) and handler
     // (404/422) responses, so it is set before the guard and before the handler.
     group.addHook('onRequest', async function noStorePrivateRoutes(request, reply) {
       const operationId = routeOperationId(request);
