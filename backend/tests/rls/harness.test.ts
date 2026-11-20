@@ -476,7 +476,7 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/permission denied/i);
   });
 
-  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33/B35)', async () => {
+  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33/B35/B36)', async () => {
     // B33 (0014) adds shopkeepers_staff_read: a staff token sees the shops of its own distributor.
     const supplyA = await ownerPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM customers.shopkeepers WHERE primary_distributor_id = $1`,
@@ -502,6 +502,37 @@ describe('RLS harness skeleton', () => {
       await expect(
         tx.client.query(`UPDATE customers.shopkeepers SET phone = phone WHERE id = $1`, [SK_A]),
       ).rejects.toThrow(/permission denied/i);
+    });
+    // B36 (0016) adds `primary_distributor_id` to that grant. Naming the caller's own distributor is
+    // allowed and changes nothing; naming another tenant's is stopped by the same policy's WITH CHECK,
+    // so the widened column never becomes a way to hand a shop to someone else. Each probe takes its
+    // own transaction because a policy rejection aborts the current one.
+    await withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+      const same = await tx.client.query(
+        `UPDATE customers.shopkeepers SET primary_distributor_id = $1 WHERE id = $2`,
+        [DIST_A, SK_A],
+      );
+      expect(same.rowCount).toBe(1);
+    });
+    await expect(
+      withTenant(appPool, { subjectType: 'staff', distributorId: DIST_A }, async (tx) => {
+        await tx.client.query(
+          `UPDATE customers.shopkeepers SET primary_distributor_id = $1 WHERE id = $2`,
+          [DIST_B, SK_A],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+    await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
+      const moved = await tx.client.query(
+        `UPDATE customers.shopkeepers SET primary_distributor_id = $1 WHERE id = $2`,
+        [DIST_B, SK_A],
+      );
+      expect(moved.rowCount).toBe(1);
+      const restored = await tx.client.query(
+        `UPDATE customers.shopkeepers SET primary_distributor_id = $1 WHERE id = $2`,
+        [DIST_A, SK_A],
+      );
+      expect(restored.rowCount).toBe(1);
     });
     await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
       const self = await tx.client.query<{ id: string }>(

@@ -1,7 +1,8 @@
 /**
- * B33 (`GET /v1/admin/retailers`) and its B34 sibling (`GET /v1/admin/retailers/{id}`). Both read
- * the same rows through the same RLS policy on the same seeded harness, so the B34 cases live in
- * this file rather than paying for a second copy of the auth and session setup.
+ * B33 (`GET /v1/admin/retailers`) and its siblings B34 (`GET /{id}`), B35 (`PATCH /{id}`) and B36
+ * (`PUT /{id}/primary-distributor`). They all read or write the same rows through the same RLS policy
+ * on the same seeded harness, so the sibling cases live in this file rather than paying for a second
+ * copy of the auth and session setup.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
@@ -171,7 +172,22 @@ describe('B33/B34 retailers', () => {
               ($2, $6, '09120000002', $3, 'blocked', $8),
               ($4, $9, '09120000003', $10, 'active', $11),
               ($12, $13, '09120000004', NULL, 'active', $14)`,
-      [SHOP_A, SHOP_B, DIST_1, SHOP_C, ACC_A, ACC_B, A_AT, B_AT, ACC_C, DIST_2, C_AT, SHOP_D, ACC_D, D_AT],
+      [
+        SHOP_A,
+        SHOP_B,
+        DIST_1,
+        SHOP_C,
+        ACC_A,
+        ACC_B,
+        A_AT,
+        B_AT,
+        ACC_C,
+        DIST_2,
+        C_AT,
+        SHOP_D,
+        ACC_D,
+        D_AT,
+      ],
     );
   });
 
@@ -271,7 +287,9 @@ describe('B33/B34 retailers', () => {
     // A filter must not be limited to the first page: the cursor resumes inside the filtered set.
     const first = (await list('sa', '?status=active&limit=2')).json() as Page;
     expect(first.items.map((item) => item.id)).toEqual([SHOP_D, SHOP_C]);
-    const next = (await list('sa', `?status=active&limit=2&after=${first.nextAfter}`)).json() as Page;
+    const next = (
+      await list('sa', `?status=active&limit=2&after=${first.nextAfter}`)
+    ).json() as Page;
     expect(next.items.map((item) => item.id)).toEqual([SHOP_A]);
   });
 
@@ -534,5 +552,162 @@ describe('B33/B34 retailers', () => {
       );
       expect(foreign.rowCount).toBe(0);
     });
+  });
+
+  const putDistributor = (
+    token: string,
+    id: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ) =>
+    app.inject({
+      method: 'PUT',
+      url: `/v1/admin/retailers/${id}/primary-distributor`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...headers },
+      payload: body as object,
+    });
+
+  const distributorAudits = async (id: string) => {
+    const result = await ownerPool.query<{
+      data: {
+        retailerId: string;
+        distributorBefore: string | null;
+        distributorAfter: string | null;
+      };
+    }>(
+      `SELECT data FROM platform.audit_log
+        WHERE action = 'retailer_primary_distributor_changed' AND entity_id = $1`,
+      [id],
+    );
+    return result.rows;
+  };
+
+  const storedDistributor = async (id: string) => {
+    const result = await ownerPool.query<{ primary_distributor_id: string | null }>(
+      `SELECT primary_distributor_id FROM customers.shopkeepers WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0]?.primary_distributor_id ?? null;
+  };
+
+  it('B36: the platform scope moves a shop to another distributor and audits before/after', async () => {
+    const before = (await distributorAudits(SHOP_C)).length;
+    const response = await putDistributor('sa', SHOP_C, { primaryDistributorId: DIST_1 });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: SHOP_C,
+      primaryDistributorId: DIST_1,
+      primaryDistributorName: 'Distributor 1',
+    });
+    expect(await storedDistributor(SHOP_C)).toBe(DIST_1);
+
+    const audits = await distributorAudits(SHOP_C);
+    expect(audits).toHaveLength(before + 1);
+    expect(audits[0]?.data).toMatchObject({
+      retailerId: SHOP_C,
+      distributorBefore: DIST_2,
+      distributorAfter: DIST_1,
+    });
+  });
+
+  it('B36: the distributor a shop already has is a 200 no-op with no audit row', async () => {
+    const before = (await distributorAudits(SHOP_A)).length;
+    const response = await putDistributor('da1-manage', SHOP_A, { primaryDistributorId: DIST_1 });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ id: SHOP_A, primaryDistributorId: DIST_1 });
+    expect(await distributorAudits(SHOP_A)).toHaveLength(before);
+  });
+
+  it('B36: a distributor the caller cannot see is a 404 and changes nothing', async () => {
+    const before = (await distributorAudits(SHOP_A)).length;
+    const response = await putDistributor('da1-manage', SHOP_A, { primaryDistributorId: DIST_2 });
+    expect(response.statusCode, response.body).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    expect(await storedDistributor(SHOP_A)).toBe(DIST_1);
+    expect(await distributorAudits(SHOP_A)).toHaveLength(before);
+  });
+
+  it('B36: a foreign, unknown or malformed shop id is the same 404', async () => {
+    const foreign = await putDistributor('da1-manage', SHOP_C, { primaryDistributorId: DIST_1 });
+    const unknown = await putDistributor('da1-manage', '09000000-0000-4000-8000-000000000000', {
+      primaryDistributorId: DIST_1,
+    });
+    const malformed = await putDistributor('da1-manage', 'not-a-uuid', {
+      primaryDistributorId: DIST_1,
+    });
+    for (const response of [foreign, unknown, malformed]) {
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    }
+    expect(foreign.body).toBe(unknown.body);
+    expect(foreign.body).toBe(malformed.body);
+    expect(await storedDistributor(SHOP_C)).toBe(DIST_2);
+  });
+
+  it('B36: the platform scope honours X-Scope-Distributor on both sides of the write', async () => {
+    // The shop is outside the scope…
+    const outside = await putDistributor(
+      'sa',
+      SHOP_C,
+      { primaryDistributorId: DIST_2 },
+      {
+        'x-scope-distributor': DIST_1,
+      },
+    );
+    expect(outside.statusCode).toBe(404);
+    // …and inside the scope, but targeting a distributor the scope cannot see.
+    const crossTenant = await putDistributor(
+      'sa',
+      SHOP_C,
+      { primaryDistributorId: DIST_1 },
+      {
+        'x-scope-distributor': DIST_2,
+      },
+    );
+    expect(crossTenant.statusCode).toBe(404);
+    expect(await storedDistributor(SHOP_C)).toBe(DIST_2);
+  });
+
+  it('B36: requires retailers.manage, a staff bearer, a strict body and a pool', async () => {
+    const denied = await putDistributor('da1-view', SHOP_A, { primaryDistributorId: DIST_1 });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+
+    const anonymous = await app.inject({
+      method: 'PUT',
+      url: `/v1/admin/retailers/${SHOP_A}/primary-distributor`,
+      payload: { primaryDistributorId: DIST_1 },
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    for (const body of [
+      {},
+      { primaryDistributorId: null },
+      { primaryDistributorId: 'not-a-uuid' },
+      { primaryDistributorId: DIST_1, extra: 1 },
+      { primaryDistributorId: 1 },
+    ]) {
+      const response = await putDistributor('da1-manage', SHOP_A, body);
+      expect(response.statusCode, JSON.stringify(body)).toBe(400);
+      expect(response.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
+
+    const noDb = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier,
+      sessionAuthority: authority,
+    });
+    try {
+      const response = await noDb.inject({
+        method: 'PUT',
+        url: `/v1/admin/retailers/${SHOP_A}/primary-distributor`,
+        headers: { authorization: 'Bearer da1-manage', 'content-type': 'application/json' },
+        payload: { primaryDistributorId: DIST_1 },
+      });
+      expect(response.statusCode).toBe(503);
+    } finally {
+      await noDb.close();
+    }
   });
 });
