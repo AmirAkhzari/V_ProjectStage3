@@ -24,7 +24,7 @@ export interface AppDistributorView {
   locked: boolean;
 }
 
-export interface AppDistributorRow {
+interface AppDistributorRow {
   id: string;
   name: string;
   status: string;

@@ -14,6 +14,9 @@ export function userCity(addresses: Address[], selectedAddressId: string | null)
 export function distributorServesCity(distributor: Distributor, city: string) {
   const target = normalizeCity(city);
   if (!target) return false;
+  // A live A17 row has no city list yet (distributors have no city column), and an empty list is
+  // "unknown", not "serves nothing": treating it as another city would hide every live distributor.
+  if (distributor.cities.length === 0) return true;
   return distributor.cities.some((item) => normalizeCity(item) === target);
 }
 

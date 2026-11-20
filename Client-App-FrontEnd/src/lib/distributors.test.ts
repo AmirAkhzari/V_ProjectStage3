@@ -28,6 +28,15 @@ describe("city distributors", () => {
     expect(distributorsInCity("تبریز").some((d) => d.id === next)).toBe(true);
   });
 
+  it("treats a live row without a city list as city-agnostic", () => {
+    const live = { ...DISTRIBUTORS[0]!, id: "live-1", cities: [] };
+    expect(distributorServesCity(live, "تبریز")).toBe(true);
+    expect(distributorServesCity(live, "کاشان")).toBe(true);
+    expect(distributorsInCity("تبریز", [live]).map((d) => d.id)).toEqual(["live-1"]);
+    // An empty city is still no city: nobody is shown for an unknown shop city.
+    expect(distributorsInCity("", [live])).toEqual([]);
+  });
+
   it("resolves a city name to the platform city id", () => {
     expect(cityIdFromName("تبریز", [{ id: "ct_tabriz", name: "تبریز", province: "آذربایجان شرقی", lat: 0, lng: 0 }])).toBe("ct_tabriz");
     expect(cityIdFromName("تهران", [])).toBeNull();
