@@ -51,7 +51,7 @@ function requestPathOf(request: FastifyRequest): string {
  * Keyed on the exact registered operationId (never a path suffix) so an auto-HEAD for a GET
  * op is covered by Fastify copying the GET operationId.
  */
-const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set(['A7', 'C11', 'B83']);
+const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set(['A7', 'A8', 'C11', 'B83']);
 
 /**
  * A route group only sets prefix, guard and registration (§9.3 rule 4); routes come from modules.
@@ -70,7 +70,7 @@ export function createRouteGroup(spec: RouteGroupSpec): FastifyPluginAsync<Route
       sessionAuthority,
       ...(spec.sensitive === true ? { fresh: true } : {}),
     });
-    // A7/C11 carry PII or credentials: no-store must also cover guard (401/403) and handler
+    // A7/A8/C11 carry PII or credentials: no-store must also cover guard (401/403) and handler
     // (404/422) responses, so it is set before the guard and before the handler.
     group.addHook('onRequest', async function noStorePrivateRoutes(request, reply) {
       const operationId = routeOperationId(request);

@@ -20,12 +20,14 @@ const PHONE = '09121234567';
 interface Row {
   id: string;
   phone: string;
+  name: string | null;
   primary_distributor_id: string | null;
   status: string;
 }
 const row = (overrides: Partial<Row> = {}): Row => ({
   id: ACCOUNT_ID,
   phone: PHONE,
+  name: null,
   primary_distributor_id: null,
   status: 'active',
   ...overrides,
@@ -198,6 +200,13 @@ describe('A7 GET /v1/app/me', () => {
       primaryDistributorId: null,
       subscriptionExpiresAt: null,
     });
+  });
+
+  it('A7-200: a saved name (A8 / 0017) is returned instead of the placeholder null', async () => {
+    app = await appOf([row({ name: 'فروشگاه الف' })]);
+    const response = await appMe(app);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ user: { id: ACCOUNT_ID, name: 'فروشگاه الف' } });
   });
 
   it('A7-404: no shopkeeper row and a non-active row are both NOT_FOUND', async () => {

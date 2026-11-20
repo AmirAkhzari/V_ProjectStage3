@@ -2,22 +2,37 @@ import type pg from 'pg';
 import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
 
 /**
- * A7 response. `name`, `defaultAddressId`, `plan` and `subscriptionExpiresAt` have no
- * backing column yet and are documented placeholders (null) until a later schema slice.
+ * A7 response. `defaultAddressId`, `plan` and `subscriptionExpiresAt` have no backing column yet and
+ * are documented placeholders (null) until a later schema slice. `name` is real since A8 (0017).
  */
 export interface MyProfileView {
-  user: { id: string; name: null; phone: string };
+  user: { id: string; name: string | null; phone: string };
   defaultAddressId: null;
   plan: null;
   primaryDistributorId: string | null;
   subscriptionExpiresAt: null;
 }
 
-interface ShopkeeperRow {
+/** The columns both A7 and A8 read; one definition so the two answers cannot drift. */
+export interface MyShopkeeperRow {
   id: string;
   phone: string;
+  name: string | null;
   primary_distributor_id: string | null;
   status: string;
+}
+
+export const MY_SHOPKEEPER_SELECT = `SELECT id, phone, name, primary_distributor_id, status
+         FROM customers.shopkeepers`;
+
+export function toMyProfileView(row: MyShopkeeperRow): MyProfileView {
+  return {
+    user: { id: row.id, name: row.name ?? null, phone: row.phone },
+    defaultAddressId: null,
+    plan: null,
+    primaryDistributorId: row.primary_distributor_id,
+    subscriptionExpiresAt: null,
+  };
 }
 
 /**
@@ -31,20 +46,9 @@ export async function getMyProfile(
 ): Promise<MyProfileView | null> {
   if (!tenant.shopkeeperId) return null;
   const found = await withTenant(pool, tenant, ({ client }) =>
-    client.query<ShopkeeperRow>(
-      `SELECT id, phone, primary_distributor_id, status
-         FROM customers.shopkeepers
-        WHERE id = $1`,
-      [tenant.shopkeeperId],
-    ),
+    client.query<MyShopkeeperRow>(`${MY_SHOPKEEPER_SELECT} WHERE id = $1`, [tenant.shopkeeperId]),
   );
   const row = found.rows[0];
   if (!row || row.status !== 'active') return null;
-  return {
-    user: { id: row.id, name: null, phone: row.phone },
-    defaultAddressId: null,
-    plan: null,
-    primaryDistributorId: row.primary_distributor_id,
-    subscriptionExpiresAt: null,
-  };
+  return toMyProfileView(row);
 }

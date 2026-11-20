@@ -166,12 +166,14 @@ describe('B33/B34 retailers', () => {
   beforeEach(async () => {
     await ownerPool.query('DELETE FROM customers.shopkeepers');
     await ownerPool.query(
+      // A8 (0017) gives the view a real `name`; A and B carry one, C and D stay null like a shop
+      // that has never saved a name.
       `INSERT INTO customers.shopkeepers
-         (id, account_id, phone, primary_distributor_id, status, created_at)
-       VALUES ($1, $5, '09120000001', $3, 'active', $7),
-              ($2, $6, '09120000002', $3, 'blocked', $8),
-              ($4, $9, '09120000003', $10, 'active', $11),
-              ($12, $13, '09120000004', NULL, 'active', $14)`,
+         (id, account_id, phone, name, primary_distributor_id, status, created_at)
+       VALUES ($1, $5, '09120000001', 'فروشگاه الف', $3, 'active', $7),
+              ($2, $6, '09120000002', 'فروشگاه ب', $3, 'blocked', $8),
+              ($4, $9, '09120000003', NULL, $10, 'active', $11),
+              ($12, $13, '09120000004', NULL, NULL, 'active', $14)`,
       [
         SHOP_A,
         SHOP_B,
@@ -213,6 +215,7 @@ describe('B33/B34 retailers', () => {
     expect(body.items[0]).toEqual({
       id: SHOP_A,
       phone: '09120000001',
+      name: 'فروشگاه الف',
       status: 'active',
       primaryDistributorId: DIST_1,
       primaryDistributorName: 'Distributor 1',
@@ -333,6 +336,7 @@ describe('B33/B34 retailers', () => {
     expect(response.json()).toEqual({
       id: SHOP_B,
       phone: '09120000002',
+      name: 'فروشگاه ب',
       status: 'blocked',
       primaryDistributorId: DIST_1,
       primaryDistributorName: 'Distributor 1',

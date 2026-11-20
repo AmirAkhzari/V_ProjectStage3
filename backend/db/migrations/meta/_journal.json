@@ -120,6 +120,13 @@
       "when": 1794300000000,
       "tag": "0016_s12_b36_primary_distributor",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0017_s12_a8_shopkeeper_name",
+      "breakpoints": true
     }
   ]
 }

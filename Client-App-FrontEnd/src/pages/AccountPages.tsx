@@ -16,7 +16,11 @@ export default function EditProfilePage() {
   const [name, setName] = useState(session?.user.name ?? "");
   const save = async () => {
     const res = await api.updateProfile({ name });
-    if (res.ok && session) setSession({ ...session, user: res.data });
+    if (!res.ok) {
+      setToast(res.error);
+      return;
+    }
+    if (session) setSession({ ...session, user: res.data });
     setToast("پروفایل ذخیره شد");
     navigate("/profile");
   };

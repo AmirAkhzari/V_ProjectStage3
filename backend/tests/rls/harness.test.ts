@@ -476,7 +476,7 @@ describe('RLS harness skeleton', () => {
     ).rejects.toThrow(/permission denied/i);
   });
 
-  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33/B35/B36)', async () => {
+  it('TENANT-01-S11B: customers.shopkeepers is staff-scoped to their distributor, plus owner and platform (B33/B35/B36/A8)', async () => {
     // B33 (0014) adds shopkeepers_staff_read: a staff token sees the shops of its own distributor.
     const supplyA = await ownerPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM customers.shopkeepers WHERE primary_distributor_id = $1`,
@@ -541,6 +541,26 @@ describe('RLS harness skeleton', () => {
       );
       expect(self.rows.map((r) => r.id)).toEqual([SK_A]);
     });
+    // A8 (0017) adds `name` to the app role's columns, and the same policy that hides B also keeps
+    // its name unwritten: the row is filtered by USING, so the update touches zero rows.
+    await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+      const own = await tx.client.query(
+        `UPDATE customers.shopkeepers SET name = 'فروشگاه A' WHERE id = $1`,
+        [SK_A],
+      );
+      expect(own.rowCount).toBe(1);
+      const foreign = await tx.client.query(
+        `UPDATE customers.shopkeepers SET name = 'hacked' WHERE id = $1`,
+        [SK_B],
+      );
+      expect(foreign.rowCount).toBe(0);
+    });
+    const named = await ownerPool.query<{ id: string; name: string | null }>(
+      `SELECT id::text, name FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,
+      [SK_A, SK_B],
+    );
+    expect(named.rows[0]).toEqual({ id: SK_A, name: 'فروشگاه A' });
+    expect(named.rows[1]?.name).not.toBe('hacked');
     await withTenant(appPool, { subjectType: 'staff', isPlatform: true }, async (tx) => {
       const all = await tx.client.query<{ id: string }>(
         `SELECT id::text FROM customers.shopkeepers WHERE id IN ($1, $2) ORDER BY id`,

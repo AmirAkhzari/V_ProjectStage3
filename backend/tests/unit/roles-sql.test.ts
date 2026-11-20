@@ -218,6 +218,19 @@ describe('0012_s11b7_b27_profile_update.sql', () => {
   });
 });
 
+describe('0017_s12_a8_shopkeeper_name.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0017_s12_a8_shopkeeper_name.sql'), 'utf8');
+
+  it('adds the nullable name column and only that column to the app role grant', () => {
+    expect(sql).toMatch(/ALTER TABLE customers\.shopkeepers ADD COLUMN name text/);
+    expect(sql).toMatch(/GRANT UPDATE \(name\) ON customers\.shopkeepers TO vproject_app/);
+    expect(sql).not.toMatch(/GRANT UPDATE ON customers\.shopkeepers/);
+    expect(sql).not.toMatch(/GRANT [^;]*\b(INSERT|DELETE)\b[^;]*customers\.shopkeepers/);
+    // The policy itself is 0002's `shopkeepers_tenant`; this slice must not widen it.
+    expect(sql).not.toMatch(/CREATE POLICY/);
+  });
+});
+
 describe('0010_s11b6_demo_login.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
 

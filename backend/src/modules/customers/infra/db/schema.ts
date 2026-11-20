@@ -10,6 +10,8 @@ export const shopkeepers = customersSchema.table(
     id: uuid('id').primaryKey(),
     accountId: uuid('account_id').notNull(),
     phone: text('phone').notNull(),
+    /** A8: the shop's display name; null until the shopkeeper saves one. */
+    name: text('name'),
     primaryDistributorId: uuid('primary_distributor_id'),
     status: text('status').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),

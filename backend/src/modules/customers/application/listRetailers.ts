@@ -14,10 +14,10 @@ import { isRetailerStatus } from '../domain/retailerStatus.js';
  * cursor resumes from (index `shopkeepers_created_at_id_idx`), so a page never skips or repeats a
  * row while new rows are inserted at the top.
  *
- * `customers.shopkeepers` has no name, city or plan columns yet (profile/membership slices), so the
- * view only carries what the table actually stores. The list can narrow only on `status` and on a
- * phone fragment (`q`). City and plan are not offered until that schema exists, rather than applied
- * to the current page and pretending to be a filter.
+ * `name` exists since A8 (0017) and is part of the view. `customers.shopkeepers` still has no city
+ * or plan column (profile/membership slices), so the view only carries what the table stores. The
+ * list can narrow only on `status` and on a phone fragment (`q`). City and plan are not offered until
+ * that schema exists, rather than applied to the current page and pretending to be a filter.
  */
 export const RETAILERS_LIST_MAX = 500;
 
@@ -69,6 +69,7 @@ export interface RetailerCursor {
 export interface RetailerView {
   id: string;
   phone: string;
+  name: string | null;
   status: string;
   primaryDistributorId: string | null;
   primaryDistributorName: string | null;
@@ -79,7 +80,7 @@ export interface RetailerView {
  * The one definition of the retailer view: B33 pages it and B34 reads a single row from it, so a
  * column or join change cannot drift between the two endpoints.
  */
-export const RETAILER_VIEW_SELECT = `SELECT s.id, s.phone, s.status, s.primary_distributor_id,
+export const RETAILER_VIEW_SELECT = `SELECT s.id, s.phone, s.name, s.status, s.primary_distributor_id,
               d.name AS primary_distributor_name, s.created_at
          FROM customers.shopkeepers s
          LEFT JOIN tenancy.distributors d ON d.id = s.primary_distributor_id`;
@@ -87,6 +88,7 @@ export const RETAILER_VIEW_SELECT = `SELECT s.id, s.phone, s.status, s.primary_d
 export interface RetailerRow {
   id: string;
   phone: string;
+  name: string | null;
   status: string;
   primary_distributor_id: string | null;
   primary_distributor_name: string | null;
@@ -142,6 +144,7 @@ export function toRetailerView(row: RetailerRow): RetailerView {
   return {
     id: row.id,
     phone: row.phone,
+    name: row.name ?? null,
     status: row.status,
     primaryDistributorId: row.primary_distributor_id,
     primaryDistributorName: row.primary_distributor_name,

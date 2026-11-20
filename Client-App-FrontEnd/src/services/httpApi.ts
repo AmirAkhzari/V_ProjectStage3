@@ -210,7 +210,10 @@ export const httpApi: VisitorApi = {
 
   async updateProfile(patch) {
     try {
-      const user = await apiFetch<User>("/me", { method: "PATCH", json: patch });
+      // A8 answers the same profile envelope A7 reads, so the session stores its `user` part. `name`
+      // is null on a shop that has never saved one; the UI keeps the phone fallback.
+      const row = await apiFetch<{ user: User }>("/me", { method: "PATCH", json: patch });
+      const user = { ...row.user, name: row.user.name ?? "" };
       const bundle = readBundle();
       if (bundle) writeBundle({ ...bundle, user });
       return ok(user);
@@ -228,7 +231,8 @@ export const httpApi: VisitorApi = {
       subscriptionExpiresAt?: string | null;
     }>("/me");
     return {
-      user: row.user,
+      // A7's `name` is null until A8 saves one; the PWA's `User` type keeps a string.
+      user: { ...row.user, name: row.user.name ?? "" },
       defaultAddressId: row.defaultAddressId ?? null,
       plan: row.plan === "pro" ? "pro" : "free",
       primaryDistributorId: row.primaryDistributorId ?? null,
