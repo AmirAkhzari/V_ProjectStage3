@@ -27,6 +27,7 @@ const IDENTITY_UNSCOPED = [
 ] as const;
 /** Fail-closed: every non-exempt, non-unscoped table in GATE_SCHEMAS must appear here. */
 const HARNESS_TENANT_TABLES = [
+  'customers.addresses',
   'customers.shopkeepers',
   'identity.driver_credentials',
   'identity.staff_memberships',
@@ -596,6 +597,69 @@ describe('RLS harness skeleton', () => {
         );
       }),
     ).rejects.toThrow(/unique|duplicate/i);
+  });
+
+  it('TENANT-01-S11B: customers.addresses is own-shop only for read and insert (A9/A10)', async () => {
+    const addrA = randomUUID();
+    const addrB = randomUUID();
+    await ownerPool.query(
+      `INSERT INTO customers.addresses
+         (id, shopkeeper_id, title, full_address, plaque, unit, tag, branch_name,
+          city_name, lat, lng, street_label, created_at)
+       VALUES ($1, $2, 'Harness A', 'Full A', '1', '1', 'store', NULL, 'Tehran', 35.7, 51.4, 'Street A', now()),
+              ($3, $4, 'Harness B', 'Full B', '2', '2', NULL, 'Branch B', 'Tehran', 35.7, 51.4, 'Street B', now())`,
+      [addrA, SK_A, addrB, SK_B],
+    );
+    await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+      const visible = await tx.client.query<{ id: string }>(
+        `SELECT id::text FROM customers.addresses WHERE id IN ($1, $2) ORDER BY id`,
+        [addrA, addrB],
+      );
+      expect(visible.rows.map((r) => r.id)).toEqual([addrA]);
+      // A10 inserts through `addresses_tenant`, and 0018 grants only that one column of the shop.
+      const own = await tx.client.query(
+        `INSERT INTO customers.addresses
+           (id, shopkeeper_id, title, full_address, plaque, unit, tag, branch_name,
+            city_name, lat, lng, street_label, created_at)
+         VALUES ($1, $2, 'Own', 'Full own', '', '', NULL, NULL, 'Tehran', 35.7, 51.4, '', now())`,
+        [randomUUID(), SK_A],
+      );
+      expect(own.rowCount).toBe(1);
+      const pointed = await tx.client.query(
+        `UPDATE customers.shopkeepers SET default_address_id = $2 WHERE id = $1`,
+        [SK_A, addrA],
+      );
+      expect(pointed.rowCount).toBe(1);
+    });
+    // No tenant GUC means no rows at all, never a cross-shop read.
+    const none = await appPool.query<{ id: string }>(`SELECT id::text FROM customers.addresses`);
+    expect(none.rows).toHaveLength(0);
+    // Naming another shop in the INSERT is refused by WITH CHECK; each probe needs its own
+    // transaction because a policy rejection aborts the current one.
+    await expect(
+      withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+        await tx.client.query(
+          `INSERT INTO customers.addresses
+             (id, shopkeeper_id, title, full_address, plaque, unit, tag, branch_name,
+              city_name, lat, lng, street_label, created_at)
+           VALUES ($1, $2, 'Hacked', 'Full', '', '', NULL, NULL, 'Tehran', 35.7, 51.4, '', now())`,
+          [randomUUID(), SK_B],
+        );
+      }),
+    ).rejects.toThrow(/row-level security policy/i);
+    // A11/A13 are not live yet: the app role can neither rewrite nor delete an address.
+    await expect(
+      withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+        await tx.client.query(`UPDATE customers.addresses SET title = title WHERE id = $1`, [
+          addrA,
+        ]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
+    await expect(
+      withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
+        await tx.client.query(`DELETE FROM customers.addresses WHERE id = $1`, [addrA]);
+      }),
+    ).rejects.toThrow(/permission denied/i);
   });
 
   it('TENANT-01-S11B: identity.driver_credentials is tenant-scoped for read and write', async () => {

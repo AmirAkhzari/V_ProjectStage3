@@ -22,6 +22,7 @@ interface Row {
   phone: string;
   name: string | null;
   primary_distributor_id: string | null;
+  default_address_id: string | null;
   status: string;
 }
 const row = (overrides: Partial<Row> = {}): Row => ({
@@ -29,6 +30,7 @@ const row = (overrides: Partial<Row> = {}): Row => ({
   phone: PHONE,
   name: null,
   primary_distributor_id: null,
+  default_address_id: null,
   status: 'active',
   ...overrides,
 });

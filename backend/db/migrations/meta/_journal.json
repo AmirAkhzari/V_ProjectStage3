@@ -127,6 +127,13 @@
       "when": 1794400000000,
       "tag": "0017_s12_a8_shopkeeper_name",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0018_s12_a9_a10_addresses",
+      "breakpoints": true
     }
   ]
 }

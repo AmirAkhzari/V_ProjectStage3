@@ -28,6 +28,8 @@ export const ALLOWED_TABLES = new Set([
   'identity.otp_challenges',
   'tenancy.distributors',
   'customers.shopkeepers',
+  // A9/A10: the shop's own address book.
+  'customers.addresses',
 ]);
 
 const TABLE_KIND = '(?:(?:GLOBAL|LOCAL)\\s+)?(?:TEMP(?:ORARY)?\\s+|UNLOGGED\\s+)?';

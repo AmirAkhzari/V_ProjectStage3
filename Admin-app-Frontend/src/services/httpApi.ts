@@ -440,8 +440,8 @@ export const httpApi: AdminApi = {
   },
 
   async getRetailerAddresses(id) {
-    // B34's detail is the B33 row and `customers` has no address table yet, so this tab stays
-    // empty instead of a second request that can only return nothing.
+    // `customers.addresses` exists since A9/A10, but B34's response does not include it yet, so this
+    // tab stays empty instead of a second request that can only return nothing.
     void id;
     return [];
   },

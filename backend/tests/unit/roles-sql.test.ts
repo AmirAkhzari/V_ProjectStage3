@@ -231,6 +231,30 @@ describe('0017_s12_a8_shopkeeper_name.sql', () => {
   });
 });
 
+describe('0018_s12_a9_a10_addresses.sql', () => {
+  const sql = readFileSync(join(dbDir, 'migrations/0018_s12_a9_a10_addresses.sql'), 'utf8');
+
+  it('creates a FORCE-RLS address book scoped to the owning shop', () => {
+    expect(sql).toMatch(/CREATE TABLE customers\.addresses/);
+    expect(sql).toMatch(/shopkeeper_id uuid NOT NULL REFERENCES customers\.shopkeepers\(id\)/);
+    expect(sql).toMatch(/ALTER TABLE customers\.addresses FORCE ROW LEVEL SECURITY/);
+    expect(sql).toMatch(/CREATE POLICY addresses_tenant ON customers\.addresses/);
+    expect(sql).toMatch(/shopkeeper_id = NULLIF\(current_setting\('app\.shopkeeper_id'/);
+    expect(sql).toMatch(/addresses_shopkeeper_created_idx/);
+  });
+
+  it('grants SELECT/INSERT only and the default pointer, never UPDATE/DELETE', () => {
+    expect(sql).toMatch(/GRANT SELECT, INSERT ON customers\.addresses TO vproject_app/);
+    expect(sql).toMatch(
+      /GRANT UPDATE \(default_address_id\) ON customers\.shopkeepers TO vproject_app/,
+    );
+    expect(sql).not.toMatch(/GRANT [^;]*UPDATE[^;]*customers\.addresses[^;]*vproject_app/);
+    expect(sql).not.toMatch(/GRANT [^;]*DELETE[^;]*customers\.addresses/);
+    expect(sql).not.toMatch(/GRANT UPDATE ON customers\.shopkeepers/);
+    expect(sql).toMatch(/ADD COLUMN default_address_id uuid REFERENCES customers\.addresses/);
+  });
+});
+
 describe('0010_s11b6_demo_login.sql', () => {
   const sql = readFileSync(join(dbDir, 'migrations/0010_s11b6_demo_login.sql'), 'utf8');
 

@@ -397,7 +397,20 @@ export const httpApi: VisitorApi = {
     try {
       const row = await apiFetch<Record<string, unknown>>(path, {
         method: address.id ? "PUT" : "POST",
-        json: { ...address, cityName: address.city },
+        // A10's body is strict: exactly the fields it stores, with the city as `cityName` and no
+        // client-side `id`. An edit still goes through A11, which is not live yet.
+        json: {
+          title: address.title,
+          fullAddress: address.fullAddress,
+          plaque: address.plaque,
+          unit: address.unit,
+          tag: address.tag,
+          branchName: address.branchName,
+          cityName: address.city,
+          lat: address.lat,
+          lng: address.lng,
+          streetLabel: address.streetLabel,
+        },
       });
       const saved = toAddress(row);
       const bundle = readBundle();
