@@ -76,6 +76,15 @@ export interface RetailerView {
   createdAt: string;
 }
 
+/**
+ * The one definition of the retailer view: B33 pages it and B34 reads a single row from it, so a
+ * column or join change cannot drift between the two endpoints.
+ */
+export const RETAILER_VIEW_SELECT = `SELECT s.id, s.phone, s.status, s.primary_distributor_id,
+              d.name AS primary_distributor_name, s.created_at
+         FROM customers.shopkeepers s
+         LEFT JOIN tenancy.distributors d ON d.id = s.primary_distributor_id`;
+
 export interface RetailerRow {
   id: string;
   phone: string;
@@ -149,10 +158,7 @@ export async function listRetailers(
   const after = options.after;
   const found = await withTenant(pool, tenant, ({ client }) =>
     client.query<RetailerRow>(
-      `SELECT s.id, s.phone, s.status, s.primary_distributor_id,
-              d.name AS primary_distributor_name, s.created_at
-         FROM customers.shopkeepers s
-         LEFT JOIN tenancy.distributors d ON d.id = s.primary_distributor_id
+      `${RETAILER_VIEW_SELECT}
         WHERE ($1::timestamptz IS NULL
                OR (s.created_at, s.id) < ($1::timestamptz, $2::uuid))
           AND ($4::text IS NULL OR s.phone LIKE '%' || $4 || '%')

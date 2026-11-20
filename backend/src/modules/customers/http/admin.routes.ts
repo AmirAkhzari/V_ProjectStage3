@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { requirePermission } from '../../../platform/auth/guards.js';
 import { AppError } from '../../../platform/http/errors.js';
+import { findRetailer, readRetailerId } from '../application/getRetailer.js';
 import { listRetailers, readRetailerListQuery } from '../application/listRetailers.js';
 
 /**
- * Admin surface for `customers`. B33 lists the retailers visible through RLS, page by page.
+ * Admin surface for `customers`. B33 lists the retailers visible through RLS, page by page, and B34
+ * reads one of them under the same visibility.
  */
 export const adminRoutes: FastifyPluginAsync = async (app) => {
   app.get('/retailers', { schema: { operationId: 'B33' } }, async (request) => {
@@ -20,5 +22,23 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     return listRetailers(pool, tenant, page);
+  });
+
+  app.get('/retailers/:id', { schema: { operationId: 'B34' } }, async (request) => {
+    requirePermission(request, 'retailers.view');
+    const tenant = request.tenant;
+    if (!tenant) throw new AppError('UNAUTHENTICATED', 401, 'Authentication required');
+    // An id that cannot be a row is the same 404 as a foreign row, so a client cannot probe for ids.
+    const id = readRetailerId((request.params as { id: string }).id);
+    if (!id) throw new AppError('NOT_FOUND', 404, 'Resource not found');
+    const pool = app.appDb;
+    if (!pool) {
+      throw new AppError('SERVICE_UNAVAILABLE', 503, 'Service temporarily unavailable', {
+        retryAfter: 5,
+      });
+    }
+    const retailer = await findRetailer(pool, tenant, id);
+    if (!retailer) throw new AppError('NOT_FOUND', 404, 'Resource not found');
+    return retailer;
   });
 };

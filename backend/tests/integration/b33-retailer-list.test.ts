@@ -1,3 +1,8 @@
+/**
+ * B33 (`GET /v1/admin/retailers`) and its B34 sibling (`GET /v1/admin/retailers/{id}`). Both read
+ * the same rows through the same RLS policy on the same seeded harness, so the B34 cases live in
+ * this file rather than paying for a second copy of the auth and session setup.
+ */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildApp, type App } from '../../src/app.js';
@@ -127,7 +132,7 @@ interface Page {
   nextAfter: string | null;
 }
 
-describe('B33 retailer list', () => {
+describe('B33/B34 retailers', () => {
   let pgRoles: StartedPostgresRoles;
   let appPool: pg.Pool;
   let ownerPool: pg.Pool;
@@ -294,6 +299,75 @@ describe('B33 retailer list', () => {
   it('answers 401 without a staff bearer', async () => {
     const response = await app.inject({ method: 'GET', url: '/v1/admin/retailers' });
     expect(response.statusCode).toBe(401);
+  });
+
+  const detail = (token: string, id: string, headers: Record<string, string> = {}) =>
+    app.inject({
+      method: 'GET',
+      url: `/v1/admin/retailers/${id}`,
+      headers: { authorization: `Bearer ${token}`, ...headers },
+    });
+
+  it('B34: reads one shop of the caller tenant with the same view as the list', async () => {
+    const response = await detail('da1-view', SHOP_B);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({
+      id: SHOP_B,
+      phone: '09120000002',
+      status: 'blocked',
+      primaryDistributorId: DIST_1,
+      primaryDistributorName: 'Distributor 1',
+      createdAt: B_AT,
+    });
+  });
+
+  it('B34: a foreign, unknown or malformed id is the same 404', async () => {
+    const foreign = await detail('da1-view', SHOP_C);
+    const unknown = await detail('da1-view', '09000000-0000-4000-8000-000000000000');
+    const malformed = await detail('da1-view', 'not-a-uuid');
+    for (const response of [foreign, unknown, malformed]) {
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    }
+    expect(foreign.body).toBe(unknown.body);
+    expect(foreign.body).toBe(malformed.body);
+    // A shop nobody supplies is invisible to a tenant, and visible only through the platform scope.
+    expect((await detail('da1-view', SHOP_D)).statusCode).toBe(404);
+    expect((await detail('sa', SHOP_D)).statusCode).toBe(200);
+  });
+
+  it('B34: the platform scope reads any id and a scope header narrows it back', async () => {
+    expect((await detail('sa', SHOP_C)).statusCode).toBe(200);
+    const scoped = await detail('sa', SHOP_C, { 'x-scope-distributor': DIST_1 });
+    expect(scoped.statusCode).toBe(404);
+    expect((await detail('sa', SHOP_A, { 'x-scope-distributor': DIST_1 })).statusCode).toBe(200);
+  });
+
+  it('B34: requires retailers.view, a staff bearer and a wired pool', async () => {
+    const denied = await detail('da1-manage', SHOP_A);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+
+    const anonymous = await app.inject({ method: 'GET', url: `/v1/admin/retailers/${SHOP_A}` });
+    expect(anonymous.statusCode).toBe(401);
+
+    const noDb = await buildApp({
+      config: testConfig(),
+      healthChecks: [],
+      verifier,
+      sessionAuthority: authority,
+    });
+    try {
+      const response = await noDb.inject({
+        method: 'GET',
+        url: `/v1/admin/retailers/${SHOP_A}`,
+        headers: { authorization: 'Bearer da1-view' },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } });
+    } finally {
+      await noDb.close();
+    }
   });
 
   it('fails closed with 503 when no app-role pool is wired', async () => {
