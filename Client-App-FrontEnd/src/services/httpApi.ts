@@ -260,8 +260,11 @@ export const httpApi: VisitorApi = {
   },
 
   async checkoutSubscription() {
+    // A15 makes Idempotency-Key mandatory: the key is the intent's identity, so a retry returns the
+    // same payment instead of opening a second one.
     return apiFetch<{ paymentId: string; redirectUrl?: string; amount: number }>("/me/subscription/checkout", {
       method: "POST",
+      idempotency: true,
     });
   },
 

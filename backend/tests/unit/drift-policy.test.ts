@@ -37,7 +37,8 @@ describe('checkMigrationSql', () => {
     expect(ALLOWED_TABLES.has('identity.otp_challenges')).toBe(true);
     expect(ALLOWED_TABLES.has('customers.addresses')).toBe(true);
     expect(ALLOWED_TABLES.has('membership.subscriptions')).toBe(true);
-    expect(ALLOWED_TABLES.size).toBe(15);
+    expect(ALLOWED_TABLES.has('payment.payments')).toBe(true);
+    expect(ALLOWED_TABLES.size).toBe(16);
   });
 
   it('rejects a domain CREATE TABLE', () => {

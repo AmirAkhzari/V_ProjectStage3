@@ -19,10 +19,11 @@ const EXPECTED_SHA = 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
 const LIVE =
-  'S1 S2 A1 A2 A3 A4 A7 A8 A9 A10 A11 A12 A13 A14 A16 A17 A18 B1 B2 B3 B4 B24 B33 B34 B35 B36 C1 C2 C11 B25 B27 B83'.split(
+  'S1 S2 A1 A2 A3 A4 A7 A8 A9 A10 A11 A12 A13 A14 A15 A16 A17 A18 A34 B1 B2 B3 B4 B24 B33 B34 B35 B36 C1 C2 C11 B25 B27 B83'.split(
     ' ',
   );
-const DEMO = ['A5', 'B5'];
+// A35 is the demo PSP verdict: mounted only where demo login is, exactly like A5/B5.
+const DEMO = ['A5', 'A35', 'B5'];
 const UNREGISTERED_IN_PROD = ['A5', 'A35', 'B5', 'B79', 'B80'];
 
 export interface SpecOperation {
@@ -215,8 +216,8 @@ describe('frozen contract coverage (slice 1b)', () => {
   });
 
   it('PENDING ids are counted, mapped, and not live', () => {
-    expect(PENDING_OPERATION_IDS).toHaveLength(102);
-    expect(new Set(PENDING_OPERATION_IDS).size).toBe(102);
+    expect(PENDING_OPERATION_IDS).toHaveLength(100);
+    expect(new Set(PENDING_OPERATION_IDS).size).toBe(100);
     const pending = new Set(PENDING_OPERATION_IDS);
     for (const operationId of PENDING_OPERATION_IDS) {
       expect(ROUTE_REGISTRY.byOperationId.has(operationId)).toBe(true);
@@ -276,7 +277,7 @@ describe('frozen contract coverage (slice 1b)', () => {
     }
   }
 
-  it('real production boot mounts exactly LIVE; staging adds only A5/B5', async () => {
+  it('real production boot mounts exactly LIVE; staging adds only the demo ops A5/A35/B5', async () => {
     await expectMounted(productionApiConfig(), LIVE);
     // `demoLoginEnabled` is `(nodeEnv !== 'production' || deployEnv === 'staging') && flag`.
     const config = productionApiConfig({

@@ -32,6 +32,7 @@ const HARNESS_TENANT_TABLES = [
   'identity.driver_credentials',
   'identity.staff_memberships',
   'membership.subscriptions',
+  'payment.payments',
   'platform.rls_probe',
   'tenancy.distributors',
 ] as const;

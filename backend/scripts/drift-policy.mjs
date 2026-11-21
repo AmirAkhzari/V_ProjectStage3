@@ -30,8 +30,10 @@ export const ALLOWED_TABLES = new Set([
   'customers.shopkeepers',
   // A9/A10: the shop's own address book.
   'customers.addresses',
-  // A14: the shop's Pro subscription periods (read by A14, written with the payment slice).
+  // A14: the shop's Pro subscription periods (read by A14, written when A35 confirms a payment).
   'membership.subscriptions',
+  // A15: one payment intent per checkout attempt (idempotent by shop + Idempotency-Key).
+  'payment.payments',
 ]);
 
 const TABLE_KIND = '(?:(?:GLOBAL|LOCAL)\\s+)?(?:TEMP(?:ORARY)?\\s+|UNLOGGED\\s+)?';
