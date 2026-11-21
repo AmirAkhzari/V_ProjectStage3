@@ -1,22 +1,22 @@
 import type pg from 'pg';
 import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
 import { AppError } from '../../../platform/http/errors.js';
+import { marketplaceLocked, readShopAccess } from './shopAccess.js';
 
 /**
  * A18: the detail of one distributor, behind the marketplace gate.
  *
  * Identity is the session principal, so a missing or non-active shop is the same uniform 404
- * A7/A17 answer. The gate is the shop's plan: a shop always sees its own primary distributor, and
- * every other distributor needs Pro (`403 MARKETPLACE_REQUIRES_PRO`). No plan column exists yet —
- * A7 ships `plan: null` and A14 adds the membership tables — so every shop is free today and the
- * gate reduces to "primary only". That is the intended product rule for a free shop, and A14 only
- * has to pass the real plan into this check.
+ * A7/A17 answer. The gate is the shop's plan (A14/0021, read by `shopAccess.ts`): the shop always
+ * sees its own primary distributor, and every other distributor needs a live Pro period
+ * (`403 MARKETPLACE_REQUIRES_PRO`). A17's `locked` uses the same helper, so the picker never offers a
+ * store this endpoint would refuse.
  *
- * The gate is answered before the distributor probe, exactly like A16's one-time lock: a non-primary
- * id is the same 403 whether it is active, inactive or unknown, so this endpoint is not an existence
- * oracle either. Which row a Pro shop may read is still RLS: `distributors_shopkeeper_read` (0020)
- * shows the shopkeeper scope only `status = 'active'` distributors, so a hidden primary (deactivated
- * after it was chosen) is the uniform 404 rather than an empty 200.
+ * The gate is answered before the distributor probe, exactly like A16's one-time lock: on a Free shop
+ * a non-primary id is the same 403 whether it is active, inactive or unknown, so this endpoint is not
+ * an existence oracle either. Which row is readable is still RLS: `distributors_shopkeeper_read`
+ * (0020) shows the shopkeeper scope only `status = 'active'` distributors, so a primary distributor
+ * deactivated after it was chosen is the uniform 404 rather than an empty 200.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -42,15 +42,11 @@ export async function getAppDistributor(
   const shopkeeperId = tenant.shopkeeperId;
   if (!shopkeeperId) return null;
   return withTenant(pool, tenant, async (tx) => {
-    const shop = await tx.client.query<{ status: string; primary_distributor_id: string | null }>(
-      `SELECT status, primary_distributor_id FROM customers.shopkeepers WHERE id = $1`,
-      [shopkeeperId],
-    );
-    const owner = shop.rows[0];
+    const owner = await readShopAccess(tx.client, shopkeeperId);
     if (!owner || owner.status !== 'active') return null;
 
     const isPrimary = owner.primary_distributor_id === distributorId;
-    if (!isPrimary) {
+    if (marketplaceLocked(owner.is_pro, isPrimary)) {
       throw new AppError('MARKETPLACE_REQUIRES_PRO', 403, 'Marketplace requires the pro plan');
     }
 
@@ -62,6 +58,6 @@ export async function getAppDistributor(
     );
     const row = found.rows[0];
     if (!row) return null;
-    return { id: row.id, name: row.name, status: row.status, isPrimary: true };
+    return { id: row.id, name: row.name, status: row.status, isPrimary };
   });
 }

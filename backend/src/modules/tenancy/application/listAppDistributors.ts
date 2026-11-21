@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
 import { AppError } from '../../../platform/http/errors.js';
+import { marketplaceLocked, readShopAccess } from './shopAccess.js';
 
 /**
  * A17: the distributors a shopkeeper can pick from. Visibility is RLS, not this query:
@@ -8,9 +9,9 @@ import { AppError } from '../../../platform/http/errors.js';
  * the explicit `status` filter keeps that true for every other scope too.
  *
  * `isPrimary` is the shop's own pointer (A16/A7), so the picker can mark the current choice. `locked`
- * is a documented placeholder: the marketplace gate is the shop's plan, and no plan exists yet (A7
- * ships `plan: null`), so nothing is gated here — the flag is present so the client shape is stable
- * once A14 adds plans.
+ * is the marketplace gate (A14/0021): a Free shop may only use its primary distributor, so every other
+ * row is locked, while a Pro shop (a live subscription period) sees nothing locked. The same helper
+ * decides A18's 403, so the list and the detail agree.
  *
  * The contract's optional `cityId` cannot narrow anything: `tenancy.distributors` has no city column
  * (the city tables come with B28–B32). The value is validated by the route and then not applied, which
@@ -61,11 +62,7 @@ export async function listAppDistributors(
   const shopkeeperId = tenant.shopkeeperId;
   if (!shopkeeperId) return null;
   return withTenant(pool, tenant, async (tx) => {
-    const shop = await tx.client.query<{ status: string; primary_distributor_id: string | null }>(
-      `SELECT status, primary_distributor_id FROM customers.shopkeepers WHERE id = $1`,
-      [shopkeeperId],
-    );
-    const owner = shop.rows[0];
+    const owner = await readShopAccess(tx.client, shopkeeperId);
     if (!owner || owner.status !== 'active') return null;
 
     // `name, id` is the same order B24 uses, so the picker and the admin list agree.
@@ -75,12 +72,15 @@ export async function listAppDistributors(
         WHERE status = 'active'
         ORDER BY name, id`,
     );
-    return found.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      status: row.status,
-      isPrimary: row.id === owner.primary_distributor_id,
-      locked: false,
-    }));
+    return found.rows.map((row) => {
+      const isPrimary = row.id === owner.primary_distributor_id;
+      return {
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        isPrimary,
+        locked: marketplaceLocked(owner.is_pro, isPrimary),
+      };
+    });
   });
 }

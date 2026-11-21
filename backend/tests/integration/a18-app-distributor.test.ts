@@ -21,7 +21,12 @@ const DIST_UNKNOWN = '01000000-0000-4000-8000-0000000000ff';
 const SHOP_A = '02000000-0000-4000-8000-00000000000a';
 const SHOP_B = '02000000-0000-4000-8000-00000000000b';
 const SHOP_D = '02000000-0000-4000-8000-00000000000d';
+const SHOP_PRO = '02000000-0000-4000-8000-00000000000e';
+const SHOP_LAPSED = '02000000-0000-4000-8000-00000000000f';
 const SHOP_MISSING = '02000000-0000-4000-8000-0000000000ff';
+
+const PERIOD_PRO = '05000000-0000-4000-8000-000000000001';
+const PERIOD_LAPSED = '05000000-0000-4000-8000-000000000002';
 
 interface Principal {
   sid: string;
@@ -34,6 +39,8 @@ const PRINCIPALS = new Map<string, Principal>([
   ['tok-a', { sid: 'sid-a', accountId: SHOP_A, status: 'active' }],
   ['tok-b', { sid: 'sid-b', accountId: SHOP_B, status: 'active' }],
   ['tok-d', { sid: 'sid-d', accountId: SHOP_D, status: 'active' }],
+  ['tok-pro', { sid: 'sid-pro', accountId: SHOP_PRO, status: 'active' }],
+  ['tok-lapsed', { sid: 'sid-lapsed', accountId: SHOP_LAPSED, status: 'active' }],
   ['tok-missing', { sid: 'sid-missing', accountId: SHOP_MISSING, status: 'active' }],
   ['tok-inactive', { sid: 'sid-inactive', accountId: SHOP_A, status: 'inactive' }],
   ['tok-staff', { sid: 'sid-staff', accountId: SHOP_A, status: 'active', typ: 'staff' }],
@@ -112,8 +119,18 @@ describe('A18 /v1/app/distributors/{id}', () => {
          (id, account_id, phone, name, primary_distributor_id, status, created_at)
        VALUES ($1, $1, '09120000000a', 'فروشگاه الف', $4, 'active', now()),
               ($2, $2, '09120000000b', 'فروشگاه ب', $5, 'active', now()),
-              ($3, $3, '09120000000d', 'فروشگاه د', $4, 'blocked', now())`,
-      [SHOP_A, SHOP_B, SHOP_D, DIST_2, DIST_OFF],
+              ($3, $3, '09120000000d', 'فروشگاه د', $4, 'blocked', now()),
+              ($6, $6, '09120000000e', 'فروشگاه حرفه‌ای', $4, 'active', now()),
+              ($7, $7, '09120000000f', 'فروشگاه منقضی', $4, 'active', now())`,
+      [SHOP_A, SHOP_B, SHOP_D, DIST_2, DIST_OFF, SHOP_PRO, SHOP_LAPSED],
+    );
+    // A14 periods: a live one (Pro unlocks the marketplace) and an expired one (Free again).
+    await ownerPool.query(
+      `INSERT INTO membership.subscriptions
+         (id, shopkeeper_id, plan, amount, starts_at, expires_at, created_at)
+       VALUES ($1, $3, 'pro', 1490000, now() - interval '1 day', now() + interval '29 days', now()),
+              ($2, $4, 'pro', 1490000, now() - interval '60 days', now() - interval '30 days', now() - interval '60 days')`,
+      [PERIOD_PRO, PERIOD_LAPSED, SHOP_PRO, SHOP_LAPSED],
     );
     app = await buildApp({
       config: testConfig(),
@@ -170,6 +187,32 @@ describe('A18 /v1/app/distributors/{id}', () => {
       expect(response.statusCode, id).toBe(403);
       expect(response.json()).toMatchObject({ error: { code: 'MARKETPLACE_REQUIRES_PRO' } });
     }
+  });
+
+  it('A18 opens any active distributor to a Pro shop and keeps isPrimary honest', async () => {
+    const other = await detail('tok-pro', DIST_1);
+    expect(other.statusCode, other.body).toBe(200);
+    expect(other.json()).toEqual({
+      id: DIST_1,
+      name: 'Apex',
+      status: 'active',
+      isPrimary: false,
+    });
+
+    const own = await detail('tok-pro', DIST_2);
+    expect(own.statusCode, own.body).toBe(200);
+    expect(own.json()).toMatchObject({ id: DIST_2, isPrimary: true });
+  });
+
+  it('A18 gates again once the Pro period has lapsed', async () => {
+    const response = await detail('tok-lapsed', DIST_1);
+    expect(response.statusCode, response.body).toBe(403);
+    expect(response.json()).toMatchObject({ error: { code: 'MARKETPLACE_REQUIRES_PRO' } });
+
+    // The shop's own primary distributor stays readable on Free.
+    const own = await detail('tok-lapsed', DIST_2);
+    expect(own.statusCode, own.body).toBe(200);
+    expect(own.json()).toMatchObject({ id: DIST_2, isPrimary: true });
   });
 
   it('A18 answers the uniform 404 for a primary distributor RLS no longer shows', async () => {

@@ -20,7 +20,12 @@ const DIST_OFF = '01000000-0000-4000-8000-000000000003';
 const SHOP_A = '02000000-0000-4000-8000-00000000000a';
 const SHOP_B = '02000000-0000-4000-8000-00000000000b';
 const SHOP_D = '02000000-0000-4000-8000-00000000000d';
+const SHOP_PRO = '02000000-0000-4000-8000-00000000000e';
+const SHOP_LAPSED = '02000000-0000-4000-8000-00000000000f';
 const SHOP_MISSING = '02000000-0000-4000-8000-0000000000ff';
+
+const PERIOD_PRO = '05000000-0000-4000-8000-000000000001';
+const PERIOD_LAPSED = '05000000-0000-4000-8000-000000000002';
 
 interface Principal {
   sid: string;
@@ -33,6 +38,8 @@ const PRINCIPALS = new Map<string, Principal>([
   ['tok-a', { sid: 'sid-a', accountId: SHOP_A, status: 'active' }],
   ['tok-b', { sid: 'sid-b', accountId: SHOP_B, status: 'active' }],
   ['tok-d', { sid: 'sid-d', accountId: SHOP_D, status: 'active' }],
+  ['tok-pro', { sid: 'sid-pro', accountId: SHOP_PRO, status: 'active' }],
+  ['tok-lapsed', { sid: 'sid-lapsed', accountId: SHOP_LAPSED, status: 'active' }],
   ['tok-missing', { sid: 'sid-missing', accountId: SHOP_MISSING, status: 'active' }],
   ['tok-inactive', { sid: 'sid-inactive', accountId: SHOP_A, status: 'inactive' }],
   ['tok-staff', { sid: 'sid-staff', accountId: SHOP_A, status: 'active', typ: 'staff' }],
@@ -111,8 +118,18 @@ describe('A17 /v1/app/distributors', () => {
          (id, account_id, phone, name, primary_distributor_id, status, created_at)
        VALUES ($1, $1, '09120000000a', 'فروشگاه الف', $4, 'active', now()),
               ($2, $2, '09120000000b', 'فروشگاه ب', NULL, 'active', now()),
-              ($3, $3, '09120000000d', 'فروشگاه د', NULL, 'blocked', now())`,
-      [SHOP_A, SHOP_B, SHOP_D, DIST_2],
+              ($3, $3, '09120000000d', 'فروشگاه د', NULL, 'blocked', now()),
+              ($5, $5, '09120000000e', 'فروشگاه حرفه‌ای', $6, 'active', now()),
+              ($7, $7, '09120000000f', 'فروشگاه منقضی', $4, 'active', now())`,
+      [SHOP_A, SHOP_B, SHOP_D, DIST_2, SHOP_PRO, DIST_1, SHOP_LAPSED],
+    );
+    // A14 periods: one live (Pro) and one already expired (Free again).
+    await ownerPool.query(
+      `INSERT INTO membership.subscriptions
+         (id, shopkeeper_id, plan, amount, starts_at, expires_at, created_at)
+       VALUES ($1, $3, 'pro', 1490000, now() - interval '1 day', now() + interval '29 days', now()),
+              ($2, $4, 'pro', 1490000, now() - interval '60 days', now() - interval '30 days', now() - interval '60 days')`,
+      [PERIOD_PRO, PERIOD_LAPSED, SHOP_PRO, SHOP_LAPSED],
     );
     app = await buildApp({
       config: testConfig(),
@@ -143,8 +160,9 @@ describe('A17 /v1/app/distributors', () => {
     expect(response.statusCode, response.body).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.headers.etag).toBeUndefined();
+    // A Free shop (no live A14 period) only has its primary: the other row is locked.
     expect(response.json()).toEqual([
-      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: false, locked: false },
+      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: false, locked: true },
       { id: DIST_2, name: 'Boron', status: 'active', isPrimary: true, locked: false },
     ]);
   });
@@ -152,9 +170,26 @@ describe('A17 /v1/app/distributors', () => {
   it('A17 marks isPrimary per shop, so the same list answers each caller differently', async () => {
     const response = await list('tok-b');
     expect(response.statusCode, response.body).toBe(200);
+    // No primary chosen yet and no plan: nothing here is usable.
     expect(response.json()).toEqual([
-      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: false, locked: false },
+      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: false, locked: true },
+      { id: DIST_2, name: 'Boron', status: 'active', isPrimary: false, locked: true },
+    ]);
+  });
+
+  it('A17 unlocks the marketplace for a Pro shop and re-locks it once the period lapses', async () => {
+    const pro = await list('tok-pro');
+    expect(pro.statusCode, pro.body).toBe(200);
+    expect(pro.json()).toEqual([
+      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: true, locked: false },
       { id: DIST_2, name: 'Boron', status: 'active', isPrimary: false, locked: false },
+    ]);
+
+    const lapsed = await list('tok-lapsed');
+    expect(lapsed.statusCode, lapsed.body).toBe(200);
+    expect(lapsed.json()).toEqual([
+      { id: DIST_1, name: 'Apex', status: 'active', isPrimary: false, locked: true },
+      { id: DIST_2, name: 'Boron', status: 'active', isPrimary: true, locked: false },
     ]);
   });
 
