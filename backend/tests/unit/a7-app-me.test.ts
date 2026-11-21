@@ -35,12 +35,18 @@ const row = (overrides: Partial<Row> = {}): Row => ({
   ...overrides,
 });
 
+interface PeriodRow {
+  plan: string;
+  expires_at: Date;
+}
+
 /** Minimal pg.Pool stub: withTenant only needs connect + query + release. */
-function poolOf(result: readonly Row[]): pg.Pool {
+function poolOf(result: readonly Row[], periods: readonly PeriodRow[] = []): pg.Pool {
   const client = {
     query: async (sql: string) => {
-      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK' || sql.startsWith('SELECT')) {
-        return sql.startsWith('SELECT') ? { rows: result } : { rows: [] };
+      if (sql.startsWith('SELECT')) {
+        // A14: A7 reads the live subscription in a second statement inside the same transaction.
+        return { rows: /FROM membership\.subscriptions/.test(sql) ? periods : result };
       }
       return { rows: [] };
     },
@@ -75,13 +81,13 @@ const authority: SessionAuthority = {
       : baseAuthority.check(sid, sv, options),
 };
 
-function appOf(rows: readonly Row[]): Promise<App> {
+function appOf(rows: readonly Row[], periods: readonly PeriodRow[] = []): Promise<App> {
   return buildApp({
     config: testConfig(),
     healthChecks: [],
     verifier,
     sessionAuthority: authority,
-    appDb: poolOf(rows),
+    appDb: poolOf(rows, periods),
   });
 }
 
@@ -186,7 +192,7 @@ describe('A7 GET /v1/app/me', () => {
     }
   });
 
-  it('A7-200: exact key set with documented nulls and no extra fields', async () => {
+  it('A7-200: exact key set, free plan and no extra fields', async () => {
     app = await appOf([row()]);
     const response = await appMe(app);
     expect(response.statusCode, response.body).toBe(200);
@@ -198,9 +204,20 @@ describe('A7 GET /v1/app/me', () => {
     expect(body).toEqual({
       user: { id: ACCOUNT_ID, name: null, phone: PHONE },
       defaultAddressId: null,
-      plan: null,
+      plan: 'free',
       primaryDistributorId: null,
       subscriptionExpiresAt: null,
+    });
+  });
+
+  it('A7-200: a live A14 period makes the profile pro with its expiry', async () => {
+    const expiresAt = new Date('2026-12-21T10:00:00.000Z');
+    app = await appOf([row()], [{ plan: 'pro', expires_at: expiresAt }]);
+    const response = await appMe(app);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      plan: 'pro',
+      subscriptionExpiresAt: expiresAt.toISOString(),
     });
   });
 

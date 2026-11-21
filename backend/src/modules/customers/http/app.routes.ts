@@ -27,9 +27,10 @@ export const appMeResponseSchema = z
       .strict(),
     // A9/A10 (0018): the address the shop saved; null until the first A10.
     defaultAddressId: z.uuid().nullable(),
-    plan: z.null(),
+    // A14 (0021): the plan and its expiry are derived from the shop's live subscription period.
+    plan: z.enum(['free', 'pro']),
     primaryDistributorId: z.uuid().nullable(),
-    subscriptionExpiresAt: z.null(),
+    subscriptionExpiresAt: z.string().nullable(),
   })
   .strict();
 

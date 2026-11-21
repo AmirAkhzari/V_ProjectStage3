@@ -4,6 +4,7 @@ import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
 import { AppError } from '../../../platform/http/errors.js';
 import {
   MY_SHOPKEEPER_SELECT,
+  readMySubscriptionSummary,
   toMyProfileView,
   type MyProfileView,
   type MyShopkeeperRow,
@@ -65,7 +66,10 @@ export async function updateMyName(
     );
     const row = current.rows[0];
     if (!row || row.status !== 'active') return null;
-    if (row.name === input.name) return toMyProfileView(row);
+    // A14: A8 answers the same profile A7 does, so the plan is read on every path.
+    if (row.name === input.name) {
+      return toMyProfileView(row, await readMySubscriptionSummary(tx.client, shopkeeperId));
+    }
 
     const updated = await tx.client.query<MyShopkeeperRow>(
       `UPDATE customers.shopkeepers SET name = $2 WHERE id = $1
@@ -74,7 +78,7 @@ export async function updateMyName(
     );
     const next = updated.rows[0];
     if (!next) return null;
-    const view = toMyProfileView(next);
+    const view = toMyProfileView(next, await readMySubscriptionSummary(tx.client, shopkeeperId));
     await tx.client.query(
       `INSERT INTO platform.audit_log (
          id, at, actor_type, actor_id, actor_name, distributor_id,

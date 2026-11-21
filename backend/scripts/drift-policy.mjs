@@ -30,6 +30,8 @@ export const ALLOWED_TABLES = new Set([
   'customers.shopkeepers',
   // A9/A10: the shop's own address book.
   'customers.addresses',
+  // A14: the shop's Pro subscription periods (read by A14, written with the payment slice).
+  'membership.subscriptions',
 ]);
 
 const TABLE_KIND = '(?:(?:GLOBAL|LOCAL)\\s+)?(?:TEMP(?:ORARY)?\\s+|UNLOGGED\\s+)?';
