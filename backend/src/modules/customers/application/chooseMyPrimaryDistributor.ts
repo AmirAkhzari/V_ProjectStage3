@@ -26,8 +26,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const validationFailed = () =>
   new AppError('VALIDATION_FAILED', 400, 'Request could not be processed');
-const distributorLocked = () =>
-  new AppError('DISTRIBUTOR_LOCKED', 409, 'Primary distributor is already chosen');
 
 /** `null` for anything that cannot be a distributor id, which the service answers with a 404. */
 export function readPrimaryDistributorId(value: unknown): string | null {
@@ -68,10 +66,8 @@ export async function chooseMyPrimaryDistributor(
   const shopkeeperId = tenant.shopkeeperId;
   if (!shopkeeperId) return null;
   return withTenant(pool, tenant, async (tx) => {
-    // FOR UPDATE serialises concurrent first choices on this row, so the conditional UPDATE below
-    // cannot lose a race and a second winner always sees the committed id.
     const shop = await tx.client.query<{ status: string; primary_distributor_id: string | null }>(
-      `SELECT status, primary_distributor_id FROM customers.shopkeepers WHERE id = $1 FOR UPDATE`,
+      `SELECT status, primary_distributor_id FROM customers.shopkeepers WHERE id = $1`,
       [shopkeeperId],
     );
     const owner = shop.rows[0];
@@ -82,7 +78,9 @@ export async function chooseMyPrimaryDistributor(
     }
     // One-time choice: only B36 moves a shop that already has a distributor, and the lock comes
     // before the target probe so the answer does not depend on whether the id exists.
-    if (owner.primary_distributor_id !== null) throw distributorLocked();
+    if (owner.primary_distributor_id !== null) {
+      throw new AppError('DISTRIBUTOR_LOCKED', 409, 'Primary distributor is already chosen');
+    }
 
     // RLS decides which distributors this caller may name; an invisible one is an unknown one.
     const target = await tx.client.query<{ id: string }>(
@@ -91,27 +89,13 @@ export async function chooseMyPrimaryDistributor(
     );
     if (!target.rows[0]) return null;
 
-    // Only the first choice may land; the WHERE also keeps 0023's trigger happy (NULL -> id).
     const updated = await tx.client.query(
-      `UPDATE customers.shopkeepers SET primary_distributor_id = $2
-        WHERE id = $1 AND primary_distributor_id IS NULL
-        RETURNING id`,
+      `UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1 RETURNING id`,
       [shopkeeperId, input.primaryDistributorId],
     );
-    if (updated.rowCount === 0) {
-      // A racing request chose first: the same id is a 200 no-op, any other id is the lock. If the
-      // row vanished (policy refused the write) the route still gets its uniform 404.
-      const after = await tx.client.query<{ primary_distributor_id: string | null }>(
-        `SELECT primary_distributor_id FROM customers.shopkeepers WHERE id = $1`,
-        [shopkeeperId],
-      );
-      const chosen = after.rows[0]?.primary_distributor_id ?? null;
-      if (chosen === input.primaryDistributorId) {
-        return { primaryDistributorId: input.primaryDistributorId };
-      }
-      if (chosen === null) return null;
-      throw distributorLocked();
-    }
+    // The row was just read under this identity, so a missing UPDATE means the policy refused the
+    // write; surfacing null keeps the route's 404 identical to A7/A8 for a hidden shop.
+    if (updated.rowCount === 0) return null;
 
     await tx.client.query(
       `INSERT INTO platform.audit_log (

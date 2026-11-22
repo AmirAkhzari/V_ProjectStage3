@@ -16,7 +16,7 @@ const S = 'staff-a',
   S2 = 'staff-b';
 const OWN = '04000000-0000-4000-8000-000000000001',
   OTHER = '04000000-0000-4000-8000-000000000002';
-type Ctx = TenantContext & { subjectId?: string };
+type Ctx = Partial<TenantContext> & { subjectId?: string };
 
 describe('FIX PR1 containment (items 1-4)', () => {
   let deps: StartedPostgresRoles, ownerPool: pg.Pool, appPool: pg.Pool, identityPool: pg.Pool;
@@ -28,6 +28,13 @@ describe('FIX PR1 containment (items 1-4)', () => {
     });
   const expectCode = (run: Promise<unknown>, code: string) =>
     expect(run).rejects.toMatchObject({ code });
+  const rows = (pool: pg.Pool, c: Ctx, sql: string, params: unknown[] = []) =>
+    as(pool, c, (client) => client.query(sql, params)).then((r) => r.rowCount);
+  const denied = (pool: pg.Pool, c: Ctx, sql: string, params: unknown[] = []) =>
+    expectCode(
+      as(pool, c, (client) => client.query(sql, params)),
+      '42501',
+    );
   const insertKey = (scope: string) => (client: pg.PoolClient) =>
     client.query(
       `INSERT INTO platform.idempotency_keys (scope, subject_id, key, request_hash, created_at) VALUES ($1, $2, 'new', 'h', now())`,
@@ -58,10 +65,8 @@ describe('FIX PR1 containment (items 1-4)', () => {
     );
   }, 120_000);
   afterAll(async () => {
-    (await identityPool?.end(),
-      await appPool?.end(),
-      await ownerPool?.end(),
-      await deps?.postgres.stop());
+    for (const pool of [identityPool, appPool, ownerPool]) await pool?.end();
+    await deps?.postgres.stop();
   });
 
   it('1: idempotency policy is scope+subject+tenant bound', async () => {
@@ -70,16 +75,8 @@ describe('FIX PR1 containment (items 1-4)', () => {
         .query<{ scope: string }>(`SELECT scope FROM platform.idempotency_keys ORDER BY scope`)
         .then((r) => r.rows.map((x) => x.scope));
     expect(await as(appPool, { distributorId: T2, subjectId: S }, scopes)).toEqual([`B27:${T2}`]);
-    expect(
-      (
-        await as(appPool, { distributorId: T2, subjectId: S }, (c) =>
-          c.query(
-            `UPDATE platform.idempotency_keys SET response = '{}' WHERE scope IN ($1, 'B83:driver')`,
-            [`B27:${T1}`],
-          ),
-        )
-      ).rowCount,
-    ).toBe(0);
+    const upd = `UPDATE platform.idempotency_keys SET response = '{}' WHERE scope IN ($1, 'B83:driver')`;
+    expect(await rows(appPool, { distributorId: T2, subjectId: S }, upd, [`B27:${T1}`])).toBe(0);
     await expectCode(
       as(appPool, { distributorId: T2, subjectId: S }, insertKey(`B27:${T1}`)),
       '42501',
@@ -110,43 +107,23 @@ describe('FIX PR1 containment (items 1-4)', () => {
 
   it('3: shop context cannot write subscriptions or payment money columns', async () => {
     const shop = { subjectType: 'shopkeeper' as const, shopkeeperId: SK_A };
-    await expectCode(
-      as(appPool, shop, (c) =>
-        c.query(
-          `INSERT INTO membership.subscriptions (id, shopkeeper_id, plan, amount, starts_at, expires_at, created_at) VALUES (gen_random_uuid(), $1, 'pro', 0, now(), now() + interval '1 day', now())`,
-          [SK_A],
-        ),
-      ),
-      '42501',
+    await denied(
+      appPool,
+      shop,
+      `INSERT INTO membership.subscriptions (id, shopkeeper_id, plan, amount, starts_at, expires_at, created_at) VALUES (gen_random_uuid(), $1, 'pro', 0, now(), now() + interval '1 day', now())`,
+      [SK_A],
     );
-    await expectCode(
-      as(appPool, shop, (c) =>
-        c.query(
-          `INSERT INTO payment.payments (id, shopkeeper_id, kind, amount, status, provider, idempotency_key, created_at, updated_at) VALUES (gen_random_uuid(), $1, 'subscription', 0, 'pending', 'mock', 'fix-pr1-new-0001', now(), now())`,
-          [SK_A],
-        ),
-      ),
-      '42501',
+    await denied(
+      appPool,
+      shop,
+      `INSERT INTO payment.payments (id, shopkeeper_id, kind, amount, status, provider, idempotency_key, created_at, updated_at) VALUES (gen_random_uuid(), $1, 'subscription', 0, 'pending', 'mock', 'fix-pr1-new-0001', now(), now())`,
+      [SK_A],
     );
-    for (const sql of [`SET status = 'paid'`, `SET paid_at = now()`, `SET amount = 1`])
-      await expectCode(
-        as(appPool, shop, (c) => c.query(`UPDATE payment.payments ${sql} WHERE id = $1`, [OWN])),
-        '42501',
-      );
-    expect(
-      (
-        await as(appPool, shop, (c) =>
-          c.query(`UPDATE payment.payments SET authority = 'a2' WHERE id = $1`, [OWN]),
-        )
-      ).rowCount,
-    ).toBe(1);
-    expect(
-      (
-        await as(appPool, shop, (c) =>
-          c.query(`UPDATE payment.payments SET authority = 'a3' WHERE id = $1`, [OTHER]),
-        )
-      ).rowCount,
-    ).toBe(0);
+    for (const set of [`status = 'paid'`, `paid_at = now()`, `amount = 1`])
+      await denied(appPool, shop, `UPDATE payment.payments SET ${set} WHERE id = $1`, [OWN]);
+    const auth = `UPDATE payment.payments SET authority = 'a2' WHERE id = $1`;
+    expect(await rows(appPool, shop, auth, [OWN])).toBe(1);
+    expect(await rows(appPool, shop, auth, [OTHER])).toBe(0);
     const cols = await ownerPool.query<{ column_name: string; allowed: boolean }>(
       `SELECT column_name, has_column_privilege('vproject_app', 'payment.payments', column_name, 'UPDATE') AS allowed FROM information_schema.columns WHERE table_schema = 'payment' AND table_name = 'payments' ORDER BY column_name`,
     );
@@ -156,67 +133,25 @@ describe('FIX PR1 containment (items 1-4)', () => {
       'redirect_url',
       'updated_at',
     ]);
-    for (const table of ['payment.payments', 'membership.subscriptions'])
-      expect(
-        (
-          await ownerPool.query<{ i: boolean }>(
-            `SELECT has_table_privilege('vproject_app', $1, 'INSERT') AS i`,
-            [table],
-          )
-        ).rows[0]?.i,
-      ).toBe(false);
+    const ins = await ownerPool.query(
+      `SELECT has_table_privilege('vproject_app', t, 'INSERT') AS i FROM unnest(ARRAY['payment.payments', 'membership.subscriptions']) t`,
+    );
+    expect(ins.rows).toEqual([{ i: false }, { i: false }]);
   });
 
   it('4: shopkeepers guard allows only the first primary choice', async () => {
     const shop = { subjectType: 'shopkeeper' as const, shopkeeperId: SK_A };
-    await expectCode(
-      as(appPool, shop, (c) =>
-        c.query(`UPDATE customers.shopkeepers SET status = 'blocked' WHERE id = $1`, [SK_A]),
-      ),
-      '42501',
-    );
-    await expectCode(
-      as(appPool, shop, (c) =>
-        c.query(`UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`, [
-          SK_A,
-          T2,
-        ]),
-      ),
-      '42501',
-    );
-    await expectCode(
-      as(appPool, { subjectType: 'system', shopkeeperId: SK_A }, (c) =>
-        c.query(`UPDATE customers.shopkeepers SET status = 'blocked' WHERE id = $1`, [SK_A]),
-      ),
-      '42501',
-    );
+    const status = (v: string) => `UPDATE customers.shopkeepers SET status = '${v}' WHERE id = $1`;
+    const pick = `UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`;
+    await denied(appPool, shop, status('blocked'), [SK_A]);
+    await denied(appPool, shop, pick, [SK_A, T2]);
+    await denied(appPool, { subjectType: 'system', shopkeeperId: SK_A }, status('blocked'), [SK_A]);
     await ownerPool.query(
       `UPDATE customers.shopkeepers SET primary_distributor_id = NULL WHERE id = $1`,
       [SK_A],
     );
-    expect(
-      (
-        await as(appPool, shop, (c) =>
-          c.query(`UPDATE customers.shopkeepers SET primary_distributor_id = $2 WHERE id = $1`, [
-            SK_A,
-            T2,
-          ]),
-        )
-      ).rowCount,
-    ).toBe(1);
-    expect(
-      (
-        await as(appPool, { subjectType: 'staff', distributorId: T2 }, (c) =>
-          c.query(`UPDATE customers.shopkeepers SET status = 'blocked' WHERE id = $1`, [SK_A]),
-        )
-      ).rowCount,
-    ).toBe(1);
-    expect(
-      (
-        await as(appPool, { isPlatform: true }, (c) =>
-          c.query(`UPDATE customers.shopkeepers SET status = 'active' WHERE id = $1`, [SK_A]),
-        )
-      ).rowCount,
-    ).toBe(1);
+    expect(await rows(appPool, shop, pick, [SK_A, T2])).toBe(1);
+    expect(await rows(appPool, { distributorId: T2 }, status('blocked'), [SK_A])).toBe(1);
+    expect(await rows(appPool, { isPlatform: true }, status('active'), [SK_A])).toBe(1);
   });
 });
