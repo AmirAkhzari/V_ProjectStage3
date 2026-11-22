@@ -95,7 +95,7 @@ export async function updateDistributorProfile(
   const store = new PgIdempotencyStore(pool);
 
   if (key) {
-    // 0023's idempotency policy reads app.distributor_id / app.is_platform from the tx.
+    // 0023's idempotency policy reads the tenant GUCs (distributor or platform scope) from the tx.
     const claim = await withTenant(pool, tenant, (tx) =>
       store.claim(scope, input.staffId, key, hash, tx.client),
     );
