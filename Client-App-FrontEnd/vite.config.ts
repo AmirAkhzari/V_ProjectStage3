@@ -84,7 +84,7 @@ function cardPaymentMockGate(): Plugin {
   return {
     name: 'card-payment-mock-gate',
     configResolved(config) {
-      assertProductionMockOff(config.mode, config.env.VITE_CARD_PAYMENTS_MOCK ?? process.env.VITE_CARD_PAYMENTS_MOCK)
+      assertProductionMockOff(config.command, config.mode, config.env.VITE_CARD_PAYMENTS_MOCK ?? process.env.VITE_CARD_PAYMENTS_MOCK)
     },
   }
 }

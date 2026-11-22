@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ApiClientError } from "@/lib/apiError";
 import { formatToman, toFaDigits } from "@/lib/format";
 import {
   describeStatus,
@@ -152,12 +153,21 @@ export function CardPaymentScreen({
   reauthRef.current = onReauth;
   const blocked = submitBlocked(notice, now);
 
+  async function fail(err: unknown) {
+    if (err instanceof ApiClientError && err.status === 401) setPayment(null);
+    setNotice(await handleCardPaymentError(err, { logout: () => logoutRef.current(), redirect: (path) => reauthRef.current(path) }));
+  }
+
   async function reload() {
-    const next = await api.getPayment(paymentId);
-    rememberPayment(next);
-    noteCardPaymentAuthed();
-    setPayment(next);
-    return next;
+    try {
+      const next = await api.getPayment(paymentId);
+      rememberPayment(next);
+      noteCardPaymentAuthed();
+      setPayment(next);
+      return next;
+    } catch (err) {
+      await fail(err);
+    }
   }
 
   useEffect(() => {
@@ -168,7 +178,7 @@ export function CardPaymentScreen({
       noteCardPaymentAuthed();
       setPayment(next);
     }).catch(async (err) => {
-      if (!cancelled) setNotice(await handleCardPaymentError(err, { logout: () => logoutRef.current(), redirect: (path) => reauthRef.current(path) }));
+      if (!cancelled) await fail(err);
     });
     return () => {
       cancelled = true;
@@ -208,7 +218,7 @@ export function CardPaymentScreen({
       await reload();
       setNotice(null);
     } catch (err) {
-      setNotice(await handleCardPaymentError(err, { logout: () => logoutRef.current(), redirect: (path) => reauthRef.current(path) }));
+      await fail(err);
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -227,7 +237,7 @@ export function CardPaymentScreen({
           {payment.deadline_at ? <p>مهلت <bdi dir="ltr">{formatTehran(payment.deadline_at)}</bdi></p> : null}
           {payment.sla_due_at ? <p>بررسی <bdi dir="ltr">{formatTehran(payment.sla_due_at)}</bdi></p> : null}
           {payment.cool_down_ends_at ? <p>فاصله <bdi dir="ltr">{formatTehran(payment.cool_down_ends_at)}</bdi></p> : null}
-          {payment.deadline_at ? <TickingLabel targetMs={Date.parse(payment.deadline_at)} onZero={() => { void reload().catch(() => undefined); }} liveId="deadline-live" visualId="deadline-visual" /> : null}
+          {payment.deadline_at ? <TickingLabel targetMs={Date.parse(payment.deadline_at)} onZero={() => { void reload(); }} liveId="deadline-live" visualId="deadline-visual" /> : null}
           {payment.status === "pending" ? (
             <>
               <PayerDestination account={payment.destination.full_account} holderName={payment.destination.holder_name} bankName={payment.destination.bank_name} />

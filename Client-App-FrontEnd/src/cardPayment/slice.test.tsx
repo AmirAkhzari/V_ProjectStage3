@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   clearCardPaymentState as clearPayments,
   describeStatus,
   handleCardPaymentError,
+  noteCardPaymentAuthed,
   normalizeTracking,
   provisionalCodes,
   readPayment,
@@ -33,6 +35,7 @@ import {
 import { cardPaymentMock, testPayment } from "./mock/cardPaymentMock";
 import { SLICE_F_MOCK_MARKER, TEST_BANK, TEST_HOLDER, TEST_IBAN, TEST_PAN, TEST_PAN_MASKED } from "./mock/fixtures";
 import { assertProductionMockOff } from "./mockGate";
+import CardPaymentPage from "@/pages/CardPaymentPage";
 import { CardPaymentScreen, MaskedDestination, PayerDestination, RejectLine, StatusBadge, TickingLabel } from "./ui";
 
 function payerOnly(_account: FullAccountNumber) {
@@ -168,6 +171,14 @@ describe("card payment errors", () => {
       expect(first.message).not.toContain("leak");
       expect(readPayment("TEST_pay")).toBeUndefined();
     }
+    noteCardPaymentAuthed();
+    redirect.mockClear();
+    logout.mockClear();
+    rememberPayment(testPayment());
+    await handleCardPaymentError(new ApiClientError("again", "UNAUTHENTICATED", 401), { logout, redirect, now });
+    expect(redirect).toHaveBeenCalledTimes(1);
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(readPayment("TEST_pay")).toBeUndefined();
   });
 
   it("honours Retry-After seconds and HTTP dates without auto retry", async () => {
@@ -265,6 +276,69 @@ describe("payer flow", () => {
     expect(keys[0]).toBe(keys[1]);
   });
 
+  it("logs out and clears the number when the deadline refetch returns 401", async () => {
+    resetCardPaymentReauthForTests();
+    const logout = vi.fn(async () => undefined);
+    const onReauth = vi.fn();
+    let reads = 0;
+    let failRefetch: (err: unknown) => void = () => undefined;
+    const pending = new Promise<never>((_ok, reject) => { failRefetch = reject; });
+    const api: CardPaymentApi = {
+      async getPayment() {
+        reads += 1;
+        if (reads === 1) return testPayment({ deadline_at: new Date(Date.now() - 1000).toISOString() });
+        return pending;
+      },
+      async submitReceipt() { throw new Error("no"); },
+    };
+    render(<CardPaymentScreen paymentId="TEST_pay" api={api} onLogout={logout} onReauth={onReauth} />);
+    expect(await screen.findByText(TEST_PAN)).toBeInTheDocument();
+    await act(async () => { failRefetch(new ApiClientError(`leak ${TEST_PAN}`, "UNAUTHENTICATED", 401)); });
+    await waitFor(() => expect(logout).toHaveBeenCalledTimes(1));
+    expect(onReauth).toHaveBeenCalledWith("/login");
+    expect(screen.queryByText(TEST_PAN)).not.toBeInTheDocument();
+    expect(readPayment("TEST_pay")).toBeUndefined();
+    expect(screen.getByRole("alert").textContent).not.toContain(TEST_PAN);
+  });
+
+  it("starts a fresh key, file and tracking on the next payment", async () => {
+    const keys: string[] = [];
+    const api: CardPaymentApi = {
+      getPayment: async (id) => testPayment({ id }),
+      async submitReceipt(_id, _body, key) {
+        keys.push(key);
+        throw new ApiClientError("later", "SERVICE_UNAVAILABLE", 503);
+      },
+    };
+    function Switch() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button type="button" onClick={() => navigate("/card-payment/B")}>بعدی</button>
+          <Routes>
+            <Route path="/card-payment/:id" element={<CardPaymentPage api={api} />} />
+          </Routes>
+        </>
+      );
+    }
+    render(<MemoryRouter initialEntries={["/card-payment/A"]}><Switch /></MemoryRouter>);
+    expect(await screen.findByText(TEST_PAN)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("پیگیری"), { target: { value: "123456" } });
+    fireEvent.change(screen.getByLabelText("رسید"), { target: { files: [new File(["x"], "TEST_a.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
+    expect(await screen.findByText("بعداً دوباره تلاش کنید")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "بعدی" }));
+    expect(await screen.findByLabelText("پیگیری")).toHaveValue("");
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByText("بعداً دوباره تلاش کنید")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("پیگیری"), { target: { value: "654321" } });
+    fireEvent.change(screen.getByLabelText("رسید"), { target: { files: [new File(["y"], "TEST_b.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
+    expect(await screen.findByText("بعداً دوباره تلاش کنید")).toBeInTheDocument();
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
   it("disables submit while a 429 countdown is running", async () => {
     const submit = vi.fn(async () => {
       throw new ApiClientError("RAW", "RATE_LIMITED", 429, null, "30");
@@ -341,10 +415,11 @@ describe("logout and production bundle", () => {
   });
 
   it("omits the mock from a production bundle and rejects the prod flag", async () => {
-    expect(() => assertProductionMockOff("production", "1")).toThrow(/non-development/);
-    expect(() => assertProductionMockOff("preview", "1")).toThrow(/non-development/);
-    expect(() => assertProductionMockOff("development", "1")).not.toThrow();
-    expect(() => assertProductionMockOff("production", undefined)).not.toThrow();
+    expect(() => assertProductionMockOff("build", "development", "1")).toThrow(/non-development/);
+    expect(() => assertProductionMockOff("build", "production", "1")).toThrow(/non-development/);
+    expect(() => assertProductionMockOff("serve", "preview", "1")).toThrow(/non-development/);
+    expect(() => assertProductionMockOff("serve", "development", "1")).not.toThrow();
+    expect(() => assertProductionMockOff("build", "production", undefined)).not.toThrow();
     delete process.env.VITE_CARD_PAYMENTS_MOCK;
     const clean = await bundle();
     expect(clean).not.toContain(SLICE_F_MOCK_MARKER);
@@ -364,7 +439,7 @@ function dump(store: Storage) {
 }
 
 function mockGate(): Plugin {
-  return { name: "card-payment-mock-gate", configResolved(config) { assertProductionMockOff(config.mode, config.env.VITE_CARD_PAYMENTS_MOCK ?? process.env.VITE_CARD_PAYMENTS_MOCK); } };
+  return { name: "card-payment-mock-gate", configResolved(config) { assertProductionMockOff(config.command, config.mode, config.env.VITE_CARD_PAYMENTS_MOCK ?? process.env.VITE_CARD_PAYMENTS_MOCK); } };
 }
 
 async function bundle() {
