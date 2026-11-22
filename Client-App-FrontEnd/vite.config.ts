@@ -6,6 +6,7 @@ import path from 'node:path'
 import { VitePWA } from 'vite-plugin-pwa'
 
 import siteConfiguration from './.figma/make/site.json'
+import { assertProductionMockOff } from './src/cardPayment/mockGate'
 
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -20,6 +21,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      cardPaymentMockGate(),
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
@@ -77,6 +79,15 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+function cardPaymentMockGate(): Plugin {
+  return {
+    name: 'card-payment-mock-gate',
+    configResolved(config) {
+      assertProductionMockOff(config.command, config.mode, config.env.VITE_CARD_PAYMENTS_MOCK ?? process.env.VITE_CARD_PAYMENTS_MOCK)
+    },
+  }
+}
 
 type FigmaSiteConfiguration = {
   title?: string

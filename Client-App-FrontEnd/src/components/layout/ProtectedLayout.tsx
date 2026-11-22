@@ -11,6 +11,7 @@ const WITHOUT_PRIMARY = [
   "/onboarding/distributor",
   "/subscription",
   "/pay",
+  "/card-payment",
   "/payment-failed",
   "/profile",
   "/support",

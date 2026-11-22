@@ -1,0 +1,1 @@
+export { loadCardPaymentApi } from "./model";
