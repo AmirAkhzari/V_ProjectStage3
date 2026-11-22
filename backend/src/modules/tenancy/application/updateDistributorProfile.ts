@@ -84,16 +84,21 @@ export async function updateDistributorProfile(
   input: DistributorProfileUpdateInput,
 ): Promise<DistributorView> {
   if (!UUID.test(input.id)) throw notFound();
-  const current = await findDistributor(pool, tenant, input.id);
+  // The scope key is the canonical id: an upper-case call and a lower-case replay share one row.
+  const id = input.id.toLowerCase();
+  const current = await findDistributor(pool, tenant, id);
   if (!current) throw notFound();
 
   const key = input.idempotencyKey;
-  const scope = `B27:${input.id}`;
+  const scope = `B27:${id}`;
   const hash = requestHash(input.name);
   const store = new PgIdempotencyStore(pool);
 
   if (key) {
-    const claim = await store.claim(scope, input.staffId, key, hash);
+    // 0023's idempotency policy reads the tenant GUCs (distributor or platform scope) from the tx.
+    const claim = await withTenant(pool, tenant, (tx) =>
+      store.claim(scope, input.staffId, key, hash, tx.client),
+    );
     if (claim.status === 'completed') {
       if (claim.record.requestHash !== hash) throw idempotencyReuse();
       // A replay is the stored response; no second update and no second audit row.
@@ -109,7 +114,7 @@ export async function updateDistributorProfile(
             SET name = $2
           WHERE id = $1
           RETURNING id, name, status, created_at`,
-        [input.id, input.name],
+        [id, input.name],
       );
       const row = updated.rows[0];
       // RLS hides a foreign tenant, so this is the same 404 as a missing row.
@@ -150,7 +155,11 @@ export async function updateDistributorProfile(
       return view;
     });
   } catch (error) {
-    if (key) await store.abandon(scope, input.staffId, key).catch(() => {});
+    if (key) {
+      await withTenant(pool, tenant, (tx) =>
+        store.abandon(scope, input.staffId, key, tx.client),
+      ).catch(() => {});
+    }
     throw error;
   }
 }

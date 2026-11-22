@@ -33,15 +33,18 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
   let deps: StartedPostgresRoles;
   let appPool: pg.Pool;
   let workerPool: pg.Pool;
+  let identityPool: pg.Pool;
   let ownerPool: pg.Pool;
 
   beforeAll(async () => {
     deps = await startPostgresWithRoles();
     appPool = new pg.Pool({ connectionString: deps.appUrl });
     workerPool = new pg.Pool({ connectionString: deps.workerUrl });
+    identityPool = new pg.Pool({ connectionString: deps.identityUrl });
     ownerPool = new pg.Pool({ connectionString: deps.ownerUrl });
     attachPgTeardownGuard(appPool);
     attachPgTeardownGuard(workerPool);
+    attachPgTeardownGuard(identityPool);
     attachPgTeardownGuard(ownerPool);
     await ownerPool.query(`
       CREATE TABLE platform.outbox_fault_probe (
@@ -55,6 +58,7 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
   afterAll(async () => {
     await appPool?.end();
     await workerPool?.end();
+    await identityPool?.end();
     await ownerPool?.end();
     await deps?.postgres.stop();
   });
@@ -233,17 +237,27 @@ describe('Postgres outbox / inbox / audit / idempotency', () => {
   });
 
   it('stores idempotency keys for the same scope/subject/key', async () => {
-    const store = new PgIdempotencyStore(appPool);
-    await store.put('checkout', 'sub-1', 'key-1', {
+    // 0023 allows the identity role only within B83:<driver>; the app role only within B27 tenancy.
+    const store = new PgIdempotencyStore(identityPool);
+    const scope = `B83:${randomUUID()}`;
+    await store.put(scope, 'sub-1', 'key-1', {
       requestHash: 'abc',
       statusCode: 200,
       response: { ok: true },
     });
-    const hit = await store.get('checkout', 'sub-1', 'key-1');
+    const hit = await store.get(scope, 'sub-1', 'key-1');
     expect(hit?.statusCode).toBe(200);
     expect(hit?.requestHash).toBe('abc');
-    const replay = await store.get('checkout', 'sub-1', 'key-1');
+    const replay = await store.get(scope, 'sub-1', 'key-1');
     expect(replay).toEqual(hit);
-    expect(await store.get('checkout', 'sub-1', 'other-key')).toBeUndefined();
+    expect(await store.get(scope, 'sub-1', 'other-key')).toBeUndefined();
+    // An arbitrary scope on the app role fails closed in the policy.
+    await expect(
+      new PgIdempotencyStore(appPool).put('checkout', 'sub-1', 'key-1', {
+        requestHash: 'abc',
+        statusCode: 200,
+        response: { ok: true },
+      }),
+    ).rejects.toThrow(/row-level security/i);
   });
 });

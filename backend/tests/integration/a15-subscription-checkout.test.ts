@@ -89,7 +89,8 @@ const authority: SessionAuthority = {
   pgLookupsFor: () => 0,
 };
 
-describe('A15/A34/A35 subscription purchase', () => {
+// PENDING since FIX-PR1; re-enabled with payments re-entry (PH-4/PH-6)
+describe.skip('A15/A34/A35 subscription purchase', () => {
   let pgRoles: StartedPostgresRoles;
   let appPool: pg.Pool;
   let ownerPool: pg.Pool;

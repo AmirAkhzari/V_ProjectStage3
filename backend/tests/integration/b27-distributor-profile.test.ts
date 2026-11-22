@@ -46,6 +46,15 @@ const PRINCIPALS = new Map<string, Principal>([
     },
   ],
   [
+    'da1-manage-b',
+    {
+      sid: 'sid-da1-manage-b',
+      role: 'distributor_admin',
+      distributorId: DIST_1,
+      permissions: ['distributors.manage'],
+    },
+  ],
+  [
     'da2-manage',
     {
       sid: 'sid-da2-manage',
@@ -286,6 +295,30 @@ describe('B27 tenant profile update', () => {
     expect(scoped.statusCode).toBe(404);
     expect(scoped.json()).toEqual(NOT_FOUND);
     expect(await nameOf(DIST_2)).toEqual({ name: 'پخش دوم', status: 'paused' });
+  });
+
+  it('scopes an Idempotency-Key to the caller, so a same-tenant colleague is not replayed', async () => {
+    const key = 'b27-shared-key-0123456789';
+    const before = await auditRows();
+    const first = await put('da1-manage', DIST_1, { name: 'پخش الف' }, { 'idempotency-key': key });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toMatchObject({ id: DIST_1, name: 'پخش الف' });
+    const afterFirst = await auditRows();
+    expect(afterFirst).toHaveLength(before.length + 1);
+
+    const second = await put('da1-manage-b', DIST_1, { name: 'پخش ب' }, { 'idempotency-key': key });
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json()).toMatchObject({ id: DIST_1, name: 'پخش ب' });
+    expect(second.body).not.toBe(first.body);
+    expect(await nameOf(DIST_1)).toEqual({ name: 'پخش ب', status: 'active' });
+
+    const afterSecond = await auditRows();
+    expect(afterSecond).toHaveLength(afterFirst.length + 1);
+    expect(afterSecond.at(-1)).toMatchObject({
+      action: 'distributor_profile_updated',
+      actor_id: 'staff-sid-da1-manage-b',
+      data: { distributorId: DIST_1, nameBefore: 'پخش الف', nameAfter: 'پخش ب' },
+    });
   });
 
   it('fails closed with 503 when no app-role pool is wired', async () => {

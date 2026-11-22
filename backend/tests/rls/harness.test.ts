@@ -14,7 +14,7 @@ import {
   type StartedPostgresRoles,
 } from '../helpers/containers.js';
 
-const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
+const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log'];
 const GATE_SCHEMAS = DB_SCHEMAS;
 const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}`));
 /** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
@@ -33,6 +33,7 @@ const HARNESS_TENANT_TABLES = [
   'identity.staff_memberships',
   'membership.subscriptions',
   'payment.payments',
+  'platform.idempotency_keys',
   'platform.rls_probe',
   'tenancy.distributors',
 ] as const;
@@ -694,6 +695,11 @@ describe('RLS harness skeleton', () => {
     );
     const active = await ownerPool.query<{ c: string }>(
       `SELECT count(*)::text AS c FROM tenancy.distributors WHERE status = 'active'`,
+    );
+    // 0023's guard only allows the one-time choice from NULL, so clear the seed's primary first.
+    await ownerPool.query(
+      `UPDATE customers.shopkeepers SET primary_distributor_id = NULL WHERE id = $1`,
+      [SK_A],
     );
     await withTenant(appPool, { subjectType: 'shopkeeper', shopkeeperId: SK_A }, async (tx) => {
       // 0020's distributors_shopkeeper_read shows the pickable distributors and nothing else — the
