@@ -6,10 +6,8 @@ on:
     paths:
       - 'Client-App-FrontEnd/**'
       - '.github/workflows/client-card-payment.yml'
+  # No paths filter on pull_request: slice-f must report on every PR (L-11-1).
   pull_request:
-    paths:
-      - 'Client-App-FrontEnd/**'
-      - '.github/workflows/client-card-payment.yml'
 
 permissions:
   contents: read
