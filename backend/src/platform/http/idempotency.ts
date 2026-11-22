@@ -21,8 +21,18 @@ export type IdempotencyClaim =
 export interface IdempotencyStore {
   get(scope: string, subjectId: string, key: string): Promise<IdempotencyRecord | undefined>;
   put(scope: string, subjectId: string, key: string, record: IdempotencyRecord): Promise<void>;
-  /** Atomically take an absent or stale in-progress row. */
-  claim(scope: string, subjectId: string, key: string, hash: string): Promise<IdempotencyClaim>;
+  /**
+   * Atomically take an absent or stale in-progress row. Pass `executor` when the caller already
+   * holds a tenant transaction (B27): the store then sets `app.subject_id` on that transaction
+   * instead of opening its own.
+   */
+  claim(
+    scope: string,
+    subjectId: string,
+    key: string,
+    hash: string,
+    executor?: IdempotencyExecutor,
+  ): Promise<IdempotencyClaim>;
   complete(
     scope: string,
     subjectId: string,
@@ -31,7 +41,12 @@ export interface IdempotencyStore {
     executor?: IdempotencyExecutor,
   ): Promise<void>;
   /** Drop our in-progress row after a failure so the key can be retried. */
-  abandon(scope: string, subjectId: string, key: string): Promise<void>;
+  abandon(
+    scope: string,
+    subjectId: string,
+    key: string,
+    executor?: IdempotencyExecutor,
+  ): Promise<void>;
 }
 
 export class InMemoryIdempotencyStore implements IdempotencyStore {
@@ -47,7 +62,13 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     return Promise.resolve();
   }
 
-  claim(scope: string, subjectId: string, key: string, hash: string): Promise<IdempotencyClaim> {
+  claim(
+    scope: string,
+    subjectId: string,
+    key: string,
+    hash: string,
+    _executor?: IdempotencyExecutor,
+  ): Promise<IdempotencyClaim> {
     const id = compound(scope, subjectId, key);
     const done = this.records.get(id);
     if (done) return Promise.resolve({ status: 'completed', record: done });
@@ -67,7 +88,12 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
     return Promise.resolve();
   }
 
-  abandon(scope: string, subjectId: string, key: string): Promise<void> {
+  abandon(
+    scope: string,
+    subjectId: string,
+    key: string,
+    _executor?: IdempotencyExecutor,
+  ): Promise<void> {
     this.inProgress.delete(compound(scope, subjectId, key));
     return Promise.resolve();
   }

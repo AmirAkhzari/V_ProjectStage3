@@ -14,7 +14,7 @@ import {
   type StartedPostgresRoles,
 } from '../helpers/containers.js';
 
-const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log', 'idempotency_keys'];
+const INFRA_TABLES = ['outbox_events', 'inbox_processed', 'audit_log'];
 const GATE_SCHEMAS = DB_SCHEMAS;
 const RLS_EXEMPT_TABLES = new Set(INFRA_TABLES.map((table) => `platform.${table}`));
 /** Identity tables that use USING (true); still ENABLE+FORCE RLS (AppSec 7-3). */
