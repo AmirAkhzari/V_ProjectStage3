@@ -10,6 +10,7 @@
     "format": "oxfmt",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "check:card-payment-bundle": "node scripts/assert-no-card-payment-mock.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

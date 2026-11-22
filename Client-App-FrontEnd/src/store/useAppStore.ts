@@ -11,6 +11,7 @@ import { applyTheme, readStoredTheme, type Theme } from "@/lib/theme";
 import { cityIdFromName, distributorServesCity, getDistributor, resolveDistributorForCity, userCity } from "@/lib/distributors";
 import { canAccessDistributor, canBrowseMarketplace } from "@/lib/plan";
 import { isMarketplaceRequiresPro } from "@/lib/apiError";
+import { clearCardPaymentState } from "@/cardPayment/model";
 
 type DraftPin = {
   city: string;
@@ -265,6 +266,7 @@ export const useAppStore = create<AppState>()(
       },
       setSession: (session) => set({ session }),
       async logout() {
+        clearCardPaymentState();
         await api.logout();
         set({
           session: null,

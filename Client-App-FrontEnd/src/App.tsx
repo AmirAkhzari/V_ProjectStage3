@@ -10,6 +10,7 @@ import CategoryPage from "@/pages/CategoryPage";
 import CartPage from "@/pages/CartPage";
 import CheckoutPage from "@/pages/CheckoutPage";
 import PaymentPage, { PaymentFailedPage } from "@/pages/PaymentPage";
+import CardPaymentPage from "@/pages/CardPaymentPage";
 import OrdersPage, { OrderDetailPage } from "@/pages/OrdersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import WalletPage from "@/pages/WalletPage";
@@ -56,6 +57,7 @@ export default function App() {
         <Route element={<ProtectedLayout />}>
           <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/pay/:id" element={<PaymentPage />} />
+          <Route path="/card-payment/:id" element={<CardPaymentPage />} />
           <Route path="/pay/:id/result" element={<PaymentPage />} />
           <Route path="/payment-failed" element={<PaymentFailedPage />} />
           <Route path="/subscription" element={<SubscriptionPage />} />
