@@ -6,7 +6,7 @@ import type {
   SessionAuthority,
   SessionSnapshot,
 } from '../../src/platform/auth/sessionAuthority.js';
-import { testConfig } from '../helpers/config.js';
+import { productionApiConfig, testConfig } from '../helpers/config.js';
 import {
   attachPgTeardownGuard,
   startPostgresWithRoles,
@@ -55,6 +55,11 @@ const verifier: AccessTokenVerifier = {
     });
   },
 };
+
+function withoutRequestId(headers: Record<string, unknown>): Record<string, unknown> {
+  const { 'x-request-id': _requestId, ...rest } = headers;
+  return rest;
+}
 
 function snapshotOf(principal: Principal): SessionSnapshot {
   return {
@@ -219,6 +224,78 @@ describe('A14 /v1/app/me/subscription', () => {
       expect(response.json()).toEqual({
         error: { code: 'NOT_FOUND', message: 'Resource not found' },
       });
+    }
+  });
+
+  it('A9-1: an authenticated shop gets the catch-all 404 for A15/A34/A35 in prod and staging demo', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const probes = [
+      {
+        operationId: 'A15',
+        method: 'POST' as const,
+        route: '/v1/app/me/subscription/checkout',
+        url: '/v1/app/me/subscription/checkout',
+      },
+      {
+        operationId: 'A34',
+        method: 'GET' as const,
+        route: '/v1/app/payments/:id',
+        url: `/v1/app/payments/${id}`,
+      },
+      {
+        operationId: 'A35',
+        method: 'POST' as const,
+        route: '/v1/app/payments/:id/mock-complete',
+        url: `/v1/app/payments/${id}/mock-complete`,
+      },
+    ];
+    const boots = [
+      { name: 'production', config: productionApiConfig() },
+      {
+        name: 'staging demo',
+        config: productionApiConfig({
+          DEPLOY_ENV: 'staging',
+          DEMO_LOGIN_ENABLED: 'true',
+          RATE_DEMO_PER_IP_HOUR: '10',
+          RATE_DEMO_GLOBAL_DAY: '200',
+        }),
+      },
+    ];
+    for (const boot of boots) {
+      const mounted = await buildApp({
+        config: boot.config,
+        healthChecks: [],
+        verifier,
+        sessionAuthority: authority,
+        appDb: appPool,
+      });
+      try {
+        for (const probe of probes) {
+          expect(
+            mounted.hasRoute({ method: probe.method, url: probe.route }),
+            probe.operationId,
+          ).toBe(false);
+          const headers = { authorization: 'Bearer tok-pro', 'x-request-id': `a9-1-${boot.name}` };
+          const unknown = await mounted.inject({
+            method: probe.method,
+            url: '/v1/app/no-such-route',
+            headers,
+          });
+          const response = await mounted.inject({
+            method: probe.method,
+            url: probe.url,
+            headers,
+          });
+          expect(response.statusCode, `${boot.name} ${probe.operationId}`).toBe(404);
+          expect(response.body).toBe(unknown.body);
+          expect(response.json()).toEqual({
+            error: { code: 'NOT_FOUND', message: 'Resource not found' },
+          });
+          expect(withoutRequestId(response.headers)).toEqual(withoutRequestId(unknown.headers));
+        }
+      } finally {
+        await mounted.close();
+      }
     }
   });
 
