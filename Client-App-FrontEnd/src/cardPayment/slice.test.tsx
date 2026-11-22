@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,9 +16,7 @@ import {
   clearCardPaymentState as clearPayments,
   describeStatus,
   handleCardPaymentError,
-  messageForCode,
   normalizeTracking,
-  noteCardPaymentAuthed,
   provisionalCodes,
   readPayment,
   rememberPayment,
@@ -133,6 +131,9 @@ describe("account display", () => {
     expect(await screen.findByText("کپی شد")).toBeInTheDocument();
     expect(screen.getByText("کپی شد").textContent).toBe("کپی شد");
     expect(writeText).toHaveBeenCalledWith(TEST_IBAN);
+    const invalid = render(<PayerDestination account={asFullAccount("not-an-account")} holderName={TEST_HOLDER} bankName={TEST_BANK} />);
+    expect(invalid.container).not.toHaveTextContent("not-an-account");
+    expect(within(invalid.container).queryByRole("button", { name: "کپی" })).toBeNull();
   });
 });
 
@@ -150,35 +151,36 @@ describe("card payment errors", () => {
     sessionStorage.clear();
   });
 
-  it("redirects once on 401 and never shows the raw server text", async () => {
-    rememberPayment(testPayment());
-    const err = new ApiClientError(`leak ${TEST_PAN}`, "UNAUTHENTICATED", 401, { message: "leak" });
-    const first = await handleCardPaymentError(err, { logout, redirect, now });
-    const second = await handleCardPaymentError(err, { logout, redirect, now });
-    expect(redirect).toHaveBeenCalledTimes(1);
-    expect(redirect).toHaveBeenCalledWith("/login");
-    expect(logout).toHaveBeenCalledTimes(1);
-    expect(first.reauth).toBe(true);
-    expect(second.message).not.toContain(TEST_PAN);
-    expect(readPayment("TEST_pay")).toBeUndefined();
-    noteCardPaymentAuthed();
-    await handleCardPaymentError(err, { logout, redirect, now });
-    expect(redirect).toHaveBeenCalledTimes(2);
-    const other = await handleCardPaymentError(new ApiClientError("raw", "SESSION_REVOKED", 401), { logout, redirect, now });
-    expect(other.reauth).toBe(false);
-    expect(other.message).toBe(messageForCode("SESSION_REVOKED"));
-    expect(other.message).not.toContain("raw");
+  it("re-auths once for every 401 and never shows the raw server text", async () => {
+    for (const code of ["UNAUTHENTICATED", "SESSION_REVOKED", "TOKEN_TYPE_MISMATCH", "session_expired", undefined]) {
+      resetCardPaymentReauthForTests();
+      redirect.mockClear();
+      logout.mockClear();
+      rememberPayment(testPayment());
+      const err = new ApiClientError(`leak ${TEST_PAN}`, code, 401, { message: "leak" });
+      const first = await handleCardPaymentError(err, { logout, redirect, now });
+      await handleCardPaymentError(err, { logout, redirect, now });
+      expect(redirect).toHaveBeenCalledTimes(1);
+      expect(redirect).toHaveBeenCalledWith("/login");
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(first.reauth).toBe(true);
+      expect(first.message).not.toContain(TEST_PAN);
+      expect(first.message).not.toContain("leak");
+      expect(readPayment("TEST_pay")).toBeUndefined();
+    }
   });
 
   it("honours Retry-After seconds and HTTP dates without auto retry", async () => {
     const seconds = await handleCardPaymentError(new ApiClientError("raw-seconds", "RATE_LIMITED", 429, null, "30"), { logout, redirect, now });
     const httpDate = new Date(now + 45_000).toUTCString();
     const dated = await handleCardPaymentError(new ApiClientError("raw-date", "RATE_LIMITED", 429, null, httpDate), { logout, redirect, now });
+    const bare = await handleCardPaymentError(new ApiClientError("raw-bare", undefined, 429, null, "10"), { logout, redirect, now });
     expect(seconds.retryAt).toBe(now + 30_000);
     expect(dated.retryAt).toBe(now + 45_000);
-    expect(seconds.disableSubmit && dated.disableSubmit).toBe(true);
-    expect(seconds.autoRetry || dated.autoRetry).toBe(false);
-    expect(seconds.message).not.toContain("raw");
+    expect(bare.retryAt).toBe(now + 10_000);
+    expect(seconds.disableSubmit && dated.disableSubmit && bare.disableSubmit).toBe(true);
+    expect(seconds.autoRetry || dated.autoRetry || bare.autoRetry).toBe(false);
+    expect(bare.message).not.toContain("raw");
     expect(submitBlocked(seconds, now)).toBe(true);
     expect(submitBlocked(seconds, now + 30_000)).toBe(false);
     expect(redirect).not.toHaveBeenCalled();
@@ -224,11 +226,43 @@ describe("payer flow", () => {
     fireEvent.change(screen.getByLabelText("رسید"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
     expect(await screen.findByText("در حال بررسی")).toBeInTheDocument();
+    expect(screen.queryByText(TEST_PAN)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "کپی" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ثبت رسید" })).not.toBeInTheDocument();
     expect(calls).toEqual(["get", "submit", "get"]);
     expect(setItem).not.toHaveBeenCalled();
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
     setItem.mockRestore();
+  });
+
+  it("reuses one idempotency key across retries of the same submission", async () => {
+    const keys: string[] = [];
+    let failed = false;
+    let current = testPayment();
+    const api: CardPaymentApi = {
+      getPayment: async () => current,
+      async submitReceipt(_id, _body, key) {
+        keys.push(key);
+        if (!failed) {
+          failed = true;
+          throw new ApiClientError("later", "SERVICE_UNAVAILABLE", 503);
+        }
+        current = testPayment({ status: "pending_verification" });
+        return current;
+      },
+    };
+    render(<CardPaymentScreen paymentId="TEST_pay" api={api} onLogout={async () => undefined} onReauth={() => undefined} />);
+    expect(await screen.findByText(TEST_HOLDER)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("رسید"), { target: { files: [new File(["x"], "TEST_receipt.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
+    fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
+    expect(await screen.findByText("بعداً دوباره تلاش کنید")).toBeInTheDocument();
+    expect(keys).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "ثبت رسید" }));
+    expect(await screen.findByText("در حال بررسی")).toBeInTheDocument();
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
   });
 
   it("disables submit while a 429 countdown is running", async () => {
@@ -307,7 +341,9 @@ describe("logout and production bundle", () => {
   });
 
   it("omits the mock from a production bundle and rejects the prod flag", async () => {
-    expect(() => assertProductionMockOff("production", "1")).toThrow(/production/);
+    expect(() => assertProductionMockOff("production", "1")).toThrow(/non-development/);
+    expect(() => assertProductionMockOff("preview", "1")).toThrow(/non-development/);
+    expect(() => assertProductionMockOff("development", "1")).not.toThrow();
     expect(() => assertProductionMockOff("production", undefined)).not.toThrow();
     delete process.env.VITE_CARD_PAYMENTS_MOCK;
     const clean = await bundle();
@@ -315,7 +351,7 @@ describe("logout and production bundle", () => {
     expect(clean).not.toContain(TEST_PAN);
     expect(clean).not.toContain(TEST_IBAN);
     process.env.VITE_CARD_PAYMENTS_MOCK = "1";
-    await expect(bundle()).rejects.toThrow(/production/);
+    await expect(bundle()).rejects.toThrow(/non-development/);
     delete process.env.VITE_CARD_PAYMENTS_MOCK;
   }, 60_000);
 });

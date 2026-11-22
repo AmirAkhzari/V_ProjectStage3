@@ -207,7 +207,7 @@ export async function handleCardPaymentError(
   const code = err instanceof ApiClientError ? err.code : undefined;
   const now = deps.now ?? Date.now();
   const retryAt = parseRetryAfter(err instanceof ApiClientError ? err.retryAfter : null, now);
-  if (status === 401 && code === "UNAUTHENTICATED") {
+  if (status === 401) {
     if (!reauthStarted) {
       reauthStarted = true;
       clearCardPaymentState();
@@ -216,7 +216,7 @@ export async function handleCardPaymentError(
     }
     return { message: messageForCode("UNAUTHENTICATED"), disableSubmit: true, autoRetry: false, retryAt: null, reauth: true };
   }
-  if (status === 429 && code === "RATE_LIMITED") {
+  if (status === 429) {
     return { message: messageForCode("RATE_LIMITED"), disableSubmit: true, autoRetry: false, retryAt, reauth: false };
   }
   if (status === 503) {

@@ -37,13 +37,18 @@ export function RejectLine({ reason }: { reason: string | null }) {
   return <p>رد شد <bdi>{plainText(reason)}</bdi></p>;
 }
 
+function displayableAccount(value: string) {
+  return /^\d{16}$/.test(value) || /^IR\d{24}$/.test(value);
+}
+
 export function PayerDestination({ account, holderName, bankName }: { account: FullAccountNumber; holderName: string; bankName: string }) {
+  const shown = displayableAccount(account) ? account : "";
   const [copied, setCopied] = useState(false);
   return (
     <div>
       <p><bdi>{plainText(holderName)}</bdi> <bdi>{plainText(bankName)}</bdi></p>
-      <bdi dir="ltr">{account}</bdi>
-      <button type="button" className="min-h-11 min-w-11 px-3" style={ink} onClick={() => void copyExact(account, setCopied)}>کپی</button>
+      {shown ? <bdi dir="ltr">{shown}</bdi> : null}
+      {shown ? <button type="button" className="min-h-11 min-w-11 px-3" style={ink} onClick={() => void copyExact(shown, setCopied)}>کپی</button> : null}
       {copied ? <p role="status">کپی شد</p> : null}
     </div>
   );
@@ -139,6 +144,8 @@ export function CardPaymentScreen({
   const [fileError, setFileError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const summaryRef = useRef<HTMLDivElement>(null);
+  const idempotencyKey = useRef<string | null>(null);
+  const submitting = useRef(false);
   const logoutRef = useRef(onLogout);
   const reauthRef = useRef(onReauth);
   logoutRef.current = onLogout;
@@ -181,24 +188,29 @@ export function CardPaymentScreen({
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    if (busy || blocked) return;
+    if (busy || blocked || submitting.current) return;
     const problem = receiptPrecheck(file);
     if (problem || !file) {
       setFileError(problem);
       return;
     }
+    if (!idempotencyKey.current) idempotencyKey.current = crypto.randomUUID();
+    const key = idempotencyKey.current;
+    submitting.current = true;
     setBusy(true);
     setFileError(null);
     try {
       await api.submitReceipt(paymentId, {
         tracking: trackingToSend(tracking),
         receipt: { name: file.name, mime: file.type, size: file.size, body: file },
-      }, crypto.randomUUID());
+      }, key);
+      idempotencyKey.current = null;
       await reload();
       setNotice(null);
     } catch (err) {
       setNotice(await handleCardPaymentError(err, { logout: () => logoutRef.current(), redirect: (path) => reauthRef.current(path) }));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -216,18 +228,24 @@ export function CardPaymentScreen({
           {payment.sla_due_at ? <p>بررسی <bdi dir="ltr">{formatTehran(payment.sla_due_at)}</bdi></p> : null}
           {payment.cool_down_ends_at ? <p>فاصله <bdi dir="ltr">{formatTehran(payment.cool_down_ends_at)}</bdi></p> : null}
           {payment.deadline_at ? <TickingLabel targetMs={Date.parse(payment.deadline_at)} onZero={() => { void reload().catch(() => undefined); }} liveId="deadline-live" visualId="deadline-visual" /> : null}
-          <PayerDestination account={payment.destination.full_account} holderName={payment.destination.holder_name} bankName={payment.destination.bank_name} />
-          <form onSubmit={(event) => void onSubmit(event)}>
-            <label className="block">پیگیری
-              <input dir="ltr" className="min-h-11 w-full" inputMode="numeric" aria-describedby="tracking-hint" autoComplete="off" value={toFaDigits(tracking)} onChange={(event) => setTracking(event.target.value)} />
-            </label>
-            <p id="tracking-hint">{trackingHint(tracking) ?? "شماره پیگیری"}</p>
-            <label className="min-h-11 inline-flex items-center">رسید
-              <input className="min-h-11" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setFileError(null); }} />
-            </label>
-            <ReceiptPreview file={file} />
-            <button type="submit" className="min-h-11 min-w-11 px-3" style={ink} disabled={busy || blocked} aria-describedby={blocked ? "card-pay-error" : undefined}>ثبت رسید</button>
-          </form>
+          {payment.status === "pending" ? (
+            <>
+              <PayerDestination account={payment.destination.full_account} holderName={payment.destination.holder_name} bankName={payment.destination.bank_name} />
+              <form onSubmit={(event) => void onSubmit(event)}>
+                <label className="block">پیگیری
+                  <input dir="ltr" className="min-h-11 w-full" inputMode="numeric" aria-describedby="tracking-hint" autoComplete="off" value={toFaDigits(tracking)} onChange={(event) => { idempotencyKey.current = null; setTracking(event.target.value); }} />
+                </label>
+                <p id="tracking-hint">{trackingHint(tracking) ?? "شماره پیگیری"}</p>
+                <label className="min-h-11 inline-flex items-center">رسید
+                  <input className="min-h-11" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => { idempotencyKey.current = null; setFile(event.target.files?.[0] ?? null); setFileError(null); }} />
+                </label>
+                <ReceiptPreview file={file} />
+                <button type="submit" className="min-h-11 min-w-11 px-3" style={ink} disabled={busy || blocked} aria-describedby={blocked ? "card-pay-error" : undefined}>ثبت رسید</button>
+              </form>
+            </>
+          ) : (
+            <MaskedDestination account={payment.destination.masked_account} holderName={payment.destination.holder_name} bankName={payment.destination.bank_name} />
+          )}
         </>
       ) : null}
     </div>
