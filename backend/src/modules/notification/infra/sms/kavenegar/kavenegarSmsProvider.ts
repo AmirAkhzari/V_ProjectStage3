@@ -14,7 +14,11 @@ export const SMS_DEFAULT_TIMEOUT_MS = 4000;
 /** Documented template name: letter then alphanumerics/underscore/hyphen (Kavenegar lookup). */
 export const KAVENEGAR_TEMPLATE_RE = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/;
 
-export type SmsFetch = (url: string, init: RequestInit) => Promise<Response>;
+export type SmsHttpResponse = {
+  readonly status: number;
+  arrayBuffer(): Promise<ArrayBuffer>;
+};
+export type SmsFetch = (url: string, init: RequestInit) => Promise<SmsHttpResponse>;
 
 export interface KavenegarSmsConfig {
   apiKey: string;
@@ -40,7 +44,7 @@ export class KavenegarSmsProvider implements SmsProvider {
 
   constructor(private readonly config: KavenegarSmsConfig) {
     this.timeoutMs = config.timeoutMs ?? SMS_DEFAULT_TIMEOUT_MS;
-    this.fetchImpl = config.fetch ?? fetch;
+    this.fetchImpl = config.fetch ?? (fetch as SmsFetch);
     this.log = config.log ?? silentLog();
   }
 
