@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import { MockPaymentProvider } from '../infra/providers/mock.js';
+import { defaultPaymentProvider } from '../infra/providers/registry.js';
 
 /**
  * A15's write: create (or replay) the payment intent for one `Idempotency-Key`.
@@ -9,10 +9,14 @@ import { MockPaymentProvider } from '../infra/providers/mock.js';
  * unique in 0022, so a replay — even one racing the first request — returns the same payment row and
  * the same redirect. There is no second place that could remember a different answer.
  *
- * The provider is the in-process mock (DL-07's Zarinpal lands with A36). Calling it here is safe
- * because it performs no network I/O; when a real PSP arrives the intent is still created here and the
- * redirect is fetched by A36's `start`, which is exactly the split the frozen contract describes.
- * One module-level instance keeps the mock's authority map stable across replays.
+ * The insert goes through `payment.create_pending_payment` (0024) because FIX-PR1 keeps the app role out
+ * of every financial column: the function checks the caller's shop scope itself and returns the stored
+ * id when the key already exists, which is the same `ON CONFLICT DO NOTHING` race settlement as before.
+ *
+ * The provider comes from the registry (today the in-process mock), so the authority A15 stores is the
+ * one A36 re-uses and S3 verifies: one instance per process, not one per call. When a real PSP arrives
+ * the intent is still created here and the network redirect belongs to A36's `start`, which is exactly
+ * the split the frozen contract describes.
  */
 export interface CheckoutIntent {
   paymentId: string;
@@ -26,7 +30,7 @@ export interface CreateSubscriptionPaymentInput {
   idempotencyKey: string;
 }
 
-const provider = new MockPaymentProvider();
+const provider = defaultPaymentProvider();
 
 // `amount::int`: bigint arrives as a string from pg, and this value becomes a JSON number.
 const FIND_BY_KEY_SELECT = `SELECT id, amount::int AS amount, redirect_url
@@ -45,24 +49,18 @@ export async function createSubscriptionPayment(
   ]);
   if (existing.rows[0]) return settle(client, existing.rows[0], input.idempotencyKey);
 
-  const id = randomUUID();
-  const inserted = await client.query<IntentRow>(
-    `INSERT INTO payment.payments (
-       id, shopkeeper_id, kind, amount, status, provider, idempotency_key, created_at, updated_at
-     ) VALUES ($1, $2, 'subscription', $3, 'pending', $4, $5, now(), now())
-     ON CONFLICT (shopkeeper_id, idempotency_key) DO NOTHING
-     RETURNING id, amount::int AS amount, redirect_url`,
-    [id, input.shopkeeperId, input.amount, provider.name, input.idempotencyKey],
+  await client.query<{ id: string }>(
+    `SELECT payment.create_pending_payment($1, $2, $3, $4, $5) AS id`,
+    [randomUUID(), input.shopkeeperId, input.amount, provider.name, input.idempotencyKey],
   );
-  if (inserted.rows[0]) return settle(client, inserted.rows[0], input.idempotencyKey);
 
-  // Lost the race against a concurrent request with the same key: that request's row is the answer.
-  const raced = await client.query<IntentRow>(FIND_BY_KEY_SELECT, [
+  // Whether we inserted it or lost the race, the row for this key is the answer.
+  const stored = await client.query<IntentRow>(FIND_BY_KEY_SELECT, [
     input.shopkeeperId,
     input.idempotencyKey,
   ]);
-  const row = raced.rows[0];
-  if (!row) throw new Error('A15 idempotency conflict without a stored payment');
+  const row = stored.rows[0];
+  if (!row) throw new Error('A15 intent vanished after create_pending_payment');
   return settle(client, row, input.idempotencyKey);
 }
 

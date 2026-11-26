@@ -344,6 +344,27 @@ export const mockApi: VisitorApi = {
     return { paymentId: payment.id, amount: payment.amount };
   },
 
+  async startPayment(id) {
+    await delay(80);
+    const db = readDb();
+    requireSession(db);
+    const payment = db.payments.find((p) => p.id === id);
+    if (!payment) throw new Error("پرداخت یافت نشد");
+    const gatewayAuthority = `MOCK-${payment.id}`;
+    return {
+      paymentId: payment.id,
+      redirectUrl: `mock://pay/${gatewayAuthority}`,
+      amount: payment.amount,
+      status: "pending",
+      authority: gatewayAuthority,
+    };
+  },
+
+  async completeGatewayPayment(gatewayAuthority, status) {
+    // The mock gateway encodes the payment in the authority, mirroring the server's mock:// redirect.
+    return this.completePayment(gatewayAuthority.replace(/^MOCK-/, ""), status);
+  },
+
   async setPrimaryDistributor(distributorId) {
     await delay(80);
     const db = readDb();

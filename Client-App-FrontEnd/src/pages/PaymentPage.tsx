@@ -18,23 +18,64 @@ export default function PaymentPage() {
   const refreshEntitlement = useAppStore((s) => s.refreshEntitlement);
   const [busy, setBusy] = useState(false);
   const [amount, setAmount] = useState<number | null>(null);
-  const [kind, setKind] = useState<"order" | "wallet" | "subscription">("order");
+  // A34 is not mounted, so a plan checkout announces itself; A34 supersedes this when it returns.
+  const [kind, setKind] = useState<"order" | "wallet" | "subscription">(
+    params.get("kind") === "subscription" ? "subscription" : "order",
+  );
+  const [gatewayAuthority, setGatewayAuthority] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const failFlag = params.get("fail") === "1";
   const subscription = kind === "subscription";
 
   useEffect(() => {
-    if (id) {
+    if (!id) return;
+    if (!subscription) {
       void api.getPayment(id).then((p) => {
         setAmount(p?.amount ?? null);
         if (p?.kind) setKind(p.kind);
       });
+      return;
     }
-  }, [id]);
+    // A36 hands back the gateway redirect: a real PSP URL is followed, but the mock's `mock://` cannot
+    // be, so the demo screen settles it through the provider callback (S3) instead.
+    let cancelled = false;
+    void api
+      .startPayment(id)
+      .then((start) => {
+        if (cancelled) return;
+        if (/^https?:/i.test(start.redirectUrl)) {
+          window.location.assign(start.redirectUrl);
+          return;
+        }
+        setAmount(start.amount);
+        setGatewayAuthority(start.authority);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "شروع پرداخت ناموفق بود");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, subscription]);
 
   const finish = async (status: "ok" | "fail") => {
     if (!id) return;
     setBusy(true);
     try {
+      if (subscription) {
+        if (!gatewayAuthority) {
+          setBusy(false);
+          return;
+        }
+        const res = await api.completeGatewayPayment(gatewayAuthority, status);
+        if (!res.ok) {
+          navigate("/subscription?fail=1");
+          return;
+        }
+        await refreshEntitlement();
+        navigate("/subscription?ok=1", { replace: true });
+        return;
+      }
       const res = await api.completePayment(id, status);
       if (!res.ok) {
         navigate(subscription ? "/subscription?fail=1" : `/payment-failed?id=${id}`);
@@ -75,8 +116,22 @@ export default function PaymentPage() {
         <p className="text-[12px] text-text-secondary leading-7 text-center mb-4">
           {subscription ? "این مرحله اشتراک حرفه‌ای نمایشی را فعال یا رد می‌کند." : "این مرحله فقط نتیجه ثبت سفارش آزمایشی را مشخص می‌کند."}
         </p>
-        <Button loading={busy} onClick={() => finish(failFlag ? "fail" : "ok")}>{subscription ? "تأیید اشتراک" : "تأیید ثبت سفارش"}</Button>
-        <Button variant="danger" className="mt-2.5" disabled={busy} onClick={() => finish("fail")}>انصراف</Button>
+        {error && <p className="text-error text-[12px] text-center mb-3">{error}</p>}
+        <Button
+          loading={busy}
+          disabled={subscription && !gatewayAuthority}
+          onClick={() => finish(failFlag ? "fail" : "ok")}
+        >
+          {subscription ? "تأیید اشتراک" : "تأیید ثبت سفارش"}
+        </Button>
+        <Button
+          variant="danger"
+          className="mt-2.5"
+          disabled={busy || (subscription && !gatewayAuthority)}
+          onClick={() => finish("fail")}
+        >
+          انصراف
+        </Button>
       </div>
     </div>
   );

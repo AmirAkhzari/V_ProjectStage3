@@ -19,10 +19,10 @@ const EXPECTED_SHA = 'e3dc40d5a8755d2639b77415f321bf9b7c852a7f6e4f3bb23c5102165e
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
 
 const LIVE =
-  'S1 S2 A1 A2 A3 A4 A7 A8 A9 A10 A11 A12 A13 A14 A16 A17 A18 B1 B2 B3 B4 B24 B33 B34 B35 B36 C1 C2 C11 B25 B27 B83'.split(
+  'S1 S2 S3 A1 A2 A3 A4 A7 A8 A9 A10 A11 A12 A13 A14 A15 A16 A17 A18 A36 B1 B2 B3 B4 B24 B33 B34 B35 B36 C1 C2 C11 B25 B27 B83'.split(
     ' ',
   );
-// A5/B5 are the only demo-only ops; A15/A34/A35 are unmounted in every boot (PENDING/unregistered).
+// A5/B5 are the only demo-only ops; A34/A35 are unmounted in every boot (PENDING/unregistered).
 const DEMO = ['A5', 'B5'];
 const UNREGISTERED_IN_PROD = ['A5', 'A35', 'B5', 'B79', 'B80'];
 
@@ -216,8 +216,8 @@ describe('frozen contract coverage (slice 1b)', () => {
   });
 
   it('PENDING ids are counted, mapped, and not live', () => {
-    expect(PENDING_OPERATION_IDS).toHaveLength(102);
-    expect(new Set(PENDING_OPERATION_IDS).size).toBe(102);
+    expect(PENDING_OPERATION_IDS).toHaveLength(99);
+    expect(new Set(PENDING_OPERATION_IDS).size).toBe(99);
     const pending = new Set(PENDING_OPERATION_IDS);
     for (const operationId of PENDING_OPERATION_IDS) {
       expect(ROUTE_REGISTRY.byOperationId.has(operationId)).toBe(true);

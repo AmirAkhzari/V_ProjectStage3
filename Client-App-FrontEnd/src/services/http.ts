@@ -85,15 +85,21 @@ async function refreshTokens() {
   return refreshInflight;
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit & { json?: unknown; idempotency?: boolean } = {}): Promise<T> {
-  const { json, idempotency, headers: extra, ...rest } = init;
+/** S3 lives outside `/v1/app`, so a callback call needs the API root, not the app base. */
+export function publicApiBase() {
+  const base = apiBase();
+  return base.endsWith("/app") ? base.slice(0, -4) : base;
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit & { json?: unknown; idempotency?: boolean; base?: string } = {}): Promise<T> {
+  const { json, idempotency, base, headers: extra, ...rest } = init;
   const run = async (retried: boolean): Promise<T> => {
     const bundle = readBundle();
     const headers = new Headers(extra);
     if (json !== undefined) headers.set("Content-Type", "application/json");
     if (bundle?.accessToken) headers.set("Authorization", `Bearer ${bundle.accessToken}`);
     if (idempotency) headers.set("Idempotency-Key", crypto.randomUUID());
-    const res = await fetch(`${apiBase()}${path}`, {
+    const res = await fetch(`${base ?? apiBase()}${path}`, {
       ...rest,
       headers,
       body: json !== undefined ? JSON.stringify(json) : rest.body,

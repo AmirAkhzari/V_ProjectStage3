@@ -169,6 +169,13 @@
       "when": 1795000000000,
       "tag": "0023_fix_pr1_containment",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795100000000,
+      "tag": "0024_s12_a36_payment_start_callback",
+      "breakpoints": true
     }
   ]
 }

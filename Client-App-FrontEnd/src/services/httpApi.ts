@@ -3,7 +3,7 @@ import type { CityDeal, PriceCompareRow } from "@/lib/deals";
 import { isMarketplaceRequiresPro } from "@/lib/apiError";
 import { MIN_ORDER, PRO_MONTHLY_PRICE, WALLET_MAX, WALLET_MIN } from "@/types";
 import type { ApiError, ApiOk, SlotDay, VisitorApi } from "./api";
-import { apiFetch, readBundle, writeBundle } from "./http";
+import { apiFetch, publicApiBase, readBundle, writeBundle } from "./http";
 
 function ok<T>(data: T): ApiOk<T> {
   return { ok: true, data };
@@ -266,6 +266,31 @@ export const httpApi: VisitorApi = {
       method: "POST",
       idempotency: true,
     });
+  },
+
+  async startPayment(id) {
+    // A36 requires the same mandatory header as A15; the stored authority, not the key, is what a
+    // retry re-uses while the intent is still pending.
+    return apiFetch<{ paymentId: string; redirectUrl: string; amount: number; status: string; authority: string }>(
+      `/payments/${id}/start`,
+      { method: "POST", idempotency: true },
+    );
+  },
+
+  async completeGatewayPayment(gatewayAuthority, status) {
+    // S3 is the provider callback: it has no session and lives outside /v1/app. The mock gateway is
+    // driven from here because a `mock://` redirect cannot be followed by a browser.
+    try {
+      const res = await apiFetch<{ ok: boolean; status: string }>("/payments/callback/mock", {
+        method: "POST",
+        json: { authority: gatewayAuthority, outcome: status === "ok" ? "ok" : "fail" },
+        base: publicApiBase(),
+      });
+      if (!res.ok) return fail("پرداخت ناموفق بود");
+      return ok({ plan: res.status === "paid" ? ("pro" as const) : ("free" as const) });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : "پرداخت ناموفق بود");
+    }
   },
 
   async setPrimaryDistributor(distributorId) {

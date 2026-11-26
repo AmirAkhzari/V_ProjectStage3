@@ -127,10 +127,12 @@ describe('FIX PR1 containment (items 1-4)', () => {
     const cols = await ownerPool.query<{ column_name: string; allowed: boolean }>(
       `SELECT column_name, has_column_privilege('vproject_app', 'payment.payments', column_name, 'UPDATE') AS allowed FROM information_schema.columns WHERE table_schema = 'payment' AND table_name = 'payments' ORDER BY column_name`,
     );
-    expect(cols.rows).toHaveLength(12);
+    expect(cols.rows).toHaveLength(13);
+    // A36's attempt counter is the one column payments re-entry adds; no financial column is writable.
     expect(cols.rows.filter((r) => r.allowed).map((r) => r.column_name)).toEqual([
       'authority',
       'redirect_url',
+      'start_count',
       'updated_at',
     ]);
     const ins = await ownerPool.query(

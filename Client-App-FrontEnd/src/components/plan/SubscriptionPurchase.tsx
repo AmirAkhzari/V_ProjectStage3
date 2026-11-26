@@ -45,7 +45,9 @@ export default function SubscriptionPurchase() {
     setError("");
     try {
       const checkout = await api.checkoutSubscription();
-      navigate(`/pay/${checkout.paymentId}`);
+      // A34 is not mounted, so the payment page cannot read the kind; the checkout that opened the
+      // intent is the one place that knows this payment buys a plan.
+      navigate(`/pay/${checkout.paymentId}?kind=subscription`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "شروع پرداخت ناموفق بود");
       setBusy(false);

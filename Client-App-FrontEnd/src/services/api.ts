@@ -22,6 +22,8 @@ export interface VisitorApi {
   getMe(): Promise<RetailerMe>;
   getSubscription(): Promise<RetailerSubscription>;
   checkoutSubscription(): Promise<{ paymentId: string; redirectUrl?: string; amount: number }>;
+  startPayment(id: string): Promise<{ paymentId: string; redirectUrl: string; amount: number; status: string; authority: string }>;
+  completeGatewayPayment(authority: string, status: "ok" | "fail"): Promise<ApiOk<{ plan?: "free" | "pro" }> | ApiError>;
   setPrimaryDistributor(distributorId: string): Promise<{ primaryDistributorId: string }>;
   getConfig(): Promise<AppConfig>;
   getDistributors(cityId?: string): Promise<Distributor[]>;

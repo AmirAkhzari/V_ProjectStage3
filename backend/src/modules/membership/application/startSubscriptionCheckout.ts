@@ -1,6 +1,10 @@
 import type pg from 'pg';
 import { withTenant, type TenantContext } from '../../../platform/db/tenant.js';
-import { AppError } from '../../../platform/http/errors.js';
+import {
+  IDEMPOTENCY_KEY_MAX,
+  IDEMPOTENCY_KEY_MIN,
+  readIdempotencyKey,
+} from '../../../platform/http/idempotencyKey.js';
 import { createPaymentApi } from '../../payment/api.js';
 import type { CheckoutIntent } from '../../payment/api.js';
 import { createMembershipApi } from '../api.js';
@@ -18,18 +22,10 @@ import { createMembershipApi } from '../api.js';
  * itself belongs to `payment`'s public API inside this tenant transaction, so the shop check and the
  * intent are one unit.
  */
-export const IDEMPOTENCY_KEY_MIN = 16;
-export const IDEMPOTENCY_KEY_MAX = 128;
+export { IDEMPOTENCY_KEY_MAX, IDEMPOTENCY_KEY_MIN };
 
 export function readCheckoutIdempotencyKey(value: string | string[] | undefined): string {
-  if (
-    typeof value !== 'string' ||
-    value.length < IDEMPOTENCY_KEY_MIN ||
-    value.length > IDEMPOTENCY_KEY_MAX
-  ) {
-    throw new AppError('IDEMPOTENCY_KEY_REQUIRED', 400, 'Idempotency-Key header is required');
-  }
-  return value;
+  return readIdempotencyKey(value);
 }
 
 export async function startSubscriptionCheckout(

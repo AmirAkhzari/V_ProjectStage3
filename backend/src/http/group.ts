@@ -65,6 +65,7 @@ const NO_STORE_OPERATION_IDS: ReadonlySet<string> = new Set([
   'A17',
   'A18',
   'A34',
+  'A36',
   'C11',
   'B83',
 ]);

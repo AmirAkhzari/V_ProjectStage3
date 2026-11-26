@@ -227,15 +227,9 @@ describe('A14 /v1/app/me/subscription', () => {
     }
   });
 
-  it('A9-1: an authenticated shop gets the catch-all 404 for A15/A34/A35 in prod and staging demo', async () => {
+  it('A9-1: an authenticated shop gets the catch-all 404 for A34/A35 in prod and staging demo', async () => {
     const id = '00000000-0000-4000-8000-000000000001';
     const probes = [
-      {
-        operationId: 'A15',
-        method: 'POST' as const,
-        route: '/v1/app/me/subscription/checkout',
-        url: '/v1/app/me/subscription/checkout',
-      },
       {
         operationId: 'A34',
         method: 'GET' as const,

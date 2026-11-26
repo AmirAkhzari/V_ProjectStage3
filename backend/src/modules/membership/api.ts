@@ -5,8 +5,9 @@ import { PRO_MONTHLY_PRICE_TOMAN } from './domain/plan.js';
  * is the only file other modules may import.
  *
  * The price is exposed here (not imported from `domain/plan.ts` by other modules) so the number the shop
- * is charged has exactly one owner. Period activation is not part of the API while the payment surface
- * is PENDING (FIX-PR1); it returns with payments re-entry.
+ * is charged has exactly one owner. A period is not part of this API: FIX-PR1 keeps the app role out of
+ * `membership.subscriptions`, so S3 settles a payment and grants the period through
+ * `payment.settle_pending_payment`, which calls `membership.grant_pro_period` in the same transaction.
  */
 export interface MembershipApi {
   readonly monthlyPrice: number;

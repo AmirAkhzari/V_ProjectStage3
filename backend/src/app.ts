@@ -13,6 +13,7 @@ import { driverGroup, driverGroupSpec } from './http/driver.group.js';
 import { buildRouteRegistry } from './http/routeRegistry.js';
 import { systemRoutes } from './http/system.routes.js';
 import { allModules } from './modules/register.js';
+import { paymentCallbackRoutes } from './modules/payment/http/callback.routes.js';
 import { denyAllVerifier, type AccessTokenVerifier } from './platform/auth/jwt.js';
 import {
   failClosedSessionAuthority,
@@ -139,6 +140,10 @@ export async function buildApp(options: BuildAppOptions) {
     healthCheckTimeoutMs: options.config.HEALTH_CHECK_TIMEOUT_MS,
     readyRetryAfterSeconds: options.config.READY_RETRY_AFTER_SECONDS,
   });
+
+  // S3 is the one payment route outside the three groups: a PSP callback has no session, and the
+  // registry allows exactly S1/S2/S3 to live outside a group prefix.
+  await app.register(paymentCallbackRoutes);
 
   const verifier = options.verifier ?? denyAllVerifier;
   if (verifier !== denyAllVerifier && options.sessionAuthority === undefined) {

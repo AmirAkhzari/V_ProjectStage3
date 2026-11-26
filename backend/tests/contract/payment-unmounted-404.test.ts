@@ -3,13 +3,11 @@ import { buildApp, type App } from '../../src/app.js';
 import { productionApiConfig, testConfig } from '../helpers/config.js';
 
 const UNMOUNTED = [
-  { operationId: 'A15', method: 'POST', url: '/v1/app/me/subscription/checkout' },
   { operationId: 'A34', method: 'GET', url: '/v1/app/payments/:id' },
   { operationId: 'A35', method: 'POST', url: '/v1/app/payments/:id/mock-complete' },
 ] as const;
 
 const PROBES = [
-  { method: 'POST', url: '/v1/app/me/subscription/checkout' },
   { method: 'GET', url: '/v1/app/payments/00000000-0000-4000-8000-000000000001' },
   { method: 'POST', url: '/v1/app/payments/00000000-0000-4000-8000-000000000001/mock-complete' },
 ] as const;
@@ -36,9 +34,9 @@ function withoutRequestId(headers: Record<string, unknown>): Record<string, unkn
   return rest;
 }
 
-describe('payment surface is unmounted in every boot (FIX-PR1)', () => {
+describe('A34/A35 stay unmounted in every boot (payments re-entry mounts only A15/A36/S3)', () => {
   for (const boot of BOOTS) {
-    it(`${boot.name}: A15/A34/A35 are absent and answer exactly like an unknown group path`, async () => {
+    it(`${boot.name}: A34/A35 are absent and answer exactly like an unknown group path`, async () => {
       const app: App = await buildApp({ config: boot.config, healthChecks: [] });
       try {
         for (const route of UNMOUNTED) {
